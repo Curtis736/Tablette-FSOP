@@ -22,6 +22,8 @@ services:
       - LOG_LEVEL=info
       - JWT_SECRET=${JWT_SECRET:-change-me-in-production}
       - SESSION_SECRET=${SESSION_SECRET:-change-me-in-production}
+      - TRACEABILITY_DIR=/mnt/services/Tracabilite
+      - FSOP_SEARCH_DEPTH=3
     ports:
       - "3001:3001"  # Port cohérent: 3001 externe -> 3001 interne
     networks:
@@ -31,6 +33,7 @@ services:
       - sedi-logs:/app/logs
       - /etc/localtime:/etc/localtime:ro
       - ../backend/routes:/app/routes
+      - /srv/services:/mnt/services:rw
     labels:
       - "com.sedi.service=backend"
       - "com.sedi.environment=production"

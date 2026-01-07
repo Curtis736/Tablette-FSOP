@@ -9,20 +9,19 @@ class Comment {
         this.comment = data.comment;
         this.timestamp = data.timestamp;
         this.createdAt = data.createdAt;
+        this.qteNonConforme = data.qteNonConforme !== undefined ? parseFloat(data.qteNonConforme) : null;
+        this.statut = data.statut || null;
     }
 
     // Créer un nouveau commentaire
     static async create(commentData) {
         try {
-            const { operatorCode, operatorName, lancementCode, comment } = commentData;
+            const { operatorCode, operatorName, lancementCode, comment, qteNonConforme, statut } = commentData;
             const timestamp = new Date().toISOString();
             
-            const query = `
-                INSERT INTO [SEDI_APP_INDEPENDANTE].[dbo].[AB_COMMENTAIRES_OPERATEURS]
-                (OperatorCode, OperatorName, LancementCode, Comment, Timestamp, CreatedAt)
-                VALUES (@operatorCode, @operatorName, @lancementCode, @comment, @timestamp, GETDATE())
-            `;
-            
+            // Construire la requête avec les colonnes optionnelles
+            const columns = ['OperatorCode', 'OperatorName', 'LancementCode', 'Comment', 'Timestamp', 'CreatedAt'];
+            const values = ['@operatorCode', '@operatorName', '@lancementCode', '@comment', '@timestamp', 'GETDATE()'];
             const params = {
                 operatorCode,
                 operatorName,
@@ -30,6 +29,26 @@ class Comment {
                 comment,
                 timestamp
             };
+            
+            // Ajouter QteNonConforme si fourni
+            if (qteNonConforme !== undefined && qteNonConforme !== null) {
+                columns.push('QteNonConforme');
+                values.push('@qteNonConforme');
+                params.qteNonConforme = parseFloat(qteNonConforme);
+            }
+            
+            // Ajouter Statut si fourni
+            if (statut !== undefined && statut !== null && statut !== '') {
+                columns.push('Statut');
+                values.push('@statut');
+                params.statut = statut.toUpperCase();
+            }
+            
+            const query = `
+                INSERT INTO [SEDI_APP_INDEPENDANTE].[dbo].[AB_COMMENTAIRES_OPERATEURS]
+                (${columns.join(', ')})
+                VALUES (${values.join(', ')})
+            `;
             
             const result = await executeNonQuery(query, params);
             
@@ -43,7 +62,9 @@ class Comment {
                         operatorName,
                         lancementCode,
                         comment,
-                        timestamp
+                        timestamp,
+                        qteNonConforme: params.qteNonConforme || null,
+                        statut: params.statut || null
                     }
                 };
             } else {
@@ -70,7 +91,9 @@ class Comment {
                     LancementCode,
                     Comment,
                     Timestamp,
-                    CreatedAt
+                    CreatedAt,
+                    QteNonConforme,
+                    Statut
                 FROM [SEDI_APP_INDEPENDANTE].[dbo].[AB_COMMENTAIRES_OPERATEURS]
                 WHERE OperatorCode = @operatorCode
                 ORDER BY CreatedAt DESC
@@ -104,7 +127,9 @@ class Comment {
                     LancementCode,
                     Comment,
                     Timestamp,
-                    CreatedAt
+                    CreatedAt,
+                    QteNonConforme,
+                    Statut
                 FROM [SEDI_APP_INDEPENDANTE].[dbo].[AB_COMMENTAIRES_OPERATEURS]
                 ORDER BY CreatedAt DESC
             `;
@@ -136,7 +161,9 @@ class Comment {
                     LancementCode,
                     Comment,
                     Timestamp,
-                    CreatedAt
+                    CreatedAt,
+                    QteNonConforme,
+                    Statut
                 FROM [SEDI_APP_INDEPENDANTE].[dbo].[AB_COMMENTAIRES_OPERATEURS]
                 WHERE LancementCode = @lancementCode
                 ORDER BY CreatedAt DESC

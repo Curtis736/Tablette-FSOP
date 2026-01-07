@@ -85,7 +85,7 @@
                 <!-- Saisie du lancement -->
                 <div class="section">
                     <h2><i class="fas fa-keyboard"></i> Code de Lancement</h2>
-                    <div class="input-group with-scanner">
+                    <div class="input-group with-scanner with-fsop">
                         <i class="fas fa-barcode"></i>
                         <input
                             type="tel"
@@ -98,6 +98,9 @@
                             maxlength="10"
                             aria-label="Saisir les chiffres du code de lancement"
                         >
+                        <button id="fsopBtn" class="btn-fsop" title="FSOP" aria-label="FSOP">
+                            FSOP
+                        </button>
                         <button id="scanBarcodeBtn" class="btn-scan" title="Scanner un code-barres" aria-label="Scanner un code-barres">
                             <i class="fas fa-camera"></i>
                         </button>
@@ -240,10 +243,10 @@
                             </label>
                             <select id="statusFilter" class="filter-select">
                                 <option value="">Tous les statuts</option>
-                                <option value="EN_COURS">En cours</option>
-                                <option value="PAUSE">En pause</option>
-                                <option value="TERMINE">Terminé</option>
-                                <option value="PAUSE_TERMINEE">Pause terminée</option>
+                                <option value="NULL">Non traité</option>
+                                <option value="O">Validé</option>
+                                <option value="A">En attente</option>
+                                <option value="T">Transmis</option>
                             </select>
                         </div>
                         
@@ -370,6 +373,112 @@
                     <i class="fas fa-circle-notch fa-spin"></i>
                     <span>Initialisation de la caméra...</span>
                 </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Modal Transfert (sélection au moment du transfert) -->
+    <div id="transferSelectionModal" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,0.45); z-index:9999;">
+        <div style="background:#fff; max-width:900px; margin:6vh auto; border-radius:12px; padding:16px; box-shadow:0 10px 30px rgba(0,0,0,0.25);">
+            <div style="display:flex; align-items:center; justify-content:space-between; gap:12px;">
+                <h3 style="margin:0;">Sélectionner les lignes à transférer</h3>
+                <button id="closeTransferModalBtn" class="btn-secondary" style="min-width:120px;">Fermer</button>
+            </div>
+            <p style="margin:10px 0 12px 0; color:#555;">Choisis les enregistrements à transférer vers SILOG.</p>
+            <div style="display:flex; align-items:center; justify-content:space-between; gap:12px; margin-bottom:10px;">
+                <label style="display:flex; align-items:center; gap:8px;">
+                    <input type="checkbox" id="transferSelectAll" />
+                    Tout sélectionner
+                </label>
+                <div style="display:flex; gap:8px; align-items:center;">
+                    <button id="transferSelectedConfirmBtn" class="btn-warning" style="min-width:180px;">
+                        <i class="fas fa-exchange-alt"></i> Transférer
+                    </button>
+                </div>
+            </div>
+            <div style="max-height:55vh; overflow:auto; border:1px solid #eee; border-radius:10px;">
+                <table style="width:100%; border-collapse:collapse;">
+                    <thead>
+                        <tr style="position:sticky; top:0; background:#fafafa; border-bottom:1px solid #eee;">
+                            <th style="width:44px; text-align:center; padding:10px;">Sel</th>
+                            <th style="text-align:left; padding:10px;">Opérateur</th>
+                            <th style="text-align:left; padding:10px;">Code Lancement</th>
+                            <th style="text-align:left; padding:10px;">Désignation</th>
+                            <th style="text-align:left; padding:10px;">Début</th>
+                            <th style="text-align:left; padding:10px;">Fin</th>
+                        </tr>
+                    </thead>
+                    <tbody id="transferModalTableBody"></tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+
+    <!-- Modal FSOP -->
+    <div id="fsopModal" class="scanner-modal" role="dialog" aria-labelledby="fsopModalTitle" aria-modal="true">
+        <div class="scanner-modal-content fsop-modal-content">
+            <div class="scanner-modal-header">
+                <h2 id="fsopModalTitle">
+                    <i class="fas fa-file-word"></i>
+                    FSOP
+                </h2>
+                <button id="closeFsopBtn" class="btn-close-scanner" aria-label="Fermer FSOP">
+                    <i class="fas fa-times"></i>
+                </button>
+            </div>
+            <div class="scanner-modal-body">
+                <div class="fsop-form">
+                    <div class="input-group">
+                        <i class="fas fa-file-signature"></i>
+                        <input type="text" id="fsopTemplateCode" placeholder="Numéro de formulaire (ex: F469)" autocomplete="off" />
+                    </div>
+                    <div class="input-group">
+                        <i class="fas fa-hashtag"></i>
+                        <input type="text" id="fsopSerialNumber" placeholder="Numéro de série (SN)" autocomplete="off" />
+                    </div>
+                    <div class="fsop-actions">
+                        <button id="openFsopFormBtn" class="btn-primary">
+                            <i class="fas fa-edit"></i>
+                            Remplir dans l'interface
+                        </button>
+                        <button id="openFsopWordBtn" class="btn-secondary">
+                            <i class="fas fa-download"></i>
+                            Ouvrir FSOP (Word)
+                        </button>
+                    </div>
+                    <div class="help-text fsop-help">
+                        <small><i class="fas fa-info-circle"></i> Remplissez le formulaire directement dans l'interface ou téléchargez le Word pour l'ouvrir manuellement.</small>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Modal Formulaire FSOP Interactif -->
+    <div id="fsopFormModal" class="scanner-modal" role="dialog" aria-labelledby="fsopFormModalTitle" aria-modal="true">
+        <div class="scanner-modal-content fsop-form-modal-content">
+            <div class="scanner-modal-header">
+                <h2 id="fsopFormModalTitle">
+                    <i class="fas fa-edit"></i>
+                    Formulaire FSOP
+                </h2>
+                <button id="closeFsopFormBtn" class="btn-close-scanner" aria-label="Fermer le formulaire">
+                    <i class="fas fa-times"></i>
+                </button>
+            </div>
+            <div class="scanner-modal-body fsop-form-modal-body">
+                <div id="fsopFormContainer" class="fsop-form-container">
+                    <!-- Le formulaire sera généré dynamiquement ici -->
+                </div>
+            </div>
+            <div class="scanner-modal-footer">
+                <button id="fsopFormSaveBtn" class="btn-primary">
+                    <i class="fas fa-save"></i>
+                    Sauvegarder
+                </button>
+                <button id="closeFsopFormBtn2" class="btn-secondary">
+                    Annuler
+                </button>
             </div>
         </div>
     </div>

@@ -13,7 +13,7 @@ export default defineConfig({
     exclude: ['node_modules', 'dist', '.git', '.cache', 'coverage'],
     testTimeout: 10000,
     hookTimeout: 10000,
-    setupFiles: [join(__dirname, 'tests', 'setup.js')],
+    setupFiles: ['./tests/setup.js'],
     coverage: {
       provider: 'v8',
       reporter: ['text', 'json', 'html', 'lcov'],

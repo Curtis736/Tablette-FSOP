@@ -2,7 +2,7 @@
  * Middleware pour garantir l'isolation des données par opérateur
  */
 
-const { executeQuery } = require('../config/database');
+const { executeQuery, executeProcedure } = require('../config/database');
 
 class DataIsolationManager {
     constructor() {
@@ -15,12 +15,24 @@ class DataIsolationManager {
      */
     async validateDataAccess(req, res, next) {
         try {
-            const { operatorCode } = req.params;
-            const requestedOperatorCode = req.query.operatorCode || req.body.operatorCode;
+            // Handle case where req.params might be undefined
+            const operatorCode = req.params?.operatorCode;
+            const requestedOperatorCode = req.query?.operatorCode || req.body?.operatorCode;
+            
+            // If no operatorCode in params, try to get it from the route path
+            if (!operatorCode && req.path) {
+                const pathMatch = req.path.match(/\/operators\/(\d+)/);
+                if (pathMatch) {
+                    req.params = req.params || {};
+                    req.params.operatorCode = pathMatch[1];
+                }
+            }
+            
+            const finalOperatorCode = req.params?.operatorCode || operatorCode;
 
             // Si un opérateur demande des données d'un autre opérateur
-            if (requestedOperatorCode && requestedOperatorCode !== operatorCode) {
-                console.log(`🚨 TENTATIVE D'ACCÈS NON AUTORISÉ: ${operatorCode} essaie d'accéder aux données de ${requestedOperatorCode}`);
+            if (requestedOperatorCode && requestedOperatorCode !== finalOperatorCode) {
+                console.log(`🚨 TENTATIVE D'ACCÈS NON AUTORISÉ: ${finalOperatorCode} essaie d'accéder aux données de ${requestedOperatorCode}`);
                 
                 return res.status(403).json({
                     success: false,
@@ -30,7 +42,7 @@ class DataIsolationManager {
             }
 
             // Vérifier que l'opérateur existe et est actif
-            const operator = await this.getOperatorInfo(operatorCode);
+            const operator = await this.getOperatorInfo(finalOperatorCode);
             if (!operator) {
                 return res.status(404).json({
                     success: false,
@@ -49,9 +61,22 @@ class DataIsolationManager {
 
         } catch (error) {
             console.error('❌ Erreur lors de la validation d\'accès:', error);
+            console.error('❌ Détails de l\'erreur:', error.message);
+            console.error('❌ Stack:', error.stack);
+            
+            // Distinguer les erreurs de connexion DB des autres erreurs
+            if (error.message && (error.message.includes('timeout') || error.message.includes('ECONNREFUSED') || error.message.includes('ETIMEDOUT'))) {
+                return res.status(503).json({
+                    success: false,
+                    error: 'Service de base de données temporairement indisponible',
+                    details: process.env.NODE_ENV === 'development' ? error.message : undefined
+                });
+            }
+            
             res.status(500).json({
                 success: false,
-                error: 'Erreur de sécurité lors de la validation d\'accès'
+                error: 'Erreur de sécurité lors de la validation d\'accès',
+                details: process.env.NODE_ENV === 'development' ? error.message : undefined
             });
         }
     }
@@ -149,6 +174,14 @@ class DataIsolationManager {
                 isActive: !!result[0].SessionStatus
             };
 
+            // Enregistrer la consultation dans la table de mapping (en arrière-plan)
+            try {
+                await executeProcedure('sp_RecordOperatorConsultation', { CodeOperateur: operatorCode });
+            } catch (error) {
+                // Ne pas faire échouer si l'enregistrement de consultation échoue
+                console.warn(`⚠️ Erreur enregistrement consultation pour ${operatorCode}:`, error.message);
+            }
+
             // Mettre en cache
             this.operatorCache.set(operatorCode, {
                 data: operator,
@@ -159,6 +192,8 @@ class DataIsolationManager {
 
         } catch (error) {
             console.error('❌ Erreur lors de la récupération de l\'opérateur:', error);
+            console.error('❌ Détails:', error.message);
+            // Ne pas throw, retourner null pour que le middleware puisse gérer l'erreur
             return null;
         }
     }
@@ -174,18 +209,34 @@ class DataIsolationManager {
      * Middleware pour logger les tentatives d'accès
      */
     logAccessAttempt(req, res, next) {
-        const { operatorCode } = req.params;
-        const ip = req.ip || req.connection.remoteAddress;
-        const userAgent = req.get('User-Agent');
-        
-        console.log(`🔍 Accès aux données - Opérateur: ${operatorCode}, IP: ${ip}, Endpoint: ${req.path}`);
-        
-        // Log détaillé pour les tentatives suspectes
-        if (req.query.operatorCode && req.query.operatorCode !== operatorCode) {
-            console.log(`🚨 TENTATIVE SUSPECTE - Opérateur ${operatorCode} demande les données de ${req.query.operatorCode}`);
+        try {
+            // Handle case where req.params might be undefined
+            const operatorCode = req.params?.operatorCode;
+            const ip = req.ip || req.connection.remoteAddress || 'unknown';
+            
+            // If no operatorCode in params, try to get it from the route path
+            let finalOperatorCode = operatorCode;
+            if (!finalOperatorCode && req.path) {
+                const pathMatch = req.path.match(/\/operators\/(\d+)/);
+                if (pathMatch) {
+                    finalOperatorCode = pathMatch[1];
+                }
+            }
+            
+            const userAgent = req.get('User-Agent');
+            
+            console.log(`🔍 Accès aux données - Opérateur: ${finalOperatorCode || 'unknown'}, IP: ${ip}, Endpoint: ${req.path}`);
+            
+            // Log détaillé pour les tentatives suspectes
+            if (req.query?.operatorCode && req.query.operatorCode !== finalOperatorCode) {
+                console.log(`🚨 TENTATIVE SUSPECTE - Opérateur ${finalOperatorCode} demande les données de ${req.query.operatorCode}`);
+            }
+            
+            next();
+        } catch (error) {
+            console.error('❌ Erreur lors du log d\'accès:', error);
+            next(); // Continue even if logging fails
         }
-        
-        next();
     }
 }
 

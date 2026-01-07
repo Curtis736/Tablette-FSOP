@@ -64,8 +64,6 @@ Pour un déploiement complet (arrêt propre, rebuild des images, relance des sta
 ```bash
 cd docker
 ./deploy.sh
-# Si Docker nécessite les droits root sur votre serveur :
-# sudo ./deploy.sh
 ```
 
 Le script s'occupe de :
@@ -73,4 +71,20 @@ Le script s'occupe de :
 - arrêter les stacks existantes via `docker compose down` puis tuer les conteneurs récalcitrants,
 - relancer les builds via `rebuild-images.sh`,
 - redémarrer `docker-compose.production.yml` puis `docker-compose.monitoring.yml`.
-- détecter automatiquement si Docker n'est pas accessible (ex: script lancé avec sudo alors que Docker est rootless) et vous guider.
+- détecter automatiquement si Docker n'est pas accessible et utiliser `sudo` si nécessaire (pour les conteneurs root-owned).
+
+### ⚠️ Note importante : Docker snap vs Docker système
+
+Sur le serveur de production, **Docker système** (via `apt`) est utilisé, pas Docker snap. Si Docker snap est installé, il doit être désactivé pour éviter les conflits :
+
+```bash
+sudo snap disable docker
+sudo snap stop docker
+```
+
+L'utilisateur de déploiement (`maintenance`) doit être dans le groupe `docker` pour utiliser Docker sans `sudo` :
+
+```bash
+sudo usermod -aG docker maintenance
+# Puis se déconnecter/reconnecter ou utiliser : newgrp docker
+```

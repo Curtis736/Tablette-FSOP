@@ -12,7 +12,10 @@ const operationRoutes = require('./routes/operations');
 const adminRoutes = require('./routes/admin');
 const authRoutes = require('./routes/auth');
 const commentRoutes = require('./routes/comments');
+const fsopRoutes = require('./routes/fsop');
+const heartbeatRoutes = require('./routes/heartbeat');
 const { metricsMiddleware, getMetrics, register } = require('./middleware/metrics');
+const { auditMiddleware } = require('./middleware/audit');
 
 
 const app = express();
@@ -47,7 +50,7 @@ app.use(cors({
     credentials: true,
     methods: ['GET', 'HEAD', 'PUT', 'PATCH', 'POST', 'DELETE', 'OPTIONS'],
     allowedHeaders: ['Origin', 'X-Requested-With', 'Content-Type', 'Accept', 'Authorization'],
-    exposedHeaders: ['Content-Length', 'X-Foo', 'X-Bar'],
+    exposedHeaders: ['Content-Length', 'Content-Disposition', 'X-Foo', 'X-Bar'],
     preflightContinue: false,
     optionsSuccessStatus: 204
 }));
@@ -86,6 +89,9 @@ app.use(express.urlencoded({ extended: true }));
 // Logging
 app.use(morgan('combined'));
 
+// Audit middleware (doit être avant les routes)
+app.use(auditMiddleware);
+
 // Métriques
 app.use(metricsMiddleware);
 // Rate limiting spécifique pour les routes admin (plus permissif)
@@ -108,6 +114,8 @@ app.use('/api/operators', operatorRoutes);
 app.use('/api/lancements', lancementRoutes);
 app.use('/api/operations', operationRoutes);
 app.use('/api/comments', commentRoutes);
+app.use('/api/fsop', fsopRoutes);
+app.use('/api/heartbeat', heartbeatRoutes);
 app.use('/api/admin', adminLimiter, adminRoutes);
 
 // Route de santé

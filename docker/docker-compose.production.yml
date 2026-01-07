@@ -7,7 +7,10 @@ services:
       - "3001:3001"
     environment:
       - NODE_ENV=production
+      - TRACEABILITY_DIR=/mnt/services/Tracabilite
+      - FSOP_SEARCH_DEPTH=3
     volumes:
+      - /srv/services:/mnt/services:rw
       - ../backend/logs:/app/logs
     networks:
       - sedi-tablette-network

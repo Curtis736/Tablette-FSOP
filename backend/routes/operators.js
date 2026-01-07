@@ -1,13 +1,16 @@
 // Routes pour la gestion des opérateurs
 const express = require('express');
 const router = express.Router();
-const { executeQuery } = require('../config/database');
+const { executeQuery, executeNonQuery, executeProcedure } = require('../config/database');
 const TimeUtils = require('../utils/timeUtils');
 const { authenticateOperator } = require('../middleware/auth');
 const dataIsolation = require('../middleware/dataIsolation');
 const secureQuery = require('../services/SecureQueryService');
 const { validateOperatorSession, validateDataOwnership, logSecurityAction } = require('../middleware/operatorSecurity');
 const dataValidation = require('../services/DataValidationService');
+const SessionService = require('../services/SessionService');
+const AuditService = require('../services/AuditService');
+const { generateRequestId } = require('../middleware/audit');
 
 // Fonction de nettoyage des données incohérentes
 async function cleanupInconsistentData(operatorId) {
@@ -173,10 +176,10 @@ async function validateLancement(codeLancement) {
                 [DesignationArt1],
                 [DesignationArt2]
             FROM [SEDI_ERP].[dbo].[LCTE]
-            WHERE [CodeLancement] = '${codeLancement}'
+            WHERE [CodeLancement] = @codeLancement
         `;
         
-        const result = await executeQuery(query);
+        const result = await executeQuery(query, { codeLancement });
         
         if (result && result.length > 0) {
             const lancement = result[0];
@@ -185,6 +188,15 @@ async function validateLancement(codeLancement) {
                 DesignationLct1: lancement.DesignationLct1,
                 CodeModele: lancement.CodeModele
             });
+
+            // Enregistrer la consultation du lancement (mapping côté SEDI_APP_INDEPENDANTE)
+            try {
+                await executeProcedure('sp_RecordLancementConsultation', { CodeLancement: codeLancement });
+            } catch (error) {
+                // Ne pas faire échouer la validation si la procédure n'est pas encore installée
+                console.warn(`⚠️ Erreur enregistrement consultation lancement ${codeLancement}:`, error.message);
+            }
+
             return {
                 valid: true,
                 data: lancement
@@ -210,13 +222,17 @@ router.get('/:code', async (req, res) => {
     try {
         const { code } = req.params;
         
+        // Utiliser la vue V_RESSOURC au lieu d'accéder directement à RESSOURC
         const query = `
             SELECT TOP 1
-                Typeressource,
-                Coderessource,
-                Designation1
-            FROM [SEDI_ERP].[dbo].[RESSOURC]
-            WHERE Coderessource = @code
+                v.CodeOperateur,
+                v.NomOperateur,
+                v.StatutOperateur,
+                v.DateConsultation,
+                r.Typeressource
+            FROM [SEDI_APP_INDEPENDANTE].[dbo].[V_RESSOURC] v
+            LEFT JOIN [SEDI_ERP].[dbo].[RESSOURC] r ON v.CodeOperateur = r.Coderessource
+            WHERE v.CodeOperateur = @code
         `;
         
         const operators = await executeQuery(query, { code });
@@ -229,11 +245,21 @@ router.get('/:code', async (req, res) => {
         
         const operator = operators[0];
         
+        // Enregistrer la consultation dans la table de mapping
+        try {
+            await executeProcedure('sp_RecordOperatorConsultation', { CodeOperateur: code });
+        } catch (error) {
+            // Ne pas faire échouer la requête si l'enregistrement de consultation échoue
+            console.warn('⚠️ Erreur lors de l\'enregistrement de la consultation:', error.message);
+        }
+        
         res.json({
-            id: operator.Coderessource,
-            code: operator.Coderessource,
-            nom: operator.Designation1,
+            id: operator.CodeOperateur,
+            code: operator.CodeOperateur,
+            nom: operator.NomOperateur,
             type: operator.Typeressource,
+            statutOperateur: operator.StatutOperateur,
+            dateConsultation: operator.DateConsultation,
             actif: true
         });
         
@@ -251,12 +277,16 @@ router.get('/', async (req, res) => {
     try {
         const { search, limit = 100 } = req.query;
         
+        // Utiliser la vue V_RESSOURC au lieu d'accéder directement à RESSOURC
         let query = `
             SELECT TOP ${limit}
-                Typeressource,
-                Coderessource,
-                Designation1
-            FROM [SEDI_ERP].[dbo].[RESSOURC]
+                v.CodeOperateur,
+                v.NomOperateur,
+                v.StatutOperateur,
+                v.DateConsultation,
+                r.Typeressource
+            FROM [SEDI_APP_INDEPENDANTE].[dbo].[V_RESSOURC] v
+            LEFT JOIN [SEDI_ERP].[dbo].[RESSOURC] r ON v.CodeOperateur = r.Coderessource
             WHERE 1=1
         `;
         
@@ -264,21 +294,37 @@ router.get('/', async (req, res) => {
         
         // Filtre de recherche
         if (search) {
-            query += ` AND (Coderessource LIKE @search OR Designation1 LIKE @search)`;
+            query += ` AND (v.CodeOperateur LIKE @search OR v.NomOperateur LIKE @search)`;
             params.search = `%${search}%`;
         }
         
-        query += ` ORDER BY Coderessource`;
+        query += ` ORDER BY v.CodeOperateur`;
         
         const operators = await executeQuery(query, params);
         
         const formattedOperators = operators.map(operator => ({
-            id: operator.Coderessource,
-            code: operator.Coderessource,
-            nom: operator.Designation1,
+            id: operator.CodeOperateur,
+            code: operator.CodeOperateur,
+            nom: operator.NomOperateur,
             type: operator.Typeressource,
+            statutOperateur: operator.StatutOperateur,
+            dateConsultation: operator.DateConsultation,
             actif: true
         }));
+        
+        // Enregistrer les consultations pour les opérateurs consultés (en arrière-plan, ne pas bloquer)
+        if (formattedOperators.length > 0) {
+            // Enregistrer seulement pour les premiers résultats (limite à 10 pour éviter la surcharge)
+            const operatorsToRecord = formattedOperators.slice(0, 10);
+            operatorsToRecord.forEach(async (op) => {
+                try {
+                    await executeProcedure('sp_RecordOperatorConsultation', { CodeOperateur: op.code });
+                } catch (error) {
+                    // Ignorer silencieusement les erreurs pour ne pas bloquer la réponse
+                    console.warn(`⚠️ Erreur enregistrement consultation pour ${op.code}:`, error.message);
+                }
+            });
+        }
         
         res.json(formattedOperators);
         
@@ -322,26 +368,17 @@ router.post('/login', async (req, res) => {
         
         const operator = operators[0];
         
-        // Fermer toute session active existante
-        const closeActiveSessionQuery = `
-            UPDATE [SEDI_APP_INDEPENDANTE].[dbo].[ABSESSIONS_OPERATEURS]
-            SET LogoutTime = GETDATE(), SessionStatus = 'CLOSED'
-            WHERE OperatorCode = @code AND SessionStatus = 'ACTIVE'
-        `;
-        
-        await executeQuery(closeActiveSessionQuery, { code });
-        
-        // Créer une nouvelle session
-        const createSessionQuery = `
-            INSERT INTO [SEDI_APP_INDEPENDANTE].[dbo].[ABSESSIONS_OPERATEURS]
-            (OperatorCode, LoginTime, SessionStatus, DeviceInfo)
-            VALUES (@code, GETDATE(), 'ACTIVE', @deviceInfo)
-        `;
-        
+        // Créer une nouvelle session (ferme automatiquement les anciennes)
         const deviceInfo = req.headers['user-agent'] || 'Unknown Device';
-        await executeQuery(createSessionQuery, { code, deviceInfo });
+        const ipAddress = req.ip || req.connection?.remoteAddress || req.headers['x-forwarded-for'] || null;
+        const deviceId = req.headers['x-device-id'] || null; // À implémenter côté client
         
-        console.log(`✅ Session créée pour l'opérateur ${code}`);
+        const session = await SessionService.createSession(code, deviceId, ipAddress, deviceInfo);
+        
+        // Logger l'événement d'audit
+        await AuditService.logOperatorLogin(code, session.SessionId, deviceId, ipAddress);
+        
+        console.log(`✅ Session créée pour l'opérateur ${code} (SessionId: ${session.SessionId})`);
         
         res.json({
             success: true,
@@ -351,7 +388,9 @@ router.post('/login', async (req, res) => {
                 nom: operator.Designation1,
                 type: operator.Typeressource,
                 actif: true,
-                sessionActive: true
+                sessionActive: true,
+                sessionId: session.SessionId,
+                loginTime: session.LoginTime
             }
         });
         
@@ -378,16 +417,17 @@ router.post('/logout', async (req, res) => {
         // Nettoyer les données incohérentes avant la déconnexion
         await cleanupInconsistentData(code);
         
+        // Récupérer la session active avant fermeture
+        const activeSession = await SessionService.getActiveSession(code);
+        const sessionId = activeSession ? activeSession.SessionId : null;
+        
         // Fermer la session active
-        const logoutQuery = `
-            UPDATE [SEDI_APP_INDEPENDANTE].[dbo].[ABSESSIONS_OPERATEURS]
-            SET LogoutTime = GETDATE(), SessionStatus = 'CLOSED'
-            WHERE OperatorCode = @code AND SessionStatus = 'ACTIVE'
-        `;
+        await SessionService.closeSession(code, sessionId);
         
-        const result = await executeQuery(logoutQuery, { code });
+        // Logger l'événement d'audit
+        await AuditService.logOperatorLogout(code, sessionId);
         
-        console.log(`✅ Session fermée pour l'opérateur ${code}`);
+        console.log(`✅ Session fermée pour l'opérateur ${code} (SessionId: ${sessionId})`);
         
         res.json({
             success: true,
@@ -531,6 +571,12 @@ router.post('/start', async (req, res) => {
         
         console.log(`✅ Opérateur validé: ${operatorId} (${operatorResult[0].Designation1})`);
         
+        // Récupérer la session active et mettre à jour LastActivityTime
+        const activeSession = await SessionService.getActiveSession(operatorId);
+        if (activeSession) {
+            await SessionService.updateLastActivity(operatorId, activeSession.SessionId);
+        }
+        
         // Obtenir l'heure française actuelle
         const { time: currentTime, date: currentDate } = TimeUtils.getCurrentDateTime();
         
@@ -544,6 +590,8 @@ router.post('/start', async (req, res) => {
                 error: validation.error
             });
         }
+        
+        const requestId = req.audit?.requestId || generateRequestId();
 
         // ✅ AUTORISATION : Plusieurs opérateurs peuvent travailler sur le même lancement simultanément
         // La vérification de conflit a été désactivée pour permettre la collaboration multi-opérateurs
@@ -576,10 +624,10 @@ router.post('/start', async (req, res) => {
         }
         */
         
-        // Enregistrer l'événement DEBUT dans ABHISTORIQUE_OPERATEURS avec l'heure française
+        // Enregistrer l'événement DEBUT dans ABHISTORIQUE_OPERATEURS avec corrélation session
         const insertQuery = `
             INSERT INTO [SEDI_APP_INDEPENDANTE].[dbo].[ABHISTORIQUE_OPERATEURS]
-            (OperatorCode, CodeLanctImprod, CodeRubrique, Ident, Phase, Statut, HeureDebut, HeureFin, DateCreation)
+            (OperatorCode, CodeLanctImprod, CodeRubrique, Ident, Phase, Statut, HeureDebut, HeureFin, DateCreation, SessionId, RequestId, CreatedAt)
             VALUES (
                 @operatorId,
                 @lancementCode,
@@ -589,18 +637,26 @@ router.post('/start', async (req, res) => {
                 'EN_COURS',
                 CAST(@currentTime AS TIME),
                 NULL,
-                CAST(@currentDate AS DATE)
+                CAST(@currentDate AS DATE),
+                @sessionId,
+                @requestId,
+                GETDATE()
             )
         `;
         
-        await executeQuery(insertQuery, { 
+        await executeNonQuery(insertQuery, { 
             operatorId, 
             lancementCode, 
             currentTime, 
-            currentDate 
+            currentDate,
+            sessionId: activeSession ? activeSession.SessionId : null,
+            requestId
         });
         
-        console.log(`✅ Lancement ${lancementCode} démarré par opérateur ${operatorId}`);
+        // Logger l'événement d'audit
+        await AuditService.logStartLancement(operatorId, activeSession?.SessionId, lancementCode, requestId);
+        
+        console.log(`✅ Lancement ${lancementCode} démarré par opérateur ${operatorId} (SessionId: ${activeSession?.SessionId})`);
         
         res.json({
             success: true,
@@ -609,6 +665,8 @@ router.post('/start', async (req, res) => {
                 operatorId,
                 lancementCode,
                 action: 'DEBUT',
+                sessionId: activeSession?.SessionId,
+                requestId,
                 timestamp: new Date().toISOString()
             }
         });
@@ -957,6 +1015,14 @@ router.get('/:operatorCode', authenticateOperator, async (req, res) => {
         }
         
         const operator = result[0];
+        
+        // Enregistrer la consultation dans la table de mapping
+        try {
+            await executeProcedure('sp_RecordOperatorConsultation', { CodeOperateur: operatorCode });
+        } catch (error) {
+            // Ne pas faire échouer la requête si l'enregistrement de consultation échoue
+            console.warn('⚠️ Erreur lors de l\'enregistrement de la consultation:', error.message);
+        }
         
         res.json({
             success: true,

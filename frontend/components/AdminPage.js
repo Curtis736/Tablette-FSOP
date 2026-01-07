@@ -10,6 +10,7 @@ class AdminPage {
         this.stats = {};
         this.pagination = null;
         this.currentPage = 1;
+        this.transferSelectionIds = new Set(); // sélection dans la modale de transfert (TempsId)
         
         // Système de sauvegarde automatique
         this.autoSaveEnabled = true;
@@ -38,7 +39,14 @@ class AdminPage {
             pausedLancements: 'pausedLancements',
             completedLancements: 'completedLancements',
             operationsTableBody: 'operationsTableBody',
-            operatorSelect: 'operatorFilter'
+            operatorSelect: 'operatorFilter',
+
+            // Modal transfert
+            transferSelectionModal: 'transferSelectionModal',
+            transferModalTableBody: 'transferModalTableBody',
+            closeTransferModalBtn: 'closeTransferModalBtn',
+            transferSelectedConfirmBtn: 'transferSelectedConfirmBtn',
+            transferSelectAll: 'transferSelectAll'
         };
         
         // Initialiser les éléments avec vérification
@@ -93,6 +101,25 @@ class AdminPage {
                         this.loadData();
                     });
                     console.log('Listener ajouté: refreshDataBtn');
+                }
+
+                // Modale transfert
+                const closeTransferModalBtn = document.getElementById('closeTransferModalBtn');
+                if (closeTransferModalBtn) {
+                    closeTransferModalBtn.addEventListener('click', () => this.hideTransferModal());
+                    console.log('Listener ajouté: closeTransferModalBtn');
+                }
+
+                const transferSelectedConfirmBtn = document.getElementById('transferSelectedConfirmBtn');
+                if (transferSelectedConfirmBtn) {
+                    transferSelectedConfirmBtn.addEventListener('click', () => this.confirmTransferFromModal());
+                    console.log('Listener ajouté: transferSelectedConfirmBtn');
+                }
+
+                const transferSelectAll = document.getElementById('transferSelectAll');
+                if (transferSelectAll) {
+                    transferSelectAll.addEventListener('change', () => this.toggleTransferSelectAll(transferSelectAll.checked));
+                    console.log('Listener ajouté: transferSelectAll');
                 }
                 
                 // Menu déroulant opérateurs
@@ -156,7 +183,7 @@ class AdminPage {
                             const btn = e.target.closest('.btn-delete');
                             const id = btn.dataset.id;
                             console.log('🗑️ Clic sur bouton supprimer, ID:', id);
-                            this.deleteOperation(id);
+                            this.deleteMonitoringRecord(id);
                         } else if (e.target.closest('.btn-edit')) {
                             e.preventDefault();
                             e.stopPropagation();
@@ -176,7 +203,7 @@ class AdminPage {
                             }
                             
                             try {
-                                this.editOperation(id);
+                                this.editMonitoringRecord(id);
                             } catch (error) {
                                 console.error('❌ Erreur lors de l\'édition:', error);
                                 this.notificationManager.error(`Erreur lors de l'édition: ${error.message}`);
@@ -252,7 +279,8 @@ class AdminPage {
             
             const dataPromise = Promise.all([
                 this.apiService.getAdminData(today),
-                this.apiService.getConnectedOperators()
+                this.apiService.getConnectedOperators(),
+                this.loadMonitoringRecords(today)
             ]);
             
             const [adminData, operatorsData] = await Promise.race([
@@ -269,16 +297,8 @@ class AdminPage {
             // Réinitialiser le compteur d'erreurs en cas de succès
             this.consecutiveErrors = 0;
             
-            if (data && data.operations) {
-                this.operations = data.operations;
-                this.pagination = data.pagination;
-                console.log('OPERATIONS ASSIGNEES:', this.operations.length);
-                console.log('PAGINATION:', this.pagination);
-            } else {
-                console.log('PAS D\'OPERATIONS DANS LA REPONSE');
-                this.operations = [];
-                this.pagination = null;
-            }
+            // Stats/pagination: proviennent de /api/admin
+            this.pagination = data?.pagination || null;
             
             if (data && data.stats) {
                 this.stats = data.stats;
@@ -372,6 +392,30 @@ class AdminPage {
         console.log('✅ Compteur d\'erreurs réinitialisé, refresh automatique réactivé');
     }
 
+    // ===== Monitoring (ABTEMPS_OPERATEURS) =====
+    async loadMonitoringRecords(date) {
+        try {
+            const statutTraitement = document.getElementById('statusFilter')?.value || undefined;
+            const operatorCode = document.getElementById('operatorFilter')?.value || undefined;
+            const lancementCode = document.getElementById('searchFilter')?.value?.trim() || undefined;
+
+            const filters = { date };
+            if (statutTraitement) filters.statutTraitement = statutTraitement;
+            if (operatorCode) filters.operatorCode = operatorCode;
+            if (lancementCode) filters.lancementCode = lancementCode;
+
+            const result = await this.apiService.getMonitoringTemps(filters);
+            if (result && result.success) {
+                this.operations = result.data || [];
+            } else {
+                this.operations = [];
+            }
+        } catch (error) {
+            console.error('❌ Erreur loadMonitoringRecords:', error);
+            this.operations = [];
+        }
+    }
+
     updateStats() {
         // Vérifier que les éléments existent avant de les mettre à jour
         if (this.totalOperators) {
@@ -401,7 +445,7 @@ class AdminPage {
         
         this.operationsTableBody.innerHTML = `
             <tr>
-                <td colspan="8" style="text-align: center; padding: 2rem; color: #dc3545;">
+                <td colspan="7" style="text-align: center; padding: 2rem; color: #dc3545;">
                     <i class="fas fa-exclamation-triangle" style="font-size: 2rem; margin-bottom: 1rem;"></i>
                     <br>
                     <strong>Erreur de chargement des données</strong>
@@ -579,41 +623,12 @@ class AdminPage {
         
         const selectedOperator = this.operatorSelect.value;
         console.log('🔄 Changement d\'opérateur sélectionné:', selectedOperator);
-        
-        if (selectedOperator === '') {
-            // Afficher tous les opérateurs - recharger les données normales
-            this.loadData();
-        } else {
-            // Charger les lancements de l'opérateur spécifique
-            try {
-                this.isLoading = true;
-                const endpoint = `/admin/operators/${selectedOperator}/operations`;
-                console.log(`📡 Requête API: ${this.apiService.baseUrl}${endpoint}`);
-                
-                const data = await this.apiService.get(endpoint);
-                
-                if (data && data.success) {
-                    console.log(`📊 ${data.count || data.operations?.length || 0} lancements trouvés pour l'opérateur ${selectedOperator}`);
-                    this.operations = data.operations || [];
-                    this.updateOperationsTable();
-                } else {
-                    const errorMsg = data?.error || 'Données invalides reçues du serveur';
-                    console.error('Erreur lors du chargement des lancements:', errorMsg);
-                    this.notificationManager.error(`Erreur: ${errorMsg}`);
-                }
-            } catch (error) {
-                console.error('Erreur lors du chargement des lancements:', error);
-                const errorMessage = error.message || 'Erreur de connexion au serveur';
-                console.error('Détails de l\'erreur:', {
-                    message: error.message,
-                    stack: error.stack,
-                    apiBaseUrl: this.apiService?.baseUrl
-                });
-                this.notificationManager.error(`Erreur de connexion: ${errorMessage}`);
-            } finally {
-                this.isLoading = false;
-            }
-        }
+
+        // En mode Monitoring, le filtre opérateur est appliqué via loadMonitoringRecords()
+        this.selectedTempsIds.clear();
+        const selectAll = document.getElementById('selectAllRows');
+        if (selectAll) selectAll.checked = false;
+        this.loadData();
     }
 
     async handleAddOperation() {
@@ -678,35 +693,6 @@ class AdminPage {
         }
     }
 
-    async handleTransfer() {
-        try {
-            // Confirmer l'action avec l'utilisateur
-            if (!confirm('Voulez-vous transférer toutes les opérations terminées vers la table SEDI_APP_INDEPENDANTE ?')) {
-                return;
-            }
-
-            console.log('Début du transfert vers SEDI_APP_INDEPENDANTE...');
-            
-            // Appeler l'API de transfert
-            const result = await this.apiService.post('/admin/transfer', {});
-            
-            if (result.success) {
-                this.notificationManager.success(`Transfert réussi : ${result.transferredCount} opérations transférées`);
-                console.log('Transfert terminé:', result);
-                
-                // Recharger les données pour refléter les changements
-                this.loadData();
-            } else {
-                this.notificationManager.error(`Erreur de transfert : ${result.error}`);
-                console.error('Erreur de transfert:', result);
-            }
-            
-        } catch (error) {
-            console.error('Erreur lors du transfert:', error);
-            this.notificationManager.error('Erreur de connexion lors du transfert');
-        }
-    }
-
     updateOperationsTable() {
         console.log('🔄 DEBUT updateOperationsTable()');
         console.log('📊 OPERATIONS TOTALES:', this.operations.length);
@@ -720,53 +706,16 @@ class AdminPage {
         // Appliquer les filtres
         let filteredOperations = [...this.operations];
         
-        // Filtre de statut
+        // Filtre de statut (Monitoring = StatutTraitement)
         const statusFilter = document.getElementById('statusFilter');
         if (statusFilter && statusFilter.value) {
-            const selectedStatus = statusFilter.value;
-            console.log('🔍 Filtrage par statut:', selectedStatus);
-            console.log('🔍 Opérations avant filtrage:', filteredOperations.length);
-            
-            const beforeCount = filteredOperations.length;
+            const selected = statusFilter.value.toUpperCase().trim();
             filteredOperations = filteredOperations.filter(op => {
-                // Comparer avec statusCode (priorité) ou status (fallback)
-                const opStatus = (op.statusCode || op.status || '').toUpperCase().trim();
-                const selectedStatusUpper = selectedStatus.toUpperCase().trim();
-                
-                // Correspondance exacte
-                if (opStatus === selectedStatusUpper) {
-                    return true;
-                }
-                
-                // Gestion spéciale pour "PAUSE" et "EN_PAUSE"
-                if ((selectedStatusUpper === 'PAUSE' || selectedStatusUpper === 'EN_PAUSE') && 
-                    (opStatus === 'EN_PAUSE' || opStatus === 'PAUSE')) {
-                    return true;
-                }
-                
-                // Gestion spéciale pour "EN_COURS" - doit être exact
-                if (selectedStatusUpper === 'EN_COURS' && opStatus === 'EN_COURS') {
-                    return true;
-                }
-                
-                // Gestion spéciale pour "TERMINE" / "TERMINÉ"
-                if ((selectedStatusUpper === 'TERMINE' || selectedStatusUpper === 'TERMINÉ') && 
-                    (opStatus === 'TERMINE' || opStatus === 'TERMINÉ')) {
-                    return true;
-                }
-                
-                return false;
+                const st = (op.StatutTraitement === null || op.StatutTraitement === undefined)
+                    ? 'NULL'
+                    : String(op.StatutTraitement).toUpperCase().trim();
+                return st === selected;
             });
-            
-            const afterCount = filteredOperations.length;
-            console.log(`📊 Filtrage statut: ${beforeCount} → ${afterCount} opérations`);
-            
-            if (afterCount === 0 && beforeCount > 0) {
-                console.log('⚠️ Aucune opération ne correspond au filtre de statut:', selectedStatus);
-                // Utiliser this.operations pour voir les statuts disponibles (avant filtrage)
-                const availableStatuses = [...new Set(this.operations.map(op => (op.statusCode || op.status || '').toUpperCase().trim()))];
-                console.log('🔍 Statuts disponibles dans les opérations:', availableStatuses);
-            }
         }
         
         // Filtre de recherche (code lancement)
@@ -775,7 +724,7 @@ class AdminPage {
             const searchTerm = searchFilter.value.trim().toLowerCase();
             console.log('🔍 Filtrage par recherche:', searchTerm);
             filteredOperations = filteredOperations.filter(op => {
-                const lancementCode = (op.lancementCode || '').toLowerCase();
+                const lancementCode = (op.LancementCode || op.lancementCode || '').toLowerCase();
                 return lancementCode.includes(searchTerm);
             });
             console.log(`📊 Après filtrage recherche: ${filteredOperations.length} opérations`);
@@ -799,24 +748,23 @@ class AdminPage {
             // Message personnalisé selon les filtres actifs
             if (statusFilter && statusFilter.value) {
                 const statusLabels = {
-                    'EN_COURS': 'en cours',
-                    'PAUSE': 'en pause',
-                    'EN_PAUSE': 'en pause',
-                    'TERMINE': 'terminés',
-                    'PAUSE_TERMINEE': 'en pause terminée'
+                    'NULL': 'non traités',
+                    'O': 'validés',
+                    'A': 'en attente',
+                    'T': 'transmis'
                 };
                 const statusLabel = statusLabels[statusFilter.value] || statusFilter.value.toLowerCase();
-                emptyMessage = 'Aucun lancement trouvé';
-                emptySubMessage = `Il n'y a pas de lancements ${statusLabel} pour la période sélectionnée`;
+                emptyMessage = 'Aucun enregistrement trouvé';
+                emptySubMessage = `Il n'y a pas d'enregistrements ${statusLabel} pour la période sélectionnée`;
             } else if (searchFilter && searchFilter.value.trim()) {
                 emptyMessage = 'Aucun lancement trouvé';
                 emptySubMessage = `Aucun lancement ne correspond à "${searchFilter.value.trim()}"`;
             } else if (this.operations.length === 0) {
-                emptyMessage = 'Aucune opération trouvée';
-                emptySubMessage = 'Il n\'y a pas d\'opérations pour la date sélectionnée';
+                emptyMessage = 'Aucun enregistrement trouvé';
+                emptySubMessage = 'Il n\'y a pas d\'enregistrements pour la date sélectionnée';
             } else {
-                emptyMessage = 'Aucun lancement trouvé';
-                emptySubMessage = 'Aucune opération ne correspond aux filtres sélectionnés';
+                emptyMessage = 'Aucun enregistrement trouvé';
+                emptySubMessage = 'Aucun enregistrement ne correspond aux filtres sélectionnés';
             }
             
             const row = document.createElement('tr');
@@ -846,18 +794,20 @@ class AdminPage {
         console.log('📋 DONNEES COMPLETES DES OPERATIONS:', operationsToDisplay);
         
         operationsToDisplay.forEach((operation, index) => {
-            // Debug pour voir les données reçues
-            console.log(`🔍 Opération ${index + 1}:`, {
-                id: operation.id,
-                operatorName: operation.operatorName,
-                lancementCode: operation.lancementCode,
-                startTime: operation.startTime,
-                endTime: operation.endTime,
-                status: operation.status
+            // Debug pour voir les données reçues (Monitoring)
+            console.log(`🔍 Enregistrement ${index + 1}:`, {
+                TempsId: operation.TempsId,
+                OperatorName: operation.OperatorName,
+                OperatorCode: operation.OperatorCode,
+                LancementCode: operation.LancementCode,
+                LancementName: operation.LancementName,
+                StartTime: operation.StartTime,
+                EndTime: operation.EndTime,
+                StatutTraitement: operation.StatutTraitement
             });
             
-            const formattedStartTime = this.formatDateTime(operation.startTime);
-            const formattedEndTime = this.formatDateTime(operation.endTime);
+            const formattedStartTime = this.formatDateTime(operation.StartTime);
+            const formattedEndTime = this.formatDateTime(operation.EndTime);
             
             // Validation des heures incohérentes
             let timeWarning = '';
@@ -872,55 +822,205 @@ class AdminPage {
                 }
             }
             
-            console.log(`⏰ Heures formatées pour ${operation.lancementCode}:`, {
-                startTime: `${operation.startTime} -> ${formattedStartTime}`,
-                endTime: `${operation.endTime} -> ${formattedEndTime}`,
+            console.log(`⏰ Heures formatées pour ${operation.LancementCode}:`, {
+                startTime: `${operation.StartTime} -> ${formattedStartTime}`,
+                endTime: `${operation.EndTime} -> ${formattedEndTime}`,
                 warning: timeWarning ? 'Heures incohérentes détectées' : 'OK'
             });
             
             const row = document.createElement('tr');
             
             // Ajouter l'ID de l'opération pour pouvoir la retrouver
-            row.setAttribute('data-operation-id', operation.id);
-            
-            // Ajouter une classe spéciale pour les lignes de pause
-            if (operation.type === 'pause') {
-                row.classList.add('pause-row');
-                if (operation.statusCode === 'PAUSE_TERMINEE') {
-                    row.classList.add('pause-terminee');
-                }
-            }
-            
-            // Validation de l'association opérateur
-            let operatorValidation = '';
-            if (operation.operatorLinkStatus === 'MISMATCH') {
-                operatorValidation = ' ⚠️';
-            } else if (operation.operatorLinkStatus === 'NO_RESOURCE') {
-                operatorValidation = ' ❌';
-            } else if (operation.operatorLinkStatus === 'LINKED') {
-                operatorValidation = ' ✅';
-            }
+            const tempsId = operation.TempsId;
+            row.setAttribute('data-operation-id', tempsId);
+
+            const statutCode = (operation.StatutTraitement === null || operation.StatutTraitement === undefined)
+                ? 'NULL'
+                : String(operation.StatutTraitement).toUpperCase();
+            const statutLabel = this.getMonitoringStatusText(statutCode);
             
             row.innerHTML = `
-                <td>${operation.operatorName || '-'}${operatorValidation}</td>
-                <td>${operation.lancementCode || '-'} ${operation.type === 'pause' ? '<i class="fas fa-pause-circle pause-icon"></i>' : ''}</td>
-                <td>${operation.article || '-'}</td>
+                <td>${operation.OperatorName || operation.OperatorCode || '-'}</td>
+                <td>${operation.LancementCode || '-'}</td>
+                <td>${operation.LancementName || '-'}</td>
                 <td>${formattedStartTime}</td>
                 <td>${formattedEndTime}${timeWarning}</td>
                 <td>
-                    <span class="status-badge status-${operation.statusCode}">${operation.status}</span>
+                    <span class="status-badge status-${statutCode}">${statutLabel}</span>
                 </td>
                 <td class="actions-cell">
-                    <button class="btn-edit" data-id="${operation.id}" data-operation-id="${operation.id}" title="Modifier" type="button">
+                    <button class="btn-edit" data-id="${tempsId}" data-operation-id="${tempsId}" title="Corriger" type="button">
                         <i class="fas fa-edit"></i>
                     </button>
-                    <button class="btn-delete" data-id="${operation.id}" data-operation-id="${operation.id}" title="Supprimer" type="button">
+                    <button class="btn-delete" data-id="${tempsId}" data-operation-id="${tempsId}" title="Supprimer" type="button">
                         <i class="fas fa-trash"></i>
                     </button>
                 </td>
             `;
             this.operationsTableBody.appendChild(row);
         });
+    }
+
+    getMonitoringStatusText(code) {
+        const map = {
+            'NULL': 'NON TRAITÉ',
+            'O': 'VALIDÉ',
+            'A': 'EN ATTENTE',
+            'T': 'TRANSMIS'
+        };
+        return map[code] || code;
+    }
+
+    // ===== Transfert: choix au moment du transfert =====
+    async handleTransfer() {
+        try {
+            // Récupérer les lignes VALIDÉES (StatutTraitement = 'O') du jour
+            const today = new Date().toISOString().split('T')[0];
+            const validated = await this.apiService.getMonitoringTemps({ date: today, statutTraitement: 'O' });
+            const records = validated?.data || [];
+
+            if (records.length === 0) {
+                this.notificationManager.warning('Aucune ligne VALIDÉE à transférer');
+                return;
+            }
+
+            const transferAll = confirm(`Transférer TOUTES les lignes VALIDÉES (${records.length}) ?\n\nOK = tout transférer\nAnnuler = choisir les lignes`);
+            if (transferAll) {
+                const triggerEdiJob = confirm('Déclencher EDI_JOB après transfert ?');
+                const ids = records.map(r => r.TempsId).filter(Boolean);
+                const result = await this.apiService.validateAndTransmitMonitoringBatch(ids, { triggerEdiJob });
+                if (result?.success) {
+                    this.notificationManager.success('Transfert terminé');
+                    await this.loadData();
+                } else {
+                    this.notificationManager.error(result?.error || 'Erreur transfert');
+                }
+                return;
+            }
+
+            // Sinon: ouvrir la modale de sélection
+            this.openTransferModal(records);
+        } catch (error) {
+            console.error('Erreur lors du transfert (monitoring):', error);
+            this.notificationManager.error('Erreur de connexion lors du transfert');
+        }
+    }
+
+    openTransferModal(records) {
+        const modal = document.getElementById('transferSelectionModal');
+        const body = document.getElementById('transferModalTableBody');
+        const selectAll = document.getElementById('transferSelectAll');
+        if (!modal || !body) return;
+
+        this.transferSelectionIds.clear();
+        if (selectAll) selectAll.checked = true;
+
+        body.innerHTML = '';
+        for (const r of records) {
+            const id = r.TempsId;
+            const key = String(id);
+            this.transferSelectionIds.add(key); // pré-sélectionner tout
+
+            const tr = document.createElement('tr');
+            tr.innerHTML = `
+                <td style="text-align:center; padding:10px; border-bottom:1px solid #f0f0f0;">
+                    <input type="checkbox" class="transfer-row" data-id="${id}" checked />
+                </td>
+                <td style="padding:10px; border-bottom:1px solid #f0f0f0;">${r.OperatorName || r.OperatorCode || '-'}</td>
+                <td style="padding:10px; border-bottom:1px solid #f0f0f0;">${r.LancementCode || '-'}</td>
+                <td style="padding:10px; border-bottom:1px solid #f0f0f0;">${r.LancementName || '-'}</td>
+                <td style="padding:10px; border-bottom:1px solid #f0f0f0;">${this.formatDateTime(r.StartTime)}</td>
+                <td style="padding:10px; border-bottom:1px solid #f0f0f0;">${this.formatDateTime(r.EndTime)}</td>
+            `;
+            body.appendChild(tr);
+        }
+
+        // Delegation checkbox
+        body.onclick = (e) => {
+            const cb = e.target.closest('input.transfer-row');
+            if (!cb) return;
+            const id = String(cb.dataset.id);
+            if (cb.checked) this.transferSelectionIds.add(id);
+            else this.transferSelectionIds.delete(id);
+        };
+
+        modal.style.display = 'block';
+    }
+
+    hideTransferModal() {
+        const modal = document.getElementById('transferSelectionModal');
+        if (modal) modal.style.display = 'none';
+        this.transferSelectionIds.clear();
+    }
+
+    toggleTransferSelectAll(checked) {
+        const body = document.getElementById('transferModalTableBody');
+        if (!body) return;
+        const cbs = body.querySelectorAll('input.transfer-row');
+        cbs.forEach(cb => {
+            cb.checked = checked;
+            const id = String(cb.dataset.id);
+            if (checked) this.transferSelectionIds.add(id);
+            else this.transferSelectionIds.delete(id);
+        });
+    }
+
+    async confirmTransferFromModal() {
+        const ids = Array.from(this.transferSelectionIds).map(x => parseInt(x, 10)).filter(n => !Number.isNaN(n));
+        if (ids.length === 0) {
+            this.notificationManager.warning('Aucune ligne sélectionnée');
+            return;
+        }
+        const triggerEdiJob = confirm('Déclencher EDI_JOB après transfert ?');
+        const result = await this.apiService.validateAndTransmitMonitoringBatch(ids, { triggerEdiJob });
+        if (result?.success) {
+            this.notificationManager.success('Transfert terminé');
+            this.hideTransferModal();
+            await this.loadData();
+        } else {
+            this.notificationManager.error(result?.error || 'Erreur transfert');
+        }
+    }
+
+    async deleteMonitoringRecord(id) {
+        if (!confirm('Supprimer cet enregistrement de temps ?')) return;
+        try {
+            const result = await this.apiService.deleteMonitoringTemps(id);
+            if (result && result.success) {
+                this.notificationManager.success('Enregistrement supprimé');
+                this.selectedTempsIds.delete(String(id));
+                await this.loadData();
+            } else {
+                this.notificationManager.error(result?.error || 'Erreur suppression');
+            }
+        } catch (error) {
+            console.error('❌ Erreur suppression monitoring:', error);
+            this.notificationManager.error('Erreur suppression');
+        }
+    }
+
+    async editMonitoringRecord(id) {
+        // Correction simple via prompts (Phase/CodeRubrique/Start/End)
+        const phase = prompt('Phase (laisser vide pour ne pas changer) :');
+        const codeRubrique = prompt('CodeRubrique (laisser vide pour ne pas changer) :');
+        const startTime = prompt('Heure début (YYYY-MM-DDTHH:mm:ss ou HH:mm, vide = inchangé) :');
+        const endTime = prompt('Heure fin (YYYY-MM-DDTHH:mm:ss ou HH:mm, vide = inchangé) :');
+
+        const corrections = {};
+        if (phase !== null && phase !== '') corrections.Phase = phase;
+        if (codeRubrique !== null && codeRubrique !== '') corrections.CodeRubrique = codeRubrique;
+        if (startTime !== null && startTime !== '') corrections.StartTime = startTime;
+        if (endTime !== null && endTime !== '') corrections.EndTime = endTime;
+
+        if (Object.keys(corrections).length === 0) return;
+
+        const result = await this.apiService.correctMonitoringTemps(id, corrections);
+        if (result && result.success) {
+            this.notificationManager.success('Enregistrement corrigé');
+            await this.loadData();
+        } else {
+            this.notificationManager.error(result?.error || 'Erreur correction');
+        }
     }
 
     formatDateTime(dateString) {
@@ -2126,7 +2226,7 @@ class AdminPage {
         if (!tableData || tableData.length === 0) {
             const row = document.createElement('tr');
             row.innerHTML = `
-                <td colspan="8" style="text-align: center; padding: 1rem; color: #666;">
+                <td colspan="7" style="text-align: center; padding: 1rem; color: #666;">
                     Aucune donnée trouvée
                 </td>
             `;

@@ -12,15 +12,17 @@ class ApiService {
         const forceLocalBackend =
             searchParams.has('directBackend') ||
             window.localStorage?.getItem('sedi_force_local_backend') === '1';
-        const devPorts = new Set(['5173', '4173', '3000', '5174']);
+        const devPorts = new Set(['5173', '4173', '3000', '5174', '8080']);
         const isClassicDevPort = devPorts.has(currentPort);
-        const isLocalHost = currentHost === 'localhost' || currentHost === '127.0.0.1';
-        const isLocalDev = forceLocalBackend || (isLocalHost && isClassicDevPort);
+        const isLocalHost = currentHost === 'localhost' || currentHost === '127.0.0.1' || currentHost === '';
+        // En local (localhost/127.0.0.1) avec port de dev OU port 8080 (http-server), utiliser backend direct
+        const isLocalDev = forceLocalBackend || (isLocalHost && (isClassicDevPort || currentPort === '8080'));
         
         if (isLocalDev) {
             // Environnement de développement local - connexion directe au backend
+            // Essayer d'abord le port de dev (3033), sinon le port standard (3001)
             this.baseUrl = `http://localhost:3033/api`;
-            console.log('🔧 Mode développement local détecté - connexion directe au backend');
+            console.log('🔧 Mode développement local détecté - connexion directe au backend sur port 3033');
             if (forceLocalBackend && !isClassicDevPort) {
                 console.log('⚠️ Force local backend activé via paramètre/stockage');
             }
@@ -334,6 +336,35 @@ class ApiService {
 
     async getAdminOperations(date, filters = {}) {
         return this.get('/admin/operations', { date, ...filters });
+    }
+
+    // ===== Monitoring (ABTEMPS_OPERATEURS) =====
+    async getMonitoringTemps(filters = {}) {
+        return this.get('/admin/monitoring', filters);
+    }
+
+    async correctMonitoringTemps(tempsId, corrections = {}) {
+        return this.put(`/admin/monitoring/${tempsId}`, corrections);
+    }
+
+    async deleteMonitoringTemps(tempsId) {
+        return this.delete(`/admin/monitoring/${tempsId}`);
+    }
+
+    async validateMonitoringTemps(tempsId) {
+        return this.post(`/admin/monitoring/${tempsId}/validate`, {});
+    }
+
+    async onHoldMonitoringTemps(tempsId) {
+        return this.post(`/admin/monitoring/${tempsId}/on-hold`, {});
+    }
+
+    async transmitMonitoringTemps(tempsId, { triggerEdiJob = false, codeTache = null } = {}) {
+        return this.post(`/admin/monitoring/${tempsId}/transmit`, { triggerEdiJob, codeTache });
+    }
+
+    async validateAndTransmitMonitoringBatch(tempsIds, { triggerEdiJob = true, codeTache = null } = {}) {
+        return this.post('/admin/monitoring/validate-and-transmit-batch', { tempsIds, triggerEdiJob, codeTache });
     }
 
     // Export

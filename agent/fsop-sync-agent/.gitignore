@@ -1,0 +1,12 @@
+node_modules/
+logs/
+*.log
+agent.config.json
+.DS_Store
+*.swp
+*.swo
+*~
+
+
+
+

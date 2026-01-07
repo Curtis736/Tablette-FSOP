@@ -1,6 +1,7 @@
 // Interface simplifiée pour les opérateurs
 import TimeUtils from '../utils/TimeUtils.js';
 import ScannerManager from '../utils/ScannerManager.js?v=20251021-scanner-fix';
+import FsopForm from './FsopForm.js?v=20251021-fsop-form';
 
 class OperateurInterface {
     constructor(operator, app) {
@@ -72,6 +73,23 @@ class OperateurInterface {
         this.scannerVideo = document.getElementById('scannerVideo');
         this.scannerCanvas = document.getElementById('scannerCanvas');
         this.scannerStatus = document.getElementById('scannerStatus');
+
+        // Éléments FSOP
+        this.fsopBtn = document.getElementById('fsopBtn');
+        this.fsopModal = document.getElementById('fsopModal');
+        this.closeFsopBtn = document.getElementById('closeFsopBtn');
+        this.fsopTemplateCodeInput = document.getElementById('fsopTemplateCode');
+        this.fsopSerialNumberInput = document.getElementById('fsopSerialNumber');
+        this.openFsopWordBtn = document.getElementById('openFsopWordBtn');
+        this.openFsopFormBtn = document.getElementById('openFsopFormBtn');
+        this.fsopFormModal = document.getElementById('fsopFormModal');
+        this.closeFsopFormBtn = document.getElementById('closeFsopFormBtn');
+        this.fsopFormContainer = document.getElementById('fsopFormContainer');
+        this.fsopFormSaveBtn = document.getElementById('fsopFormSaveBtn');
+        
+        // Instance du formulaire FSOP
+        this.fsopForm = null;
+        this.currentFsopData = null;
         
         // Initialiser le gestionnaire de scanner
         this.scannerManager = new ScannerManager();
@@ -157,12 +175,343 @@ class OperateurInterface {
                     this.closeScanner();
                 }
             });
-            
-            document.addEventListener('keydown', (e) => {
-                if (e.key === 'Escape' && this.scannerModal.style.display === 'flex') {
-                    this.closeScanner();
+        }
+
+        // Gestion FSOP
+        if (this.fsopBtn) {
+            this.fsopBtn.addEventListener('click', () => this.openFsopModal());
+            this.fsopBtn.addEventListener('touchend', (e) => {
+                e.preventDefault();
+                this.openFsopModal();
+            });
+        }
+
+        if (this.closeFsopBtn) {
+            this.closeFsopBtn.addEventListener('click', () => this.closeFsopModal());
+        }
+
+        if (this.fsopModal) {
+            this.fsopModal.addEventListener('click', (e) => {
+                if (e.target === this.fsopModal) {
+                    this.closeFsopModal();
                 }
             });
+        }
+
+        if (this.openFsopWordBtn) {
+            this.openFsopWordBtn.addEventListener('click', () => this.handleOpenFsopWord());
+        }
+
+        if (this.openFsopFormBtn) {
+            this.openFsopFormBtn.addEventListener('click', () => this.handleOpenFsopForm());
+        }
+
+        if (this.closeFsopFormBtn) {
+            this.closeFsopFormBtn.addEventListener('click', () => this.closeFsopFormModal());
+        }
+
+        const closeFsopFormBtn2 = document.getElementById('closeFsopFormBtn2');
+        if (closeFsopFormBtn2) {
+            closeFsopFormBtn2.addEventListener('click', () => this.closeFsopFormModal());
+        }
+
+        if (this.fsopFormModal) {
+            this.fsopFormModal.addEventListener('click', (e) => {
+                if (e.target === this.fsopFormModal) {
+                    this.closeFsopFormModal();
+                }
+            });
+        }
+
+        if (this.fsopFormSaveBtn) {
+            this.fsopFormSaveBtn.addEventListener('click', () => this.handleSaveFsopForm());
+        }
+
+        // Fermer les modals avec Escape (scanner + FSOP)
+        document.addEventListener('keydown', (e) => {
+            if (e.key !== 'Escape') {
+                return;
+            }
+            if (this.scannerModal && this.scannerModal.style.display === 'flex') {
+                this.closeScanner();
+            }
+            if (this.fsopModal && this.fsopModal.style.display === 'flex') {
+                this.closeFsopModal();
+            }
+            if (this.fsopFormModal && this.fsopFormModal.style.display === 'flex') {
+                this.closeFsopFormModal();
+            }
+        });
+    }
+
+    getCurrentLaunchNumberForFsop() {
+        const fromCurrent = this.currentLancement?.CodeLancement;
+        const fromInput = this.lancementInput?.value?.trim();
+        const value = (fromCurrent || fromInput || '').toUpperCase();
+        return /^LT\d{7,8}$/.test(value) ? value : null;
+    }
+
+    openFsopModal() {
+        if (!this.fsopModal) {
+            this.notificationManager.error('FSOP indisponible (éléments UI manquants)');
+            return;
+        }
+
+        const lt = this.getCurrentLaunchNumberForFsop();
+        if (!lt) {
+            this.notificationManager.warning('Saisissez un LT valide avant d’ouvrir FSOP');
+            return;
+        }
+
+        this.fsopModal.style.display = 'flex';
+        if (this.fsopTemplateCodeInput) {
+            this.fsopTemplateCodeInput.value = this.fsopTemplateCodeInput.value?.trim() || '';
+            setTimeout(() => this.fsopTemplateCodeInput.focus(), 50);
+        }
+    }
+
+    closeFsopModal() {
+        if (!this.fsopModal) return;
+        this.fsopModal.style.display = 'none';
+    }
+
+    parseFilenameFromContentDisposition(contentDisposition) {
+        if (!contentDisposition) return null;
+        // Typical: attachment; filename="FSOP_F469_SN123_LT2501132.docx"
+        const match = /filename\*?=(?:UTF-8''|")?([^\";]+)"?/i.exec(contentDisposition);
+        if (!match) return null;
+        try {
+            return decodeURIComponent(match[1]);
+        } catch (_) {
+            return match[1];
+        }
+    }
+
+    async handleOpenFsopWord() {
+        const lt = this.getCurrentLaunchNumberForFsop();
+        const templateCode = (this.fsopTemplateCodeInput?.value || '').trim().toUpperCase();
+        const serialNumber = (this.fsopSerialNumberInput?.value || '').trim();
+
+        if (!lt) {
+            this.notificationManager.error('LT invalide');
+            return;
+        }
+        if (!/^F\d{3}$/.test(templateCode)) {
+            this.notificationManager.error('Numéro de formulaire invalide (ex: F469)');
+            return;
+        }
+        if (!serialNumber) {
+            this.notificationManager.error('Numéro de série obligatoire');
+            return;
+        }
+
+        const endpoint = `${this.apiService.baseUrl}/fsop/open`;
+
+        const originalHtml = this.openFsopWordBtn?.innerHTML;
+        if (this.openFsopWordBtn) {
+            this.openFsopWordBtn.disabled = true;
+            this.openFsopWordBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Génération...';
+        }
+
+        try {
+            const res = await fetch(endpoint, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    launchNumber: lt,
+                    templateCode,
+                    serialNumber
+                })
+            });
+
+            if (!res.ok) {
+                let errorData = null;
+                try {
+                    errorData = await res.json();
+                } catch (_) {
+                    // Ignore JSON parse errors
+                }
+                
+                if (res.status === 503) {
+                    this.notificationManager.error('Traçabilité indisponible (partage réseau non monté).');
+                } else if (res.status === 422) {
+                    if (errorData?.error === 'LT_DIR_NOT_FOUND') {
+                        this.notificationManager.error(`Dossier LT introuvable: ${lt} (recherche dans X:/Tracabilite).`);
+                    } else {
+                        this.notificationManager.error(`Dossier absent: X:/Tracabilite/${lt}/FSOP (stop).`);
+                    }
+                } else if (res.status === 404) {
+                    const errorMsg = errorData?.message || errorData?.hint || `Template ${templateCode} introuvable`;
+                    this.notificationManager.error(`Template absent dans FSOP: ${errorMsg}`);
+                } else if (res.status === 400) {
+                    this.notificationManager.error('Champs FSOP invalides');
+                } else {
+                    this.notificationManager.error(`Erreur FSOP (HTTP ${res.status})`);
+                }
+                return;
+            }
+
+            const contentDisposition = res.headers.get('content-disposition');
+            const filename = this.parseFilenameFromContentDisposition(contentDisposition)
+                || `FSOP_${templateCode}_${serialNumber}_${lt}.docx`;
+
+            const blob = await res.blob();
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = filename;
+            document.body.appendChild(a);
+            a.click();
+            a.remove();
+            URL.revokeObjectURL(url);
+
+            this.notificationManager.success('FSOP téléchargé');
+            this.closeFsopModal();
+        } catch (error) {
+            console.error('Erreur FSOP:', error);
+            this.notificationManager.error('Erreur de connexion lors de l’ouverture FSOP');
+        } finally {
+            if (this.openFsopWordBtn) {
+                this.openFsopWordBtn.disabled = false;
+                this.openFsopWordBtn.innerHTML = originalHtml || '<i class="fas fa-download"></i> Ouvrir FSOP (Word)';
+            }
+        }
+    }
+
+    async handleOpenFsopForm() {
+        const lt = this.getCurrentLaunchNumberForFsop();
+        const templateCode = (this.fsopTemplateCodeInput?.value || '').trim().toUpperCase();
+        const serialNumber = (this.fsopSerialNumberInput?.value || '').trim();
+
+        if (!lt) {
+            this.notificationManager.error('LT invalide');
+            return;
+        }
+        if (!/^F\d{3}$/.test(templateCode)) {
+            this.notificationManager.error('Numéro de formulaire invalide (ex: F469)');
+            return;
+        }
+        if (!serialNumber) {
+            this.notificationManager.error('Numéro de série obligatoire');
+            return;
+        }
+
+        // Fermer la modal FSOP initiale
+        this.closeFsopModal();
+
+        // Afficher la modal du formulaire
+        if (!this.fsopFormModal) {
+            this.notificationManager.error('Modal formulaire FSOP introuvable');
+            return;
+        }
+
+        this.fsopFormModal.style.display = 'flex';
+
+        // Initialiser le formulaire
+        if (!this.fsopForm) {
+            this.fsopForm = new FsopForm(this.apiService, this.notificationManager);
+        }
+
+        // Afficher un loader
+        if (this.fsopFormContainer) {
+            this.fsopFormContainer.innerHTML = '<div class="fsop-loading"><i class="fas fa-spinner fa-spin"></i> Chargement du formulaire...</div>';
+        }
+
+        try {
+            // Charger la structure du template
+            await this.fsopForm.loadStructure(templateCode);
+
+            // Pré-remplir avec LT et SN
+            const initialData = {
+                placeholders: {
+                    '{{LT}}': lt,
+                    '{{SN}}': serialNumber
+                },
+                tables: {},
+                passFail: {},
+                checkboxes: {}
+            };
+
+            // Rendre le formulaire
+            if (this.fsopFormContainer) {
+                this.fsopForm.render(this.fsopFormContainer, initialData);
+            }
+
+            // Stocker les valeurs pour la sauvegarde
+            this.currentFsopData = {
+                launchNumber: lt,
+                templateCode: templateCode,
+                serialNumber: serialNumber
+            };
+
+        } catch (error) {
+            console.error('Erreur lors du chargement du formulaire:', error);
+            this.notificationManager.error('Impossible de charger le formulaire FSOP');
+            this.closeFsopFormModal();
+        }
+    }
+
+    closeFsopFormModal() {
+        if (!this.fsopFormModal) return;
+        this.fsopFormModal.style.display = 'none';
+        if (this.fsopFormContainer) {
+            this.fsopFormContainer.innerHTML = '';
+        }
+    }
+
+    async handleSaveFsopForm() {
+        if (!this.fsopForm || !this.currentFsopData) {
+            this.notificationManager.error('Formulaire non initialisé');
+            return;
+        }
+
+        // Valider le formulaire
+        const validation = this.fsopForm.validate();
+        if (!validation.valid) {
+            this.notificationManager.error(validation.errors.join(', '));
+            return;
+        }
+
+        // Récupérer les données
+        const formData = this.fsopForm.getFormData();
+
+        // Désactiver le bouton
+        const originalHtml = this.fsopFormSaveBtn?.innerHTML;
+        if (this.fsopFormSaveBtn) {
+            this.fsopFormSaveBtn.disabled = true;
+            this.fsopFormSaveBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Sauvegarde...';
+        }
+
+        try {
+            const response = await this.apiService.post('/fsop/save', {
+                launchNumber: this.currentFsopData.launchNumber,
+                templateCode: this.currentFsopData.templateCode,
+                serialNumber: this.currentFsopData.serialNumber,
+                formData: formData
+            });
+
+            let successMessage = 'FSOP sauvegardé avec succès';
+            if (response.excelUpdate) {
+                if (response.excelUpdate.success) {
+                    successMessage += ` | ${response.excelUpdate.message}`;
+                    if (response.excelUpdate.updated > 0) {
+                        successMessage += ` (${response.excelUpdate.updated} mesure(s) transférée(s))`;
+                    }
+                } else {
+                    successMessage += ` | ⚠️ ${response.excelUpdate.message}`;
+                }
+            }
+            
+            this.notificationManager.success(successMessage);
+            this.closeFsopFormModal();
+        } catch (error) {
+            console.error('Erreur lors de la sauvegarde:', error);
+            this.notificationManager.error('Erreur lors de la sauvegarde du FSOP');
+        } finally {
+            if (this.fsopFormSaveBtn) {
+                this.fsopFormSaveBtn.disabled = false;
+                this.fsopFormSaveBtn.innerHTML = originalHtml || '<i class="fas fa-save"></i> Sauvegarder';
+            }
         }
     }
 

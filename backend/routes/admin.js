@@ -1,5 +1,5 @@
 const express = require('express');
-const { executeQuery } = require('../config/database');
+const { executeQuery, executeProcedure } = require('../config/database');
 const moment = require('moment');
 const router = express.Router();
 const { authenticateAdmin } = require('../middleware/auth');
@@ -32,6 +32,15 @@ async function validateLancement(codeLancement) {
                 DesignationLct1: lancement.DesignationLct1,
                 CodeModele: lancement.CodeModele
             });
+
+            // Enregistrer la consultation du lancement (mapping côté SEDI_APP_INDEPENDANTE)
+            try {
+                await executeProcedure('sp_RecordLancementConsultation', { CodeLancement: codeLancement });
+            } catch (error) {
+                // Ne pas faire échouer la requête admin si la procédure n'est pas encore installée
+                console.warn(`⚠️ Erreur enregistrement consultation lancement ${codeLancement}:`, error.message);
+            }
+
             return {
                 valid: true,
                 data: lancement
@@ -292,6 +301,11 @@ async function consolidateLancementTimes(operatorCode, lancementCode) {
         const finEvent = events.find(e => e.Ident === 'FIN');
 
         if (!debutEvent || !finEvent) return; // Lancement pas encore terminé
+        
+        // Extraire Phase et CodeRubrique depuis les événements
+        // Phase et CodeRubrique sont généralement dans l'événement DEBUT
+        const phase = debutEvent.Phase || finEvent.Phase || 'PRODUCTION';
+        const codeRubrique = debutEvent.CodeRubrique || finEvent.CodeRubrique || operatorCode;
 
         // Calculer les durées en utilisant DateCreation pour éviter les problèmes de minuit
         const startDateTime = new Date(debutEvent.DateCreation);
@@ -350,11 +364,11 @@ async function consolidateLancementTimes(operatorCode, lancementCode) {
             return;
         }
 
-        // Insérer dans ABTEMPS_OPERATEURS
+        // Insérer dans ABTEMPS_OPERATEURS avec Phase et CodeRubrique
         const insertQuery = `
             INSERT INTO [SEDI_APP_INDEPENDANTE].[dbo].[ABTEMPS_OPERATEURS]
-            (OperatorCode, LancementCode, StartTime, EndTime, TotalDuration, PauseDuration, ProductiveDuration, EventsCount)
-            VALUES (@operatorCode, @lancementCode, @startTime, @endTime, @totalDuration, @pauseDuration, @productiveDuration, @eventsCount)
+            (OperatorCode, LancementCode, StartTime, EndTime, TotalDuration, PauseDuration, ProductiveDuration, EventsCount, Phase, CodeRubrique)
+            VALUES (@operatorCode, @lancementCode, @startTime, @endTime, @totalDuration, @pauseDuration, @productiveDuration, @eventsCount, @phase, @codeRubrique)
         `;
 
         await executeQuery(insertQuery, {
@@ -365,7 +379,9 @@ async function consolidateLancementTimes(operatorCode, lancementCode) {
             totalDuration,
             pauseDuration,
             productiveDuration,
-            eventsCount: events.length
+            eventsCount: events.length,
+            phase,
+            codeRubrique
         });
 
         console.log(` Temps consolidés pour ${operatorCode}/${lancementCode}: ${totalDuration}min (${productiveDuration}min productif)`);
@@ -781,6 +797,12 @@ function processLancementEvents(events) {
 router.get('/', async (req, res) => {
     try {
         console.log('🚀 DEBUT route /api/admin');
+
+        // Éviter le cache (sinon le navigateur peut recevoir 304 sans body JSON)
+        res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+        res.setHeader('Pragma', 'no-cache');
+        res.setHeader('Expires', '0');
+
         const { date } = req.query;
         const targetDate = date || moment().format('YYYY-MM-DD');
         
@@ -1391,6 +1413,11 @@ router.delete('/operations/:id', async (req, res) => {
 // Route pour récupérer les opérateurs connectés depuis ABSESSIONS_OPERATEURS
 router.get('/operators', async (req, res) => {
     try {
+        // Éviter le cache (sinon le navigateur peut recevoir 304 sans body JSON)
+        res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+        res.setHeader('Pragma', 'no-cache');
+        res.setHeader('Expires', '0');
+
         console.log('🔍 Récupération des opérateurs connectés depuis ABSESSIONS_OPERATEURS...');
 
             const operatorsQuery = `
@@ -2366,6 +2393,7 @@ router.get('/debug/sedi-tables', async (req, res) => {
         const tempsQuery = `
             SELECT TOP 5 * 
             FROM [SEDI_APP_INDEPENDANTE].[dbo].[ABTEMPS_OPERATEURS]
+            -- Note: Les colonnes Phase, CodeRubrique, StatutTraitement sont maintenant disponibles
             ORDER BY DateCreation DESC
         `;
 
@@ -3015,6 +3043,335 @@ router.get('/test/time-format', async (req, res) => {
         res.status(500).json({
             success: false,
             error: 'Erreur lors du test du format'
+        });
+    }
+});
+
+// ============================================
+// ROUTES MONITORING - Gestion des enregistrements de temps
+// ============================================
+
+const MonitoringService = require('../services/MonitoringService');
+
+// GET /api/admin/monitoring - Récupérer tous les enregistrements de temps avec filtres
+router.get('/monitoring', async (req, res) => {
+    try {
+        // Éviter le cache (sinon le navigateur peut recevoir 304 sans body JSON)
+        res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+        res.setHeader('Pragma', 'no-cache');
+        res.setHeader('Expires', '0');
+
+        const { statutTraitement, operatorCode, lancementCode, date } = req.query;
+        
+        const filters = {};
+        if (statutTraitement !== undefined) filters.statutTraitement = statutTraitement;
+        if (operatorCode) filters.operatorCode = operatorCode;
+        if (lancementCode) filters.lancementCode = lancementCode;
+        if (date) filters.date = date;
+        
+        const result = await MonitoringService.getTempsRecords(filters);
+        
+        if (result.success) {
+            res.json({
+                success: true,
+                data: result.data,
+                count: result.count
+            });
+        } else {
+            res.status(500).json({
+                success: false,
+                error: result.error
+            });
+        }
+        
+    } catch (error) {
+        console.error('❌ Erreur lors de la récupération des enregistrements:', error);
+        res.status(500).json({
+            success: false,
+            error: 'Erreur serveur lors de la récupération des enregistrements'
+        });
+    }
+});
+
+// PUT /api/admin/monitoring/:tempsId - Corriger un enregistrement
+router.put('/monitoring/:tempsId', async (req, res) => {
+    try {
+        const { tempsId } = req.params;
+        const corrections = req.body;
+        
+        const result = await MonitoringService.correctRecord(parseInt(tempsId), corrections);
+        
+        if (result.success) {
+            res.json({
+                success: true,
+                message: result.message,
+                data: result
+            });
+        } else {
+            res.status(400).json({
+                success: false,
+                error: result.error
+            });
+        }
+        
+    } catch (error) {
+        console.error('❌ Erreur lors de la correction:', error);
+        res.status(500).json({
+            success: false,
+            error: 'Erreur serveur lors de la correction'
+        });
+    }
+});
+
+// DELETE /api/admin/monitoring/:tempsId - Supprimer un enregistrement
+router.delete('/monitoring/:tempsId', async (req, res) => {
+    try {
+        const { tempsId } = req.params;
+        
+        const result = await MonitoringService.deleteRecord(parseInt(tempsId));
+        
+        if (result.success) {
+            res.json({
+                success: true,
+                message: result.message,
+                data: result
+            });
+        } else {
+            res.status(400).json({
+                success: false,
+                error: result.error
+            });
+        }
+        
+    } catch (error) {
+        console.error('❌ Erreur lors de la suppression:', error);
+        res.status(500).json({
+            success: false,
+            error: 'Erreur serveur lors de la suppression'
+        });
+    }
+});
+
+// POST /api/admin/monitoring/:tempsId/validate - Valider un enregistrement
+router.post('/monitoring/:tempsId/validate', async (req, res) => {
+    try {
+        const { tempsId } = req.params;
+        
+        const result = await MonitoringService.validateRecord(parseInt(tempsId));
+        
+        if (result.success) {
+            res.json({
+                success: true,
+                message: result.message,
+                data: result
+            });
+        } else {
+            res.status(400).json({
+                success: false,
+                error: result.error
+            });
+        }
+        
+    } catch (error) {
+        console.error('❌ Erreur lors de la validation:', error);
+        res.status(500).json({
+            success: false,
+            error: 'Erreur serveur lors de la validation'
+        });
+    }
+});
+
+// POST /api/admin/monitoring/:tempsId/on-hold - Mettre en attente un enregistrement
+router.post('/monitoring/:tempsId/on-hold', async (req, res) => {
+    try {
+        const { tempsId } = req.params;
+        
+        const result = await MonitoringService.setOnHold(parseInt(tempsId));
+        
+        if (result.success) {
+            res.json({
+                success: true,
+                message: result.message,
+                data: result
+            });
+        } else {
+            res.status(400).json({
+                success: false,
+                error: result.error
+            });
+        }
+        
+    } catch (error) {
+        console.error('❌ Erreur lors de la mise en attente:', error);
+        res.status(500).json({
+            success: false,
+            error: 'Erreur serveur lors de la mise en attente'
+        });
+    }
+});
+
+// POST /api/admin/monitoring/:tempsId/transmit - Marquer comme transmis et déclencher EDI_JOB
+router.post('/monitoring/:tempsId/transmit', async (req, res) => {
+    try {
+        const { tempsId } = req.params;
+        const { triggerEdiJob = false, codeTache = null } = req.body;
+        
+        const result = await MonitoringService.markAsTransmitted(parseInt(tempsId));
+        
+        if (result.success) {
+            // Si demandé, déclencher l'EDI_JOB après la transmission
+            let ediJobResult = null;
+            if (triggerEdiJob) {
+                try {
+                    ediJobResult = await EdiJobService.executeEdiJobForTransmittedRecords([parseInt(tempsId)], codeTache);
+                } catch (ediError) {
+                    console.error('❌ Erreur lors du déclenchement de l\'EDI_JOB:', ediError);
+                    ediJobResult = {
+                        success: false,
+                        error: ediError.message
+                    };
+                }
+            }
+            
+            res.json({
+                success: true,
+                message: result.message,
+                data: result,
+                ediJob: ediJobResult
+            });
+        } else {
+            res.status(400).json({
+                success: false,
+                error: result.error
+            });
+        }
+        
+    } catch (error) {
+        console.error('❌ Erreur lors du marquage comme transmis:', error);
+        res.status(500).json({
+            success: false,
+            error: 'Erreur serveur lors du marquage comme transmis'
+        });
+    }
+});
+
+// POST /api/admin/monitoring/validate-and-transmit-batch - Valider et transmettre un lot
+router.post('/monitoring/validate-and-transmit-batch', async (req, res) => {
+    try {
+        const { tempsIds, triggerEdiJob = true, codeTache = null } = req.body;
+        
+        if (!Array.isArray(tempsIds) || tempsIds.length === 0) {
+            return res.status(400).json({
+                success: false,
+                error: 'Liste d\'IDs requise'
+            });
+        }
+        
+        const result = await MonitoringService.validateAndTransmitBatch(tempsIds);
+        
+        if (result.success) {
+            // Déclencher automatiquement l'EDI_JOB après la transmission (par défaut)
+            let ediJobResult = null;
+            if (triggerEdiJob) {
+                try {
+                    ediJobResult = await EdiJobService.executeEdiJobForTransmittedRecords(tempsIds, codeTache);
+                    console.log(`✅ EDI_JOB exécuté pour ${tempsIds.length} enregistrements transmis`);
+                } catch (ediError) {
+                    console.error('❌ Erreur lors du déclenchement de l\'EDI_JOB:', ediError);
+                    ediJobResult = {
+                        success: false,
+                        error: ediError.message
+                    };
+                }
+            }
+            
+            res.json({
+                success: true,
+                message: result.message,
+                count: result.count,
+                ediJob: ediJobResult
+            });
+        } else {
+            res.status(400).json({
+                success: false,
+                error: result.error
+            });
+        }
+        
+    } catch (error) {
+        console.error('❌ Erreur lors de la validation/transmission par lot:', error);
+        res.status(500).json({
+            success: false,
+            error: 'Erreur serveur lors de la validation/transmission par lot'
+        });
+    }
+});
+
+// ============================================
+// ROUTES EDI_JOB - Exécution de l'EDI_JOB de SILOG
+// ============================================
+
+const EdiJobService = require('../services/EdiJobService');
+
+// POST /api/admin/edi-job/execute - Déclencher l'EDI_JOB
+router.post('/edi-job/execute', async (req, res) => {
+    try {
+        const { codeTache, options } = req.body;
+        
+        if (!codeTache) {
+            return res.status(400).json({
+                success: false,
+                error: 'codeTache requis'
+            });
+        }
+        
+        const result = await EdiJobService.executeEdiJob(codeTache, options || {});
+        
+        if (result.success) {
+            res.json({
+                success: true,
+                message: result.message,
+                data: {
+                    codeTache: result.codeTache,
+                    stdout: result.stdout,
+                    warnings: result.warnings || false
+                }
+            });
+        } else {
+            res.status(500).json({
+                success: false,
+                error: result.error,
+                details: result.details
+            });
+        }
+        
+    } catch (error) {
+        console.error('❌ Erreur lors de l\'exécution de l\'EDI_JOB:', error);
+        res.status(500).json({
+            success: false,
+            error: 'Erreur serveur lors de l\'exécution de l\'EDI_JOB'
+        });
+    }
+});
+
+// GET /api/admin/edi-job/config - Vérifier la configuration de l'EDI_JOB
+router.get('/edi-job/config', async (req, res) => {
+    try {
+        const result = await EdiJobService.checkConfiguration();
+        
+        res.json({
+            success: result.success,
+            config: result.config,
+            pathExists: result.pathExists,
+            pathError: result.pathError,
+            ready: result.ready
+        });
+        
+    } catch (error) {
+        console.error('❌ Erreur lors de la vérification de la configuration:', error);
+        res.status(500).json({
+            success: false,
+            error: 'Erreur serveur lors de la vérification de la configuration'
         });
     }
 });

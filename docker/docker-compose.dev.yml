@@ -24,7 +24,7 @@ services:
       - "3001:3001"
       - "9229:9229"  # Port de debug Node.js
     volumes:
-      - ./backend:/app
+      - ../backend:/app
       - /app/node_modules
       - sedi-logs-dev:/app/logs
       - /etc/localtime:/etc/localtime:ro
@@ -50,7 +50,7 @@ services:
     ports:
       - "8080:80"
     volumes:
-      - ./frontend:/usr/share/nginx/html:ro
+      - ../frontend:/usr/share/nginx/html:ro
       - ./docker/nginx.dev.conf:/etc/nginx/nginx.conf:ro
       - sedi-logs-dev:/var/log/nginx
       - /etc/localtime:/etc/localtime:ro

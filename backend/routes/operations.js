@@ -401,44 +401,28 @@ router.post('/stop', async (req, res) => {
         
         const lancementCode = activeOp[0].CodeLanctImprod;
         
-        // 1️⃣ CALCULER LES DURÉES TOTALES
+        // 1️⃣ CALCULER LES DURÉES TOTALES (logique unifiée)
         console.log('📊 1. Calcul des durées...');
-        let totalDuration = 0;
-        let pauseDuration = 0;
-        let productiveDuration = 0;
-        let eventsCount = 0;
+        const DurationCalculationService = require('../services/DurationCalculationService');
+        
+        let durations = {
+            totalDuration: 0,
+            pauseDuration: 0,
+            productiveDuration: 0,
+            eventsCount: 0
+        };
         
         try {
-            // Récupérer tous les événements de la journée pour cet opérateur/lancement
-            const eventsQuery = `
-                SELECT Ident, HeureDebut, HeureFin, DateCreation
-                FROM [SEDI_APP_INDEPENDANTE].[dbo].[ABHISTORIQUE_OPERATEURS]
-                WHERE OperatorCode = @operatorId 
-                AND CodeLanctImprod = @lancementCode
-                AND CAST(DateCreation AS DATE) = CAST(GETDATE() AS DATE)
-                ORDER BY DateCreation ASC
-            `;
+            // Utiliser le service unifié pour calculer les durées
+            durations = await DurationCalculationService.calculateDurationsFromDB(operatorId, lancementCode);
+            durations.eventsCount += 1; // +1 pour l'événement FIN qu'on va ajouter
             
-            const events = await executeQuery(eventsQuery, { operatorId, lancementCode });
-            eventsCount = events.length + 1; // +1 pour l'événement FIN qu'on va ajouter
-            
-            // Calculer les durées (logique simplifiée - peut être améliorée)
-            if (events.length > 0) {
-                const startTime = new Date(events[0].DateCreation);
-                const endTime = new Date();
-                totalDuration = Math.floor((endTime - startTime) / 1000); // en secondes
-                
-                // Calculer temps de pause (nombre d'événements PAUSE * durée moyenne)
-                const pauseEvents = events.filter(e => e.Ident === 'PAUSE');
-                pauseDuration = pauseEvents.length * 300; // 5 minutes par pause (exemple)
-                
-                productiveDuration = totalDuration - pauseDuration;
-            }
-            
-            console.log(`📊 Durées calculées: Total=${totalDuration}s, Pause=${pauseDuration}s, Productif=${productiveDuration}s`);
+            console.log(`📊 Durées calculées: Total=${durations.totalDuration}min, Pause=${durations.pauseDuration}min, Productif=${durations.productiveDuration}min`);
         } catch (error) {
             console.log('⚠️ Erreur calcul durées:', error.message);
         }
+        
+        const { totalDuration, pauseDuration, productiveDuration, eventsCount } = durations;
         
         // 2️⃣ ENREGISTRER ÉVÉNEMENT FIN dans ABHISTORIQUE_OPERATEURS
         console.log('📝 2. Enregistrement événement FIN...');
@@ -520,9 +504,9 @@ router.post('/stop', async (req, res) => {
             status: 'FIN',
             timestamp: new Date().toISOString(),
             durations: {
-                total: totalDuration,
-                pause: pauseDuration,
-                productive: productiveDuration,
+                total: totalDuration, // en minutes
+                pause: pauseDuration, // en minutes
+                productive: productiveDuration, // en minutes
                 events: eventsCount
             },
             tablesUpdated: ['ABHISTORIQUE_OPERATEURS', 'ABTEMPS_OPERATEURS', 'ABSESSIONS_OPERATEURS']
@@ -788,7 +772,7 @@ router.get('/dashboard/:operatorId', async (req, res) => {
         // 3️⃣ SYNTHÈSE DES TEMPS depuis ABTEMPS_OPERATEURS
         try {
             const tempsQuery = `
-                SELECT TempsId, LancementCode, StartTime, EndTime, TotalDuration, PauseDuration, ProductiveDuration, EventsCount, DateCreation
+                SELECT TempsId, LancementCode, StartTime, EndTime, TotalDuration, PauseDuration, ProductiveDuration, EventsCount, DateCreation, Phase, CodeRubrique, StatutTraitement
                 FROM [SEDI_APP_INDEPENDANTE].[dbo].[ABTEMPS_OPERATEURS]
                 WHERE OperatorCode = @operatorId 
                 AND CAST(DateCreation AS DATE) = CAST(GETDATE() AS DATE)

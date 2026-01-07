@@ -246,6 +246,48 @@ body {
     padding-right: 70px;
 }
 
+/* Espace pour 2 boutons (FSOP + scanner) dans l'input de lancement */
+.input-group.with-scanner.with-fsop input {
+    padding-right: 140px;
+}
+
+/* Bouton FSOP dans l'input (à gauche du bouton scanner) */
+.btn-fsop {
+    position: absolute;
+    right: 72px;
+    top: 50%;
+    transform: translateY(-50%);
+    background: linear-gradient(135deg, #28a745 0%, #218838 100%);
+    color: white;
+    border: none;
+    border-radius: 8px;
+    padding: 12px 14px;
+    cursor: pointer;
+    font-size: 13px;
+    font-weight: 700;
+    letter-spacing: 0.5px;
+    z-index: 10;
+    transition: all 0.3s ease;
+    box-shadow: 0 2px 8px rgba(40, 167, 69, 0.25);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    touch-action: manipulation;
+    min-width: 60px;
+    min-height: 48px;
+    -webkit-tap-highlight-color: rgba(40, 167, 69, 0.25);
+}
+
+.btn-fsop:hover {
+    background: linear-gradient(135deg, #218838 0%, #28a745 100%);
+    transform: translateY(-50%) scale(1.05);
+    box-shadow: 0 4px 12px rgba(40, 167, 69, 0.35);
+}
+
+.btn-fsop:active {
+    transform: translateY(-50%) scale(0.95);
+}
+
 /* Bouton scanner dans l'input */
 .btn-scan {
     position: absolute;
@@ -1829,6 +1871,680 @@ tr:hover {
     font-size: 1.2rem;
 }
 
+/* ===== FSOP (Word) ===== */
+.fsop-modal-content {
+    max-width: 720px;
+}
+
+.fsop-form {
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+}
+
+.fsop-form .input-group {
+    margin-bottom: 0;
+}
+
+.fsop-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 12px;
+    flex-wrap: wrap;
+}
+
+.fsop-help {
+    margin-top: 6px;
+}
+
+/* ===== Formulaire FSOP Interactif ===== */
+.fsop-form-modal-content {
+    max-width: 900px;
+    max-height: 90vh;
+    display: flex;
+    flex-direction: column;
+}
+
+.fsop-form-modal-body {
+    overflow-y: auto;
+    flex: 1;
+    padding: 25px;
+    background: #f8f9fa;
+}
+
+.fsop-form-container {
+    display: flex;
+    flex-direction: column;
+    gap: 0;
+    background: #ffffff;
+    padding: 30px;
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Helvetica Neue', Arial, sans-serif;
+    color: #2c3e50;
+    max-width: 100%;
+    line-height: 1.6;
+}
+
+/* Header section (like Word document header) */
+.fsop-header-section {
+    background: #ffffff;
+    border: 2px solid #e0e0e0;
+    border-radius: 4px;
+    padding: 20px;
+    margin-bottom: 35px;
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+}
+
+/* Header top row: Logo, Title, N° cordon */
+.fsop-header-top {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    margin-bottom: 20px;
+    padding-bottom: 15px;
+    border-bottom: 1px solid #e0e0e0;
+}
+
+/* Logo (left) */
+.fsop-header-logo {
+    flex: 0 0 auto;
+    min-width: 200px;
+}
+
+.fsop-logo-text {
+    font-size: 1.8rem;
+    font-weight: 700;
+    color: #2c3e50;
+    letter-spacing: 0.5px;
+    margin-bottom: 2px;
+}
+
+.fsop-logo-dot {
+    color: #e74c3c;
+    font-size: 1.2rem;
+}
+
+.fsop-logo-subtitle {
+    font-size: 0.85rem;
+    font-style: italic;
+    color: #3498db;
+    margin-top: -2px;
+}
+
+/* Title (center) */
+.fsop-header-title {
+    flex: 1;
+    text-align: center;
+    font-size: 1.6rem;
+    font-weight: 700;
+    color: #2c3e50;
+    padding: 0 20px;
+}
+
+/* N° cordon (right) */
+.fsop-header-cordon {
+    flex: 0 0 auto;
+    min-width: 180px;
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+}
+
+.fsop-header-cordon label {
+    font-weight: 500;
+    color: #3498db;
+    font-size: 0.95rem;
+    white-space: nowrap;
+}
+
+.fsop-cordon-input {
+    border: none;
+    border-bottom: 2px solid #3498db;
+    border-radius: 0;
+    padding: 5px 0;
+    font-size: 1rem;
+    background: transparent;
+    color: #2c3e50;
+    text-decoration: underline;
+    text-decoration-color: #3498db;
+}
+
+.fsop-cordon-input:focus {
+    outline: none;
+    border-bottom-color: #2980b9;
+    border-bottom-width: 3px;
+}
+
+/* Header box: Numéro lancement and Référence SILOG */
+.fsop-header-box {
+    display: flex;
+    gap: 0;
+    border: 2px solid #000000;
+    border-radius: 2px;
+    overflow: hidden;
+}
+
+.fsop-header-box-field {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    padding: 15px;
+    border-right: 2px solid #000000;
+}
+
+.fsop-header-box-field:last-child {
+    border-right: none;
+}
+
+.fsop-header-box-field label {
+    font-weight: 700;
+    color: #000000;
+    font-size: 1.05rem;
+    margin-bottom: 8px;
+    white-space: nowrap;
+}
+
+.fsop-header-box-input {
+    width: 100%;
+    padding: 8px 10px;
+    border: 1px solid #ccc;
+    border-radius: 3px;
+    font-size: 1rem;
+    background: #ffffff;
+    color: #2c3e50;
+    transition: all 0.2s ease;
+}
+
+.fsop-header-box-input:focus {
+    outline: none;
+    border-color: #3498db;
+    box-shadow: 0 0 0 2px rgba(52, 152, 219, 0.2);
+}
+
+/* Legacy styles for backward compatibility */
+.fsop-header-fields {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 25px;
+    align-items: flex-end;
+}
+
+.fsop-header-field {
+    display: flex;
+    flex-direction: row;
+    align-items: center;
+    gap: 10px;
+    min-width: 220px;
+    flex: 1;
+}
+
+.fsop-header-field label {
+    font-weight: 600;
+    color: #2c3e50;
+    font-size: 1.05rem;
+    white-space: nowrap;
+    margin: 0;
+}
+
+.fsop-header-input {
+    flex: 1;
+    min-width: 150px;
+    padding: 10px 12px;
+    border: none;
+    border-bottom: 2px solid #3498db;
+    border-radius: 0;
+    font-size: 1.05rem;
+    background: transparent;
+    color: #2c3e50;
+    transition: all 0.3s ease;
+}
+
+.fsop-header-input:focus {
+    outline: none;
+    border-bottom-color: #2980b9;
+    border-bottom-width: 3px;
+    background: rgba(52, 152, 219, 0.05);
+    padding-left: 15px;
+}
+
+.fsop-section {
+    background: #ffffff;
+    border: none;
+    border-left: 4px solid #3498db;
+    border-bottom: 1px solid #e8ecf0;
+    padding: 25px;
+    margin-bottom: 25px;
+    border-radius: 4px;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
+    transition: box-shadow 0.3s ease;
+}
+
+.fsop-section:hover {
+    box-shadow: 0 2px 6px rgba(0, 0, 0, 0.12);
+}
+
+.fsop-section:last-child {
+    border-bottom: none;
+    margin-bottom: 0;
+}
+
+.fsop-section-title {
+    margin: 0 0 20px 0;
+    color: #2c3e50;
+    font-size: 1.2rem;
+    font-weight: 700;
+    text-align: left;
+    line-height: 1.4;
+    padding-bottom: 10px;
+    border-bottom: 2px solid #ecf0f1;
+}
+
+.fsop-field {
+    margin-bottom: 20px;
+}
+
+.fsop-field label {
+    display: block;
+    margin-bottom: 8px;
+    font-weight: 600;
+    color: #34495e;
+    font-size: 0.95rem;
+    letter-spacing: 0.3px;
+}
+
+.fsop-input {
+    width: 100%;
+    padding: 12px 14px;
+    border: 2px solid #e0e6ed;
+    border-radius: 6px;
+    font-size: 1rem;
+    transition: all 0.3s ease;
+    background: #ffffff;
+    color: #2c3e50;
+}
+
+.fsop-input:hover {
+    border-color: #bdc3c7;
+}
+
+.fsop-input:focus {
+    outline: none;
+    border-color: #3498db;
+    box-shadow: 0 0 0 3px rgba(52, 152, 219, 0.15);
+    background: #f8f9fa;
+}
+
+/* PASS/FAIL Radio Buttons */
+.fsop-pass-fail {
+    margin-bottom: 20px;
+    display: flex;
+    align-items: center;
+    gap: 15px;
+    padding: 15px;
+    background: #f8f9fa;
+    border-radius: 8px;
+    border: 1px solid #e9ecef;
+}
+
+.fsop-pass-fail-label {
+    font-weight: 600;
+    color: #2c3e50;
+    margin: 0;
+    min-width: 130px;
+    font-size: 1rem;
+}
+
+.fsop-radio-group {
+    display: flex;
+    gap: 10px;
+    margin: 0;
+}
+
+.fsop-radio-label {
+    display: flex;
+    align-items: center;
+    cursor: pointer;
+    padding: 12px 20px;
+    border: 2px solid #dee2e6;
+    border-radius: 8px;
+    transition: all 0.3s ease;
+    background: white;
+    font-weight: 500;
+    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05);
+}
+
+.fsop-radio-label:hover {
+    border-color: #3498db;
+    background: #e8f4f8;
+    transform: translateY(-1px);
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+}
+
+.fsop-radio-label.active {
+    border-color: #3498db;
+    background: #d6eaf8;
+    box-shadow: 0 2px 6px rgba(52, 152, 219, 0.2);
+}
+
+.fsop-radio-label input[type="radio"] {
+    margin: 0;
+    margin-right: 8px;
+    cursor: pointer;
+}
+
+.fsop-radio-text {
+    font-weight: 500;
+    user-select: none;
+}
+
+.fsop-radio-text.pass {
+    color: #27ae60;
+}
+
+.fsop-radio-text.fail {
+    color: #e74c3c;
+}
+
+.fsop-radio-label.active .fsop-radio-text.pass {
+    color: #1e8449;
+}
+
+.fsop-radio-label.active .fsop-radio-text.fail {
+    color: #c0392b;
+}
+
+/* Tableaux interactifs */
+.fsop-table-container {
+    margin-top: 15px;
+    overflow-x: auto;
+    border-radius: 8px;
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.08);
+}
+
+.fsop-table {
+    width: 100%;
+    border-collapse: separate;
+    border-spacing: 0;
+    background: white;
+    border: 1px solid #dee2e6;
+    margin-bottom: 20px;
+    border-radius: 8px;
+    overflow: hidden;
+}
+
+.fsop-table thead {
+    background: linear-gradient(to bottom, #f8f9fa 0%, #e9ecef 100%);
+}
+
+.fsop-table th {
+    padding: 14px 12px;
+    text-align: left;
+    font-weight: 700;
+    font-size: 0.95rem;
+    border: 1px solid #dee2e6;
+    background: transparent;
+    white-space: nowrap;
+    color: #2c3e50;
+    letter-spacing: 0.3px;
+}
+
+.fsop-table th:first-child {
+    border-left: none;
+}
+
+.fsop-table th:last-child {
+    border-right: none;
+}
+
+.fsop-table td {
+    padding: 12px;
+    border: 1px solid #e9ecef;
+    background: white;
+    min-width: 100px;
+    vertical-align: middle;
+}
+
+.fsop-table td:first-child {
+    border-left: none;
+}
+
+.fsop-table td:last-child {
+    border-right: none;
+}
+
+.fsop-table tbody tr {
+    transition: background 0.2s ease;
+}
+
+.fsop-table tbody tr:hover {
+    background: #f8f9fa;
+}
+
+.fsop-table tbody tr:last-child td {
+    border-bottom: none;
+}
+
+.fsop-table-input {
+    width: 100%;
+    padding: 10px 12px;
+    border: 2px solid transparent;
+    border-radius: 4px;
+    font-size: 0.95rem;
+    background: transparent;
+    transition: all 0.2s ease;
+    color: #2c3e50;
+}
+
+.fsop-table-input:hover {
+    background: #f1f3f5;
+    border-color: #dee2e6;
+}
+
+.fsop-table-input:focus {
+    outline: none;
+    background: #fff9e6;
+    border-color: #3498db;
+    box-shadow: 0 0 0 2px rgba(52, 152, 219, 0.15);
+}
+
+.fsop-tag-column-header {
+    background-color: #e3f2fd !important;
+    color: #1976d2 !important;
+    font-weight: 600;
+    min-width: 150px;
+}
+
+.fsop-tag-column-cell {
+    background-color: #f5f5f5;
+    padding: 8px !important;
+}
+
+.fsop-tag-input {
+    width: 100%;
+    padding: 6px 8px;
+    border: 1px solid #90caf9;
+    border-radius: 4px;
+    font-size: 0.9rem;
+    background-color: white;
+    color: #1976d2;
+}
+
+.fsop-tag-input:focus {
+    outline: none;
+    border-color: #1976d2;
+    box-shadow: 0 0 0 2px rgba(25, 118, 210, 0.2);
+}
+
+.fsop-tag-input::placeholder {
+    color: #90caf9;
+    font-style: italic;
+}
+
+.fsop-reference-section {
+    margin-top: 20px;
+    padding: 15px;
+    background-color: #fff3cd;
+    border: 1px solid #ffc107;
+    border-radius: 8px;
+}
+
+.fsop-reference-section label {
+    display: block;
+    font-weight: 600;
+    color: #856404;
+    margin-bottom: 8px;
+}
+
+.fsop-reference-input {
+    width: 100%;
+    padding: 10px;
+    border: 1px solid #ffc107;
+    border-radius: 4px;
+    font-size: 1rem;
+    background-color: white;
+}
+
+.fsop-reference-input:focus {
+    outline: none;
+    border-color: #ff9800;
+    box-shadow: 0 0 0 2px rgba(255, 152, 0, 0.2);
+}
+
+.fsop-reference-hint {
+    display: block;
+    margin-top: 5px;
+    font-size: 0.85rem;
+    color: #856404;
+    font-style: italic;
+}
+
+.fsop-table-input.fsop-input-numeric {
+    text-align: right;
+}
+
+.fsop-add-row-btn {
+    margin-top: 12px;
+    padding: 8px 16px;
+    background: #3498db;
+    color: white;
+    border: none;
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 0.9rem;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    transition: background 0.2s;
+}
+
+.fsop-add-row-btn:hover {
+    background: #2980b9;
+}
+
+.fsop-add-row-btn:active {
+    background: #21618c;
+}
+
+/* Loading state */
+.fsop-loading {
+    text-align: center;
+    padding: 60px 40px;
+    color: #7f8c8d;
+    font-size: 1.1rem;
+}
+
+.fsop-loading i {
+    font-size: 3rem;
+    color: #3498db;
+    margin-bottom: 15px;
+    animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+    from { transform: rotate(0deg); }
+    to { transform: rotate(360deg); }
+}
+
+/* Modal footer */
+.scanner-modal-footer {
+    padding: 16px 20px;
+    border-top: 1px solid #e0e0e0;
+    display: flex;
+    justify-content: flex-end;
+    gap: 12px;
+    background: #f8f9fa;
+}
+
+/* Checkboxes */
+.fsop-checkbox-field {
+    margin-bottom: 16px;
+}
+
+.fsop-checkbox-label {
+    display: flex;
+    align-items: center;
+    cursor: pointer;
+    padding: 14px 16px;
+    border: 2px solid #e0e6ed;
+    border-radius: 8px;
+    transition: all 0.3s ease;
+    background: white;
+    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05);
+}
+
+.fsop-checkbox-label:hover {
+    border-color: #3498db;
+    background: #f0f8ff;
+    transform: translateY(-1px);
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+}
+
+.fsop-checkbox-label input[type="checkbox"]:checked ~ span {
+    color: #27ae60;
+    font-weight: 600;
+}
+
+.fsop-checkbox-label input[type="checkbox"]:checked {
+    accent-color: #27ae60;
+}
+
+.fsop-checkbox-label input[type="checkbox"] {
+    margin-right: 12px;
+    width: 22px;
+    height: 22px;
+    cursor: pointer;
+    flex-shrink: 0;
+}
+
+.fsop-checkbox-label span {
+    flex: 1;
+    user-select: none;
+    color: #2c3e50;
+    font-size: 0.95rem;
+    line-height: 1.5;
+    font-weight: 500;
+}
+
+/* Responsive */
+@media (max-width: 768px) {
+    .fsop-form-modal-content {
+        max-width: 95%;
+        max-height: 95vh;
+    }
+    
+    .fsop-radio-group {
+        flex-direction: column;
+    }
+    
+    .fsop-table {
+        font-size: 0.85rem;
+    }
+    
+    .fsop-table th,
+    .fsop-table td {
+        padding: 8px;
+    }
+}
+
 /* Responsive pour tablettes */
 @media (max-width: 768px) {
     .scanner-modal-content {
@@ -1855,9 +2571,21 @@ tr:hover {
         font-size: 20px;
         right: 5px;
     }
+
+    .btn-fsop {
+        padding: 14px 16px;
+        min-width: 70px;
+        min-height: 56px;
+        font-size: 14px;
+        right: 70px;
+    }
     
     .input-group input {
         padding-right: 75px;
+    }
+
+    .input-group.with-scanner.with-fsop input {
+        padding-right: 155px;
     }
 }
 
@@ -1869,14 +2597,30 @@ tr:hover {
         min-height: 56px;
         font-size: 20px;
     }
+
+    .btn-fsop {
+        padding: 14px 16px;
+        min-width: 70px;
+        min-height: 56px;
+        font-size: 14px;
+    }
     
     .input-group input {
         padding-right: 75px;
+    }
+
+    .input-group.with-scanner.with-fsop input {
+        padding-right: 155px;
     }
     
     .btn-scan:active {
         transform: translateY(-50%) scale(0.9);
         background: linear-gradient(135deg, #5568d3 0%, #653a8f 100%);
+    }
+
+    .btn-fsop:active {
+        transform: translateY(-50%) scale(0.9);
+        background: linear-gradient(135deg, #1f7a31 0%, #28a745 100%);
     }
     
     .btn-close-scanner {

@@ -1,0 +1,14 @@
+{
+  "fsopDir": "X:\\Tracabilite\\{LT}\\FSOP",
+  "excelBaseDir": "X:\\Tracabilite",
+  "excelPattern": "mesure *{SN}*.xlsx",
+  "stabilityDelayMs": 5000,
+  "retryAttempts": 3,
+  "retryDelayMs": 2000,
+  "logLevel": "info",
+  "logFile": "logs/fsop-sync-agent.log",
+  "tagPattern": "\\{\\{([A-Z0-9_]+)\\}\\}",
+  "excelLockRetryMs": 1000,
+  "excelLockMaxRetries": 10
+}
+

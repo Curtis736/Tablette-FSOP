@@ -7,7 +7,7 @@ const { executeQuery } = require('../config/database');
 
 // Validation des données d'entrée
 const validateComment = (req, res, next) => {
-    const { operatorCode, operatorName, lancementCode, comment } = req.body;
+    const { operatorCode, operatorName, lancementCode, comment, qteNonConforme, statut } = req.body;
     
     if (!operatorCode || !operatorName || !lancementCode || !comment) {
         return res.status(400).json({
@@ -30,23 +30,57 @@ const validateComment = (req, res, next) => {
         });
     }
     
+    // Validation de QteNonConforme (optionnel, doit être numérique si fourni)
+    if (qteNonConforme !== undefined && qteNonConforme !== null) {
+        const qte = parseFloat(qteNonConforme);
+        if (isNaN(qte) || qte < 0) {
+            return res.status(400).json({
+                success: false,
+                error: 'QteNonConforme doit être un nombre positif ou nul'
+            });
+        }
+    }
+    
+    // Validation de Statut (optionnel, doit être NULL, 'V', ou 'I' si fourni)
+    if (statut !== undefined && statut !== null && statut !== '') {
+        if (!['V', 'I'].includes(statut.toUpperCase())) {
+            return res.status(400).json({
+                success: false,
+                error: 'Statut doit être NULL, "V" (Validée par l\'AQ), ou "I" (Intégré dans SILOG)'
+            });
+        }
+    }
+    
     next();
 };
 
 // POST /api/comments - Créer un nouveau commentaire
 router.post('/', validateComment, async (req, res) => {
     try {
-        const { operatorCode, operatorName, lancementCode, comment } = req.body;
+        const { operatorCode, operatorName, lancementCode, comment, qteNonConforme, statut } = req.body;
         
         console.log(`📝 Création d'un commentaire pour l'opérateur ${operatorCode} sur le lancement ${lancementCode}`);
         
-        // Créer le commentaire en base de données
-        const commentResult = await Comment.create({
+        // Préparer les données avec les nouveaux champs
+        const commentData = {
             operatorCode,
             operatorName,
             lancementCode,
             comment: comment.trim()
-        });
+        };
+        
+        // Ajouter QteNonConforme si fourni
+        if (qteNonConforme !== undefined && qteNonConforme !== null) {
+            commentData.qteNonConforme = parseFloat(qteNonConforme);
+        }
+        
+        // Ajouter Statut si fourni (normaliser en majuscules)
+        if (statut !== undefined && statut !== null && statut !== '') {
+            commentData.statut = statut.toUpperCase();
+        }
+        
+        // Créer le commentaire en base de données
+        const commentResult = await Comment.create(commentData);
         
         if (!commentResult.success) {
             return res.status(500).json({
