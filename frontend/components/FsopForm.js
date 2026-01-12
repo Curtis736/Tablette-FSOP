@@ -275,6 +275,9 @@ class FsopForm {
             const head = safeRows[0] || [];
             const body = safeRows.slice(1);
 
+            // data-table-idx must match backend injectTableData indexing (0-based order of <w:tbl> in doc)
+            const tableIdx = Number.isFinite(tableBlockId) ? Math.max(0, tableBlockId - 1) : 0;
+
             const inferColumnKind = (headerText) => {
                 const h = String(headerText || '').toLowerCase();
                 if (h.includes('date')) return 'date';
@@ -282,6 +285,51 @@ class FsopForm {
                 return 'text';
             };
             const columnKinds = head.map((c) => inferColumnKind((c?.text || '').trim()));
+
+            const getSavedCellValue = (rowIdx, colIdx) => {
+                // Word-like tables are stored by numeric table index (as string in JSON).
+                const key = String(tableIdx);
+                return (
+                    this.formData?.tables?.[key]?.[rowIdx]?.[colIdx] ??
+                    this.formData?.tables?.[tableIdx]?.[rowIdx]?.[colIdx] ??
+                    ''
+                );
+            };
+
+            const normalizeTime = (value) => {
+                const v = String(value || '').trim();
+                if (!v) return '';
+                // HH:MM
+                const m1 = v.match(/^(\d{1,2}):(\d{2})$/);
+                if (m1) {
+                    const hh = String(Math.min(23, Math.max(0, parseInt(m1[1], 10)))).padStart(2, '0');
+                    const mm = String(Math.min(59, Math.max(0, parseInt(m1[2], 10)))).padStart(2, '0');
+                    return `${hh}:${mm}`;
+                }
+                // HHhMM
+                const m2 = v.match(/^(\d{1,2})\s*h\s*(\d{2})$/i);
+                if (m2) {
+                    const hh = String(Math.min(23, Math.max(0, parseInt(m2[1], 10)))).padStart(2, '0');
+                    const mm = String(Math.min(59, Math.max(0, parseInt(m2[2], 10)))).padStart(2, '0');
+                    return `${hh}:${mm}`;
+                }
+                return v;
+            };
+
+            const normalizeDateToISO = (value) => {
+                const v = String(value || '').trim();
+                if (!v) return '';
+                if (/^\d{4}-\d{2}-\d{2}$/.test(v)) return v; // already ISO
+                // DD/MM/YYYY or DD-MM-YYYY
+                const m = v.match(/^(\d{1,2})[\/-](\d{1,2})[\/-](\d{4})$/);
+                if (m) {
+                    const dd = String(Math.min(31, Math.max(1, parseInt(m[1], 10)))).padStart(2, '0');
+                    const mm = String(Math.min(12, Math.max(1, parseInt(m[2], 10)))).padStart(2, '0');
+                    const yyyy = String(parseInt(m[3], 10));
+                    return `${yyyy}-${mm}-${dd}`;
+                }
+                return '';
+            };
 
             const renderCell = (cell, tagName, rowIdx, colIdx, isHeader) => {
                 const attrs = [];
@@ -296,24 +344,41 @@ class FsopForm {
                     if (isHeader) {
                         return cellText ? renderTextWithInputs(cellText) : `<span class="fsop-cell-empty"></span>`;
                     }
-                    // For body cells: make empty cells editable, keep filled cells as text (to avoid perturbing reading)
-                    if (isBlank) {
-                        const kind = columnKinds[colIdx] || 'text';
-                        if (kind === 'date') {
-                            return `<input class="fsop-cell-input fsop-cell-input-date" type="date" data-row="${rowIdx}" data-col="${colIdx}" />`;
-                        }
-                        if (kind === 'time') {
-                            return `<input class="fsop-cell-input fsop-cell-input-time" type="time" data-row="${rowIdx}" data-col="${colIdx}" />`;
-                        }
-                        return `<div class="fsop-cell-edit" contenteditable="true" data-row="${rowIdx}" data-col="${colIdx}"></div>`;
+                    // Body cells:
+                    // - Keep the document look (no extra inputs) except for Date/Heure columns which must be fillable with native pickers.
+                    const kind = columnKinds[colIdx] || 'text';
+                    const saved = getSavedCellValue(rowIdx, colIdx);
+
+                    if (kind === 'date') {
+                        const placeholderLike = /^(jj|dd)\s*[\/-]\s*(mm)\s*[\/-]\s*(aaaa|yyyy)$/i.test(cellText);
+                        const iso = normalizeDateToISO(saved || (placeholderLike ? '' : cellText));
+                        const valueAttr = iso ? ` value="${this.escapeHtml(iso)}"` : '';
+                        return `<input class="fsop-cell-input fsop-cell-input-date" type="date" data-row="${rowIdx}" data-col="${colIdx}"${valueAttr} />`;
                     }
+
+                    if (kind === 'time') {
+                        const placeholderLike = /^(hh)\s*[:h]\s*(mm)$/i.test(cellText);
+                        const hhmm = normalizeTime(saved || (placeholderLike ? '' : cellText));
+                        const valueAttr = hhmm ? ` value="${this.escapeHtml(hhmm)}"` : '';
+                        return `<input class="fsop-cell-input fsop-cell-input-time" type="time" data-row="${rowIdx}" data-col="${colIdx}"${valueAttr} />`;
+                    }
+
+                    // For other columns: make empty cells editable, keep filled cells as text (to avoid perturbing reading)
+                    if (isBlank) {
+                        const initial = saved ? this.escapeHtml(String(saved)) : '';
+                        return `<div class="fsop-cell-edit" contenteditable="true" data-row="${rowIdx}" data-col="${colIdx}">${initial}</div>`;
+                    }
+
+                    // If we have a saved value for a non-empty cell, prefer showing it (e.g. when re-opening a saved FSOP)
+                    if (saved) {
+                        return this.escapeHtml(String(saved));
+                    }
+
                     return renderTextWithInputs(cellText);
                 })();
                 return `<${tagName} ${attrs.join(' ')}>${content}</${tagName}>`;
             };
 
-            // data-table-idx must match backend injectTableData indexing (0-based order of <w:tbl> in doc)
-            const tableIdx = Number.isFinite(tableBlockId) ? Math.max(0, tableBlockId - 1) : 0;
             let t = `<table class="fsop-word-table" data-table-idx="${tableIdx}">`;
             t += '<thead><tr>';
             head.forEach((c, colIdx) => {
@@ -991,10 +1056,13 @@ class FsopForm {
                     cellInputs.forEach((cellEl) => {
                         const colIdx = parseInt(cellEl.getAttribute('data-col') || '0', 10);
                         if (!Number.isFinite(colIdx)) return;
-                        const value = String(cellEl.value || '').trim();
+                        let value = String(cellEl.value || '').trim();
                         if (value) {
-                            // For <input type="date">, value is YYYY-MM-DD
-                            // Keep it; backend injects plain strings.
+                            // Normalize <input type="date"> (YYYY-MM-DD) -> DD/MM/YYYY for Word readability
+                            if (cellEl.type === 'date' && /^\d{4}-\d{2}-\d{2}$/.test(value)) {
+                                const [yyyy, mm, dd] = value.split('-');
+                                value = `${dd}/${mm}/${yyyy}`;
+                            }
                             wordlikeTables[tableIdx][rowIdx][colIdx] = value;
                         }
                     });
