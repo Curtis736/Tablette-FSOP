@@ -43,6 +43,18 @@ async function findTemplateFile(fsopDir, templateCode, depthLimit = 3) {
 
     console.log(`🔍 Recherche template ${normalizedTemplate} dans ${fsopDir} (profondeur max: ${depthLimit})`);
 
+    // Accept both:
+    // - "F479-..." / "F479 ... " / "F479.docx"
+    // - "F 479 ..." / "F-479 ..." / "F_479 ..."
+    // - "TEMPLATE_F479..." / "TEMPLATE F 479 ..." (legacy)
+    // Also, some files include the code later in the name (e.g. "TBL6 - F 479 ind A ...").
+    const templateLetter = normalizedTemplate.slice(0, 1);
+    const templateDigits = normalizedTemplate.slice(1);
+    const templateFlexible = `${templateLetter}[\\s._-]*${templateDigits}`;
+    const templateRegex = new RegExp(`^${templateFlexible}(?:$|[\\s._-])`);
+    const legacyTemplateRegex = new RegExp(`^TEMPLATE[\\s._-]*${templateFlexible}(?:$|[\\s._-])`);
+    const templateAnywhereRegex = new RegExp(`(?:^|[^A-Z0-9])${templateFlexible}(?:$|[^A-Z0-9])`);
+
     while (stack.length > 0) {
         const { dir, depth } = stack.pop();
 
@@ -89,11 +101,16 @@ async function findTemplateFile(fsopDir, templateCode, depthLimit = 3) {
             const upperName = decodedName.toUpperCase().trim();
             const upperTemplate = normalizedTemplate;
             
-            // SIMPLIFIÉ : On cherche simplement si le nom commence par F571 (n'importe quoi après)
-            // Exemples acceptés : F571-Ind..., F571_..., F571-Ind%20A..., F571.docx, etc.
-            const startsWithTemplate = upperName.startsWith(upperTemplate);
+            // Accept template files that start with:
+            // - "Fxxx..." (preferred)
+            // - "TEMPLATE_Fxxx..." (legacy)
+            const matchesTemplateStart =
+                templateRegex.test(upperName) ||
+                legacyTemplateRegex.test(upperName);
+            const matchesTemplateAnywhere = templateAnywhereRegex.test(upperName);
             
-            if (startsWithTemplate) {
+            // Prefer strict matches (start of filename). If none exist at all, we'll fall back to "anywhere".
+            if (matchesTemplateStart) {
                 console.log(`✅✅✅ CANDIDAT TROUVÉ: ${entryPath}`);
                 console.log(`   📄 Nom original: "${fileName}"`);
                 console.log(`   📄 Nom décodé: "${decodedName}"`);
@@ -101,10 +118,18 @@ async function findTemplateFile(fsopDir, templateCode, depthLimit = 3) {
                 console.log(`   🔍 Template recherché: "${upperTemplate}"`);
                 try {
                     const stat = await fsp.stat(entryPath);
-                    candidates.push({ path: entryPath, mtimeMs: stat.mtimeMs, name: fileName });
+                    candidates.push({ path: entryPath, mtimeMs: stat.mtimeMs, name: fileName, match: 'start' });
                     console.log(`   ✅ Fichier ajouté aux candidats (${candidates.length} candidat(s))`);
                 } catch (err) {
                     console.warn(`   ⚠️ Impossible d'accéder au fichier:`, err.message);
+                }
+            } else if (matchesTemplateAnywhere) {
+                // Store as a fallback candidate; we'll only use these if no "start" candidates exist.
+                try {
+                    const stat = await fsp.stat(entryPath);
+                    candidates.push({ path: entryPath, mtimeMs: stat.mtimeMs, name: fileName, match: 'anywhere' });
+                } catch (_) {
+                    // ignore
                 }
             } else {
                 // Log seulement les fichiers qui commencent par F pour le débogage
@@ -128,10 +153,14 @@ async function findTemplateFile(fsopDir, templateCode, depthLimit = 3) {
         return null;
     }
 
+    // Prefer "start" matches; fallback to "anywhere" matches if needed.
+    const startCandidates = candidates.filter(c => c.match === 'start');
+    const pool = startCandidates.length > 0 ? startCandidates : candidates;
+
     // Retourner le plus récent
-    candidates.sort((a, b) => b.mtimeMs - a.mtimeMs);
-    console.log(`✅ Template sélectionné: ${candidates[0].path}`);
-    return candidates[0].path;
+    pool.sort((a, b) => b.mtimeMs - a.mtimeMs);
+    console.log(`✅ Template sélectionné (${startCandidates.length > 0 ? 'start' : 'anywhere'} match): ${pool[0].path}`);
+    return pool[0].path;
 }
 
 /**

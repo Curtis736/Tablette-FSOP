@@ -70,6 +70,13 @@ class FsopForm {
             taggedMeasures: { ...initialData.taggedMeasures }
         };
 
+        // Word-like rendering: preserve exact order (paragraphs/tables/page breaks)
+        if (Array.isArray(this.structure.blocks) && this.structure.blocks.length > 0) {
+            container.innerHTML = this.renderWordLike(this.structure.blocks);
+            this.attachEventListeners();
+            return;
+        }
+
         let html = '<div class="fsop-form-container">';
         
         // Render header with logo, title, and fields (like in the Word document)
@@ -200,6 +207,185 @@ class FsopForm {
 
         // Attach event listeners
         this.attachEventListeners();
+    }
+
+    renderWordLike(blocks) {
+        // Render in "single page" mode by default: keep A4 width, but don't split by page breaks.
+        // This matches the user's request to keep everything on the same page.
+        let html = '<div class="fsop-word-doc"><div class="fsop-page fsop-page-single">';
+
+        let blankId = 0;
+
+        const renderTextWithInputs = (text) => {
+            if (!text) return '';
+            // Replace placeholders like {{LT}} with inputs bound to formData.placeholders
+            let out = this.escapeHtml(text);
+            out = out.replace(/\{\{([A-Z0-9_]+)\}\}/g, (_m, tag) => {
+                const placeholder = `{{${tag}}}`;
+                const val = this.formData.placeholders?.[placeholder] || '';
+                return `<input class="fsop-inline-input" type="text" data-placeholder="${placeholder}" value="${this.escapeHtml(val)}" />`;
+            });
+            return out;
+        };
+
+        const renderPassFailLine = (text) => {
+            // Pattern: "Mesure X : PASS FAIL" -> label + radios
+            const m = text.match(/^(.+?):\s*PASS\s*FAIL\s*$/i);
+            if (!m) return null;
+            const label = m[1].trim();
+            const key = label; // used by backend injection regex (field: PASS/FAIL)
+            const current = this.formData.passFail?.wordlike?.[key] || '';
+            return `
+                <div class="fsop-word-passfail">
+                    <span class="fsop-word-passfail-label">${this.escapeHtml(label)} :</span>
+                    <label class="fsop-word-passfail-opt ${current === 'PASS' ? 'active' : ''}">
+                        <input type="radio" name="pf_${this.escapeHtml(key)}" value="PASS" data-passfail-key="${this.escapeHtml(key)}" ${current === 'PASS' ? 'checked' : ''}/>
+                        PASS
+                    </label>
+                    <label class="fsop-word-passfail-opt ${current === 'FAIL' ? 'active' : ''}">
+                        <input type="radio" name="pf_${this.escapeHtml(key)}" value="FAIL" data-passfail-key="${this.escapeHtml(key)}" ${current === 'FAIL' ? 'checked' : ''}/>
+                        FAIL
+                    </label>
+                </div>
+            `;
+        };
+
+        const renderCheckboxLine = (text) => {
+            // Pattern: "☐ Label" or "[ ] Label"
+            const m = text.match(/^([☐☑✓□]|\[[\sx]\])\s+(.+)$/i);
+            if (!m) return null;
+            const sym = m[1];
+            const label = m[2].trim();
+            const checked = /[☑✓x]/i.test(sym);
+            const id = `cb_${++blankId}`;
+            return `
+                <label class="fsop-word-checkbox">
+                    <input id="${id}" type="checkbox" data-checkbox-label="${this.escapeHtml(label)}" ${checked ? 'checked' : ''} />
+                    <span class="fsop-word-checkbox-label">${this.escapeHtml(label)}</span>
+                </label>
+            `;
+        };
+
+        const renderTable = (rows, tableBlockId) => {
+            const safeRows = rows || [];
+            if (safeRows.length === 0) {
+                return '<table class="fsop-word-table"></table>';
+            }
+
+            const head = safeRows[0] || [];
+            const body = safeRows.slice(1);
+
+            const inferColumnKind = (headerText) => {
+                const h = String(headerText || '').toLowerCase();
+                if (h.includes('date')) return 'date';
+                if (h.includes('heure') || h.includes('time')) return 'time';
+                return 'text';
+            };
+            const columnKinds = head.map((c) => inferColumnKind((c?.text || '').trim()));
+
+            const renderCell = (cell, tagName, rowIdx, colIdx, isHeader) => {
+                const attrs = [];
+                if (cell?.colspan) attrs.push(`colspan="${cell.colspan}"`);
+                if (cell?.rowspan && cell.rowspan > 1) attrs.push(`rowspan="${cell.rowspan}"`);
+                if (cell?.fill) attrs.push(`style="background:${this.escapeHtml(cell.fill)}"`);
+
+                const cellText = (cell?.text || '').trim();
+                const isBlank = !cellText || /^_{3,}$/.test(cellText);
+                const content = (() => {
+                    // Header cells are never editable
+                    if (isHeader) {
+                        return cellText ? renderTextWithInputs(cellText) : `<span class="fsop-cell-empty"></span>`;
+                    }
+                    // For body cells: make empty cells editable, keep filled cells as text (to avoid perturbing reading)
+                    if (isBlank) {
+                        const kind = columnKinds[colIdx] || 'text';
+                        if (kind === 'date') {
+                            return `<input class="fsop-cell-input fsop-cell-input-date" type="date" data-row="${rowIdx}" data-col="${colIdx}" />`;
+                        }
+                        if (kind === 'time') {
+                            return `<input class="fsop-cell-input fsop-cell-input-time" type="time" data-row="${rowIdx}" data-col="${colIdx}" />`;
+                        }
+                        return `<div class="fsop-cell-edit" contenteditable="true" data-row="${rowIdx}" data-col="${colIdx}"></div>`;
+                    }
+                    return renderTextWithInputs(cellText);
+                })();
+                return `<${tagName} ${attrs.join(' ')}>${content}</${tagName}>`;
+            };
+
+            // data-table-idx must match backend injectTableData indexing (0-based order of <w:tbl> in doc)
+            const tableIdx = Number.isFinite(tableBlockId) ? Math.max(0, tableBlockId - 1) : 0;
+            let t = `<table class="fsop-word-table" data-table-idx="${tableIdx}">`;
+            t += '<thead><tr>';
+            head.forEach((c, colIdx) => {
+                t += renderCell(c, 'th', -1, colIdx, true);
+            });
+            t += '</tr></thead>';
+
+            t += '<tbody>';
+            body.forEach((r, rowIdx) => {
+                t += '<tr>';
+                (r || []).forEach((c, colIdx) => {
+                    t += renderCell(c, 'td', rowIdx, colIdx, false);
+                });
+                t += '</tr>';
+            });
+            t += '</tbody></table>';
+            return t;
+        };
+
+        blocks.forEach((b) => {
+            if (b.type === 'page_break') {
+                // Ignore page breaks in single-page mode
+                return;
+            }
+            if (b.type === 'table') {
+                html += `<div class="fsop-word-block fsop-word-block-table">${renderTable(b.rows, b.id)}</div>`;
+                return;
+            }
+            if (b.type === 'paragraph') {
+                const text = (b.text || '').trim();
+                if (!text) {
+                    html += `<div class="fsop-word-block fsop-word-block-empty"></div>`;
+                    return;
+                }
+
+                // Titles / headings
+                // Examples:
+                // - "1- Préparation ..." -> main section title
+                // - "Général :" -> sub title
+                const sectionTitleMatch = text.match(/^(\d{1,2})\s*[-–.]\s*(.+)$/);
+                if (sectionTitleMatch) {
+                    const n = sectionTitleMatch[1];
+                    const title = sectionTitleMatch[2];
+                    html += `
+                        <div class="fsop-word-title">
+                            <span class="fsop-word-title-number">${this.escapeHtml(n)}</span>
+                            <span class="fsop-word-title-text">${renderTextWithInputs(title)}</span>
+                        </div>
+                    `;
+                    return;
+                }
+                if (/:\s*$/.test(text) && text.length <= 60) {
+                    html += `<div class="fsop-word-subtitle">${renderTextWithInputs(text)}</div>`;
+                    return;
+                }
+
+                const checkboxHtml = renderCheckboxLine(text);
+                if (checkboxHtml) {
+                    html += `<div class="fsop-word-block">${checkboxHtml}</div>`;
+                    return;
+                }
+                const pfHtml = b.hasPassFail ? renderPassFailLine(text) : null;
+                if (pfHtml) {
+                    html += `<div class="fsop-word-block">${pfHtml}</div>`;
+                    return;
+                }
+                html += `<div class="fsop-word-block fsop-word-paragraph">${renderTextWithInputs(text)}</div>`;
+            }
+        });
+
+        html += '</div></div>';
+        return html;
     }
 
     /**
@@ -550,6 +736,26 @@ class FsopForm {
             });
         });
 
+        // Word-like PASS/FAIL
+        this.container.querySelectorAll('input[type="radio"][data-passfail-key]').forEach(radio => {
+            radio.addEventListener('change', (e) => {
+                const key = e.target.getAttribute('data-passfail-key');
+                const value = e.target.value;
+                if (!this.formData.passFail.wordlike) {
+                    this.formData.passFail.wordlike = {};
+                }
+                this.formData.passFail.wordlike[key] = value;
+
+                // Update active styles
+                const wrap = e.target.closest('.fsop-word-passfail');
+                if (wrap) {
+                    wrap.querySelectorAll('.fsop-word-passfail-opt').forEach(l => l.classList.remove('active'));
+                    const label = e.target.closest('.fsop-word-passfail-opt');
+                    if (label) label.classList.add('active');
+                }
+            });
+        });
+
         // PASS/FAIL radio buttons
         this.container.querySelectorAll('input[type="radio"][data-section-id]').forEach(radio => {
             radio.addEventListener('change', (e) => {
@@ -625,6 +831,28 @@ class FsopForm {
             btn.addEventListener('click', (e) => {
                 const tableId = btn.getAttribute('data-table-id');
                 this.addTableRow(tableId);
+            });
+        });
+
+        // Word-like editable table cells (prevent line breaks)
+        this.container.querySelectorAll('.fsop-cell-edit[contenteditable="true"]').forEach((el) => {
+            el.addEventListener('keydown', (e) => {
+                if (e.key === 'Enter') {
+                    e.preventDefault();
+                }
+            });
+            // Keep plain text only
+            el.addEventListener('paste', (e) => {
+                e.preventDefault();
+                const text = (e.clipboardData || window.clipboardData)?.getData('text') || '';
+                document.execCommand('insertText', false, text);
+            });
+        });
+
+        // Word-like date/time inputs: normalize values (keep as-is, backend will inject string)
+        this.container.querySelectorAll('.fsop-cell-input[data-row][data-col]').forEach((el) => {
+            el.addEventListener('change', () => {
+                // no-op: value is read on save
             });
         });
     }
@@ -737,6 +965,43 @@ class FsopForm {
      * Récupère les données du formulaire
      */
     getFormData() {
+        // If we are in Word-like mode, extract table values from editable cells
+        // and map them to backend `injectTableData` format (table index -> row -> col -> value).
+        const wordlikeTables = {};
+        if (this.container) {
+            this.container.querySelectorAll('.fsop-word-table[data-table-idx]').forEach((tableEl) => {
+                const tableIdx = parseInt(tableEl.getAttribute('data-table-idx') || '0', 10);
+                if (!Number.isFinite(tableIdx)) return;
+                if (!wordlikeTables[tableIdx]) wordlikeTables[tableIdx] = {};
+
+                const tbodyRows = Array.from(tableEl.querySelectorAll('tbody tr'));
+                tbodyRows.forEach((tr, rowIdx) => {
+                    const cellEdits = Array.from(tr.querySelectorAll('.fsop-cell-edit[contenteditable="true"][data-col]'));
+                    const cellInputs = Array.from(tr.querySelectorAll('.fsop-cell-input[data-col]'));
+                    if (cellEdits.length === 0 && cellInputs.length === 0) return;
+                    if (!wordlikeTables[tableIdx][rowIdx]) wordlikeTables[tableIdx][rowIdx] = {};
+                    cellEdits.forEach((cellEl) => {
+                        const colIdx = parseInt(cellEl.getAttribute('data-col') || '0', 10);
+                        if (!Number.isFinite(colIdx)) return;
+                        const value = (cellEl.textContent || '').trim();
+                        if (value) {
+                            wordlikeTables[tableIdx][rowIdx][colIdx] = value;
+                        }
+                    });
+                    cellInputs.forEach((cellEl) => {
+                        const colIdx = parseInt(cellEl.getAttribute('data-col') || '0', 10);
+                        if (!Number.isFinite(colIdx)) return;
+                        const value = String(cellEl.value || '').trim();
+                        if (value) {
+                            // For <input type="date">, value is YYYY-MM-DD
+                            // Keep it; backend injects plain strings.
+                            wordlikeTables[tableIdx][rowIdx][colIdx] = value;
+                        }
+                    });
+                });
+            });
+        }
+
         // Extract tagged measures from **value** pattern in table cells
         const taggedMeasures = {};
         const cleanedTables = {};
@@ -820,6 +1085,12 @@ class FsopForm {
                 });
             });
         }
+
+        // Merge word-like tables first (so save works in Word-like mode)
+        // Note: wordlikeTables keys are numeric table indexes; keep them as strings for JSON.
+        Object.keys(wordlikeTables).forEach((tIdx) => {
+            cleanedTables[tIdx] = wordlikeTables[tIdx];
+        });
         
         // Merge cleaned tables with existing table data
         const finalTables = { ...this.formData.tables };

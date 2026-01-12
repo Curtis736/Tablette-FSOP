@@ -71,6 +71,17 @@ async function parseWordStructure(docxPath) {
             console.error('❌ Stack:', extractError.stack);
             throw new Error(`EXTRACT_SECTIONS_ERROR: ${extractError.message}`);
         }
+
+        // Extract ordered blocks (Word-like rendering)
+        console.log('🔍 Extracting ordered blocks (paragraphs/tables/page breaks)...');
+        let blocks = null;
+        try {
+            blocks = extractBlocks(xmlContent);
+            console.log(`✅ Extracted ${blocks.length} block(s)`);
+        } catch (err) {
+            console.warn('⚠️ Failed to extract blocks, continuing without blocks:', err.message);
+            blocks = null;
+        }
         
         // Extract document title (usually in the first few paragraphs or header)
         console.log('🔍 Extracting document title...');
@@ -112,6 +123,7 @@ async function parseWordStructure(docxPath) {
             textFields,
             checkboxes,
             sections,
+            blocks,
             documentTitle: documentTitle,
             reference: reference,
             taggedMeasures: taggedMeasures,
@@ -125,6 +137,287 @@ async function parseWordStructure(docxPath) {
         console.error('❌ Stack:', error.stack);
         throw new Error(`PARSE_ERROR: ${error.message}`);
     }
+}
+
+/**
+ * Extract a Word-like ordered representation from document.xml
+ * Returns blocks in reading order:
+ * - { type: 'paragraph', id, text, hasCheckbox, hasPassFail }
+ * - { type: 'table', id, rows: [ [ { text, colspan?, rowspan? } ] ] }
+ * - { type: 'page_break' }
+ */
+function extractBlocks(xmlContent) {
+    const bodyMatch = xmlContent.match(/<w:body[^>]*>([\s\S]*?)<\/w:body>/);
+    const bodyXml = bodyMatch ? bodyMatch[1] : xmlContent;
+
+    const blocks = [];
+    let pId = 0;
+    let tId = 0;
+
+    // IMPORTANT:
+    // Do NOT use a global regex over bodyXml for <w:p> because tables contain nested paragraphs.
+    // We must extract only top-level blocks in reading order: <w:p> and <w:tbl> directly under <w:body>.
+    let i = 0;
+    while (i < bodyXml.length) {
+        const nextP = bodyXml.indexOf('<w:p', i);
+        const nextTbl = bodyXml.indexOf('<w:tbl', i);
+        if (nextP === -1 && nextTbl === -1) break;
+
+        let kind;
+        let start;
+        if (nextP !== -1 && (nextTbl === -1 || nextP < nextTbl)) {
+            kind = 'p';
+            start = nextP;
+        } else {
+            kind = 'tbl';
+            start = nextTbl;
+        }
+
+        const extracted = extractOuterElement(bodyXml, kind, start);
+        if (!extracted) {
+            // Fallback: advance to avoid infinite loop
+            i = start + 4;
+            continue;
+        }
+
+        if (kind === 'p') {
+            const paraXml = extracted.xml;
+            const text = extractTextFromParagraphXml(paraXml);
+
+            const hasPageBreak =
+                /<w:br\b[^>]*w:type="page"[^>]*\/?>/i.test(paraXml) ||
+                /<w:lastRenderedPageBreak\b/i.test(paraXml);
+
+            const trimmed = (text || '').trim();
+            const hasCheckbox = /^([☐☑✓□]|\[[\sx]\])\s+/i.test(trimmed);
+            const hasPassFail = /PASS\s*FAIL/i.test(trimmed) && /:/i.test(trimmed);
+
+            blocks.push({
+                type: 'paragraph',
+                id: ++pId,
+                text: text || '',
+                hasCheckbox,
+                hasPassFail
+            });
+
+            if (hasPageBreak) {
+                blocks.push({ type: 'page_break' });
+            }
+        } else {
+            const tblXml = extracted.xml;
+            blocks.push({
+                type: 'table',
+                id: ++tId,
+                rows: extractTableMatrix(tblXml)
+            });
+        }
+
+        i = extracted.endIndex;
+    }
+
+    return blocks;
+}
+
+function extractOuterElement(xml, tag, startIndex) {
+    const open = `<w:${tag}`;
+    const close = `</w:${tag}>`;
+    if (xml.indexOf(open, startIndex) !== startIndex) {
+        return null;
+    }
+
+    let depth = 0;
+    let i = startIndex;
+    while (i < xml.length) {
+        const nextOpen = xml.indexOf(open, i);
+        const nextClose = xml.indexOf(close, i);
+
+        if (nextClose === -1) return null;
+
+        if (nextOpen !== -1 && nextOpen < nextClose) {
+            depth += 1;
+            i = nextOpen + open.length;
+            continue;
+        }
+
+        // close
+        depth -= 1;
+        i = nextClose + close.length;
+        if (depth === 0) {
+            return {
+                xml: xml.slice(startIndex, i),
+                endIndex: i
+            };
+        }
+    }
+    return null;
+}
+
+function extractTextFromParagraphXml(paraXml) {
+    // Preserve Word spacing rules:
+    // - xml:space="preserve" nodes must keep leading/trailing spaces
+    // - Other nodes: trim, but insert a space between runs when needed to avoid "motscollés"
+    const textRegex = /<w:t([^>]*)>([\s\S]*?)<\/w:t>/g;
+    const parts = [];
+    let m;
+    while ((m = textRegex.exec(paraXml)) !== null) {
+        const attrs = m[1] || '';
+        let raw = (m[2] || '').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&');
+        // Safety: if some templates contain literal Word tags inside text, strip them
+        raw = raw.replace(/<\/?w:[^>]+>/gi, '');
+        const preserve = /xml:space="preserve"/i.test(attrs);
+
+        if (preserve) {
+            parts.push(raw);
+            continue;
+        }
+
+        const trimmed = raw.trim();
+        if (!trimmed) continue;
+
+        if (parts.length > 0) {
+            const prev = parts[parts.length - 1];
+            const needsSpace =
+                prev &&
+                !prev.endsWith(' ') &&
+                !trimmed.startsWith(' ') &&
+                // don't insert space before punctuation
+                !/^[,.;:!?)]/.test(trimmed) &&
+                // don't insert after opening paren
+                !/[(]$/.test(prev);
+            if (needsSpace) parts.push(' ');
+        }
+
+        parts.push(trimmed);
+    }
+
+    // Handle tabs and line breaks inside paragraphs (best-effort)
+    let text = parts.join('');
+    text = text.replace(/<w:tab[^>]*\/>/gi, '\t');
+    text = text.replace(/<w:br[^>]*\/>/gi, '\n');
+    // Normalize only excessive whitespace, keep single spaces
+    return text.replace(/[ \t]+/g, ' ').trim();
+}
+
+function extractTableMatrix(tblXml) {
+    const rowsOut = [];
+    const rowRegex = /<w:tr\b[^>]*>([\s\S]*?)<\/w:tr>/g;
+    let rowMatch;
+
+    // Track vertical merges by column index (best-effort)
+    const vMergeTrack = new Map(); // colIdx -> { cellRef }
+
+    while ((rowMatch = rowRegex.exec(tblXml)) !== null) {
+        const trXml = rowMatch[1];
+        const cellRegex = /<w:tc\b[^>]*>([\s\S]*?)<\/w:tc>/g;
+        let cellMatch;
+
+        const rowCells = [];
+        let colIdx = 0;
+
+        while ((cellMatch = cellRegex.exec(trXml)) !== null) {
+            const tcXml = cellMatch[1];
+            const colspan = getGridSpan(tcXml);
+            const vMerge = getVMerge(tcXml); // 'restart' | 'continue' | null
+            const text = extractTextFromCellXml(tcXml);
+            const fill = getCellFill(tcXml);
+
+            while (vMergeTrack.has(colIdx)) {
+                colIdx++;
+            }
+
+            if (vMerge === 'continue') {
+                const above = vMergeTrack.get(colIdx);
+                if (above?.cellRef) {
+                    above.cellRef.rowspan = (above.cellRef.rowspan || 1) + 1;
+                }
+                // keep tracking
+                vMergeTrack.set(colIdx, above || { cellRef: null });
+                colIdx += colspan;
+                continue;
+            }
+
+            const cellObj = {
+                text,
+                ...(colspan > 1 ? { colspan } : {}),
+                ...(vMerge === 'restart' ? { rowspan: 1 } : {}),
+                ...(fill ? { fill } : {})
+            };
+            rowCells.push(cellObj);
+
+            if (vMerge === 'restart') {
+                vMergeTrack.set(colIdx, { cellRef: cellObj });
+            }
+
+            colIdx += colspan;
+        }
+
+        rowsOut.push(rowCells);
+    }
+
+    return rowsOut;
+}
+
+function getCellFill(tcXml) {
+    // Word shading: <w:shd ... w:fill="D9E2F3" .../>
+    const m = tcXml.match(/<w:shd\b[^>]*w:fill="([0-9A-Fa-f]{6})"[^>]*\/?>/);
+    if (!m) return null;
+    return `#${m[1].toUpperCase()}`;
+}
+
+function extractTextFromCellXml(tcXml) {
+    // Same spacing strategy as paragraphs to avoid concatenating words.
+    const textRegex = /<w:t([^>]*)>([\s\S]*?)<\/w:t>/g;
+    const parts = [];
+    let m;
+    while ((m = textRegex.exec(tcXml)) !== null) {
+        const attrs = m[1] || '';
+        let raw = (m[2] || '').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&');
+        raw = raw.replace(/<\/?w:[^>]+>/gi, '');
+        const preserve = /xml:space="preserve"/i.test(attrs);
+
+        if (preserve) {
+            parts.push(raw);
+            continue;
+        }
+
+        const trimmed = raw.trim();
+        if (!trimmed) continue;
+
+        if (parts.length > 0) {
+            const prev = parts[parts.length - 1];
+            const needsSpace =
+                prev &&
+                !prev.endsWith(' ') &&
+                !trimmed.startsWith(' ') &&
+                !/^[,.;:!?)]/.test(trimmed) &&
+                !/[(]$/.test(prev);
+            if (needsSpace) parts.push(' ');
+        }
+
+        parts.push(trimmed);
+    }
+
+    let text = parts.join('');
+    text = text.replace(/<w:tab[^>]*\/>/gi, '\t');
+    text = text.replace(/<w:br[^>]*\/>/gi, '\n');
+    return text.replace(/[ \t]+/g, ' ').trim();
+}
+
+function getGridSpan(tcXml) {
+    const m = tcXml.match(/<w:gridSpan\b[^>]*w:val="(\d+)"/i);
+    const n = m ? parseInt(m[1], 10) : 1;
+    return Number.isFinite(n) && n > 0 ? n : 1;
+}
+
+function getVMerge(tcXml) {
+    const m = tcXml.match(/<w:vMerge\b([^>]*)\/?>/i);
+    if (!m) return null;
+    const attrs = m[1] || '';
+    const vm = attrs.match(/w:val="([^"]+)"/i);
+    const val = (vm?.[1] || '').toLowerCase();
+    if (!val) return 'continue';
+    if (val === 'restart') return 'restart';
+    return 'continue';
 }
 
 /**

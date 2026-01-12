@@ -1905,6 +1905,201 @@ tr:hover {
     flex-direction: column;
 }
 
+.fsop-word-doc {
+    display: flex;
+    flex-direction: column;
+    gap: 18px;
+    align-items: center;
+}
+
+/* A4-like page */
+.fsop-page {
+    width: 210mm;
+    min-height: 297mm;
+    background: #fff;
+    padding: 14mm 16mm;
+    box-shadow: 0 10px 25px rgba(0, 0, 0, 0.12);
+    border: 1px solid #e9ecef;
+    border-radius: 6px;
+}
+
+.fsop-page.fsop-page-single {
+    /* Single-page mode: keep A4 width, but allow unlimited height */
+    min-height: auto;
+    height: auto;
+}
+
+.fsop-word-block {
+    margin: 6px 0;
+    font-size: 12px;
+    line-height: 1.25;
+    color: #111;
+}
+
+.fsop-word-paragraph {
+    white-space: pre-wrap;
+}
+
+.fsop-word-table {
+    width: 100%;
+    border-collapse: collapse;
+    table-layout: fixed;
+    font-size: 11px;
+}
+
+.fsop-word-table thead th {
+    background: #D9E2F3;
+    font-weight: 700;
+    text-align: center;
+}
+
+.fsop-word-table td,
+.fsop-word-table th {
+    border: 1px solid #000;
+    padding: 4px 6px;
+    vertical-align: middle;
+}
+
+.fsop-cell-empty {
+    display: block;
+    min-height: 14px; /* conserve la hauteur visuelle d'une cellule vide Word */
+}
+
+.fsop-cell-edit {
+    min-height: 14px;
+    outline: none;
+    white-space: pre-wrap;
+}
+
+.fsop-cell-edit:focus {
+    background: rgba(102, 126, 234, 0.08);
+}
+
+.fsop-cell-input {
+    width: 100%;
+    border: none;
+    outline: none;
+    background: transparent;
+    font: inherit;
+    padding: 0;
+}
+
+.fsop-cell-input:focus {
+    background: rgba(102, 126, 234, 0.08);
+}
+
+.fsop-word-title {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin: 10px 0 6px 0;
+    font-size: 13px;
+    font-weight: 800;
+    color: #111;
+}
+
+.fsop-word-title-number {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 26px;
+    height: 22px;
+    border-radius: 6px;
+    background: #667eea;
+    color: #fff;
+    font-weight: 800;
+    font-size: 12px;
+}
+
+.fsop-word-title-text {
+    color: #111;
+}
+
+.fsop-word-subtitle {
+    margin: 8px 0 6px 0;
+    font-size: 12px;
+    font-weight: 800;
+    color: #2c3e50;
+    border-left: 4px solid #667eea;
+    padding-left: 8px;
+}
+
+.fsop-inline-input,
+.fsop-cell-input,
+.fsop-blank-input {
+    font: inherit;
+    color: #111;
+    background: transparent;
+    border: none;
+    border-bottom: 1px solid #000;
+    border-radius: 0;
+    outline: none;
+    padding: 0 2px;
+}
+
+.fsop-inline-input {
+    min-width: 110px;
+}
+
+.fsop-cell-input {
+    width: 100%;
+    min-width: 40px;
+}
+
+.fsop-blank-input {
+    min-width: 140px;
+}
+
+.fsop-word-checkbox {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.fsop-word-checkbox input[type="checkbox"] {
+    width: 14px;
+    height: 14px;
+}
+
+.fsop-word-passfail {
+    display: inline-flex;
+    align-items: center;
+    gap: 10px;
+    flex-wrap: wrap;
+}
+
+.fsop-word-passfail-label {
+    font-weight: 600;
+}
+
+.fsop-word-passfail-opt {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 2px 6px;
+    border: 1px solid #000;
+    border-radius: 4px;
+    cursor: pointer;
+}
+
+.fsop-word-passfail-opt.active {
+    background: #f1f3f5;
+}
+
+@media print {
+    .fsop-page {
+        box-shadow: none;
+        border: none;
+        border-radius: 0;
+        page-break-after: always;
+    }
+
+    /* If user prints single-page mode, keep it as one continuous page */
+    .fsop-page.fsop-page-single {
+        page-break-after: auto;
+    }
+}
+
 .fsop-form-modal-body {
     overflow-y: auto;
     flex: 1;
