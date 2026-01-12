@@ -6,6 +6,9 @@ const { authenticateAdmin } = require('../middleware/auth');
 const dataValidation = require('../services/DataValidationService');
 const { getConcurrencyStats } = require('../middleware/concurrencyManager');
 
+// IMPORTANT: toutes les routes /api/admin doivent être protégées
+router.use(authenticateAdmin);
+
 // Fonction pour valider et récupérer les informations d'un lancement depuis LCTE
 async function validateLancement(codeLancement) {
     try {

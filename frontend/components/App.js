@@ -156,6 +156,9 @@ class App {
             
             if (response.success) {
                 console.log('✅ Connexion admin réussie');
+                if (response.token) {
+                    window.localStorage?.setItem('sedi_admin_token', response.token);
+                }
                 this.isAdmin = true;
                 this.showAdminScreen();
                 notificationManager.success(`Bienvenue ${response.user.name}`);
@@ -174,6 +177,7 @@ class App {
     handleLogout() {
         this.currentOperator = null;
         this.isAdmin = false;
+        window.localStorage?.removeItem('sedi_admin_token');
         this.storageService.clearCurrentOperator();
         this.showLoginScreen();
         notificationManager.info('Déconnexion réussie');

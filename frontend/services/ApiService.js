@@ -92,8 +92,14 @@ class ApiService {
     // Exécution réelle de la requête
     async executeRequest(endpoint, options = {}) {
         const url = `${this.baseUrl}${endpoint}`;
+
+        // Admin auth token (si présent) - envoyé uniquement sur /auth et /admin
+        const adminToken = window.localStorage?.getItem('sedi_admin_token') || '';
+        const shouldAttachAdminToken = adminToken && (endpoint.startsWith('/admin') || endpoint.startsWith('/auth'));
+        const authHeaders = shouldAttachAdminToken ? { Authorization: `Bearer ${adminToken}` } : {};
+
         const config = {
-            headers: { ...this.defaultHeaders, ...options.headers },
+            headers: { ...this.defaultHeaders, ...authHeaders, ...options.headers },
             ...options
         };
 

@@ -1,5 +1,6 @@
  // Middleware d'authentification et d'autorisation
 const { executeQuery } = require('../config/database');
+const { verifyToken, getAdminCredentials } = require('../services/adminAuthService');
 
 /**
  * Middleware pour vérifier qu'un opérateur est authentifié et actif
@@ -71,23 +72,31 @@ async function authenticateOperator(req, res, next) {
  */
 async function authenticateAdmin(req, res, next) {
     try {
-        // Pour l'instant, vérification simple
-        // Dans une vraie application, on vérifierait un token JWT ou une session admin
-        const { username, password } = req.body;
-        
-        if (username === 'admin' && password === 'admin') {
-            req.admin = {
-                id: 'admin',
-                username: 'admin',
-                role: 'admin'
-            };
-            next();
-        } else {
-            res.status(401).json({
+        const creds = getAdminCredentials();
+        if (!creds.enabled) {
+            return res.status(403).json({
+                success: false,
+                error: 'Accès administrateur désactivé (ADMIN_PASSWORD manquant en production)'
+            });
+        }
+
+        const auth = req.headers.authorization || '';
+        const m = String(auth).match(/^Bearer\s+(.+)$/i);
+        const token = m ? m[1].trim() : '';
+        const entry = verifyToken(token);
+        if (!entry) {
+            return res.status(401).json({
                 success: false,
                 error: 'Accès administrateur requis'
             });
         }
+
+        req.admin = {
+            id: 'admin',
+            username: entry.username,
+            role: 'admin'
+        };
+        next();
         
     } catch (error) {
         console.error('Erreur lors de l\'authentification admin:', error);

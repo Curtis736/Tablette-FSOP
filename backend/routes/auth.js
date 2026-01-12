@@ -1,22 +1,34 @@
 // Routes d'authentification
 const express = require('express');
 const router = express.Router();
+const { getAdminCredentials, issueToken, revokeToken, verifyToken } = require('../services/adminAuthService');
 
 // POST /api/auth/login - Connexion admin
 router.post('/login', async (req, res) => {
     try {
         const { username, password } = req.body;
-        
-        // Vérification simple des identifiants admin
-        if (username === 'admin' && password === 'admin') {
+
+        const creds = getAdminCredentials();
+        if (!creds.enabled) {
+            return res.status(403).json({
+                success: false,
+                error: 'Accès administrateur désactivé (ADMIN_PASSWORD manquant en production)'
+            });
+        }
+
+        // Vérification des identifiants admin (configurable via env)
+        if (username === creds.username && password === creds.password) {
+            const { token, expiresAt } = issueToken(username);
             res.json({
                 success: true,
                 user: {
                     id: 'admin',
-                    username: 'admin',
+                    username: username,
                     role: 'admin',
                     name: 'Administrateur SEDI'
                 },
+                token,
+                expiresAt,
                 message: 'Connexion administrateur réussie'
             });
         } else {
@@ -38,6 +50,10 @@ router.post('/login', async (req, res) => {
 // POST /api/auth/logout - Déconnexion admin
 router.post('/logout', async (req, res) => {
     try {
+        const auth = req.headers.authorization || '';
+        const m = String(auth).match(/^Bearer\s+(.+)$/i);
+        const token = m ? m[1].trim() : '';
+        if (token) revokeToken(token);
         res.json({
             success: true,
             message: 'Déconnexion réussie'
@@ -54,13 +70,30 @@ router.post('/logout', async (req, res) => {
 // GET /api/auth/verify - Vérifier la session admin
 router.get('/verify', async (req, res) => {
     try {
-        // Pour l'instant, on considère que si la requête arrive ici, l'admin est connecté
-        // Dans une vraie application, on vérifierait le token JWT ou la session
+        const creds = getAdminCredentials();
+        if (!creds.enabled) {
+            return res.status(403).json({
+                success: false,
+                error: 'Accès administrateur désactivé (ADMIN_PASSWORD manquant en production)'
+            });
+        }
+
+        const auth = req.headers.authorization || '';
+        const m = String(auth).match(/^Bearer\s+(.+)$/i);
+        const token = m ? m[1].trim() : '';
+        const entry = verifyToken(token);
+        if (!entry) {
+            return res.status(401).json({
+                success: false,
+                error: 'Session admin invalide'
+            });
+        }
+
         res.json({
             success: true,
             user: {
                 id: 'admin',
-                username: 'admin',
+                username: entry.username,
                 role: 'admin',
                 name: 'Administrateur SEDI'
             }
