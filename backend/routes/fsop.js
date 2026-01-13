@@ -638,8 +638,27 @@ router.post('/save', async (req, res) => {
         const destName = `FSOP_${templateCode}_${serialNumber}_${launchNumber}.docx`;
         const destPath = path.join(fsopDir, destName);
 
+        // Check if file already exists and is being used
+        try {
+            const existingStats = await fsp.stat(destPath);
+            if (existingStats) {
+                console.log(`⚠️ Fichier existe déjà: ${destPath}, il sera écrasé`);
+                // Try to check if file is locked (on Windows) or in use
+                // On Linux, we can't easily check this, so we'll try and catch the error
+            }
+        } catch (_) {
+            // File doesn't exist, which is fine
+        }
+
         // Copy template to destination
         try {
+            // If file exists, try to remove it first to avoid issues
+            try {
+                await fsp.unlink(destPath);
+            } catch (_) {
+                // Ignore if file doesn't exist
+            }
+            
             await fs.copyFile(templatePath, destPath);
             console.log(`✅ Template copié: ${templatePath} -> ${destPath}`);
             
@@ -649,6 +668,20 @@ router.post('/save', async (req, res) => {
                 throw new Error('Le fichier copié est vide');
             }
             console.log(`✅ Fichier copié vérifié: ${copiedStats.size} bytes`);
+            
+            // Verify it's a valid DOCX (ZIP file)
+            try {
+                const AdmZip = require('adm-zip');
+                const testZip = new AdmZip(destPath);
+                const testEntry = testZip.getEntry('word/document.xml');
+                if (!testEntry) {
+                    throw new Error('Fichier copié n\'est pas un DOCX valide');
+                }
+                console.log(`✅ Fichier DOCX valide après copie`);
+            } catch (zipError) {
+                console.error(`❌ Fichier copié n'est pas un DOCX valide:`, zipError.message);
+                throw new Error(`Le fichier copié est corrompu: ${zipError.message}`);
+            }
         } catch (copyError) {
             console.error(`❌ Erreur lors de la copie du template:`, copyError.message);
             return res.status(500).json({

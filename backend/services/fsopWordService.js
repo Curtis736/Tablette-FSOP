@@ -282,7 +282,18 @@ async function resolveLtRoot(traceRoot, launchNumber) {
  */
 async function injectIntoDocx(docxPath, replacements = {}, tableData = {}, passFailData = {}, checkboxData = {}, textFieldsData = {}) {
     let zip;
+    let backupPath = null;
     try {
+        // Create a backup of the original file before modification
+        backupPath = docxPath + '.backup';
+        try {
+            await fsp.copyFile(docxPath, backupPath);
+            console.log(`📦 Sauvegarde créée: ${backupPath}`);
+        } catch (backupError) {
+            console.warn(`⚠️ Impossible de créer une sauvegarde: ${backupError.message}`);
+            // Continue anyway, but we won't be able to restore
+        }
+        
         // Load the DOCX file
         zip = new AdmZip(docxPath);
         const entry = zip.getEntry('word/document.xml');
@@ -327,18 +338,64 @@ async function injectIntoDocx(docxPath, replacements = {}, tableData = {}, passF
             xml = injectTextFieldsData(xml, textFieldsData);
         }
         
-        // Basic XML validation: check for well-formed tags
-        // Ensure we still have opening and closing tags
-        const openTags = (xml.match(/</g) || []).length;
-        const closeTags = (xml.match(/>/g) || []).length;
-        if (openTags === 0 || closeTags === 0 || openTags !== closeTags) {
-            console.error(`⚠️ XML structure may be corrupted. Open tags: ${openTags}, Close tags: ${closeTags}`);
-            // Don't throw, but log the warning - sometimes the count can be off due to CDATA sections
-        }
-        
+        // Enhanced XML validation: check for well-formed structure
         // Ensure XML is not empty
         if (!xml || xml.trim().length === 0) {
             throw new Error('DOCX_DOCUMENT_XML_BECAME_EMPTY');
+        }
+        
+        // Check for balanced tags (basic validation)
+        const openTags = (xml.match(/</g) || []).length;
+        const closeTags = (xml.match(/>/g) || []).length;
+        if (openTags === 0 || closeTags === 0) {
+            throw new Error('DOCX_XML_MALFORMED: Missing tags');
+        }
+        
+        // Check for unclosed tags (more strict validation)
+        const tagStack = [];
+        const tagRegex = /<\/?([a-zA-Z][a-zA-Z0-9:]*)[^>]*>/g;
+        let tagMatch;
+        let validationErrors = [];
+        
+        while ((tagMatch = tagRegex.exec(xml)) !== null) {
+            const fullTag = tagMatch[0];
+            const tagName = tagMatch[1];
+            const isClosing = fullTag.startsWith('</');
+            
+            if (!isClosing && !fullTag.endsWith('/>')) {
+                // Opening tag
+                tagStack.push(tagName);
+            } else if (isClosing) {
+                // Closing tag
+                if (tagStack.length === 0) {
+                    validationErrors.push(`Unmatched closing tag: ${tagName}`);
+                } else {
+                    const lastOpen = tagStack.pop();
+                    if (lastOpen !== tagName) {
+                        validationErrors.push(`Mismatched tags: expected ${lastOpen}, got ${tagName}`);
+                    }
+                }
+            }
+        }
+        
+        if (tagStack.length > 0) {
+            validationErrors.push(`Unclosed tags: ${tagStack.join(', ')}`);
+        }
+        
+        if (validationErrors.length > 0) {
+            console.error(`⚠️ XML validation errors detected:`, validationErrors);
+            // Don't throw immediately, but log - some Word documents have non-standard XML
+            // that still works in Word
+        }
+        
+        // Check for common XML corruption patterns
+        if (xml.includes('&lt;&lt;') || xml.includes('&gt;&gt;') || xml.includes('&amp;&amp;')) {
+            console.warn(`⚠️ Potential double-escaped XML entities detected`);
+        }
+        
+        // Ensure we have the essential Word document structure
+        if (!xml.includes('<w:document') && !xml.includes('<w:body')) {
+            throw new Error('DOCX_XML_MALFORMED: Missing essential Word document structure');
         }
 
         // Update the ZIP entry
@@ -364,6 +421,43 @@ async function injectIntoDocx(docxPath, replacements = {}, tableData = {}, passF
                 throw new Error('DOCX_FINAL_FILE_EMPTY');
             }
             
+            // Verify the file is a valid ZIP (DOCX files are ZIP archives)
+            try {
+                const verifyZip = new AdmZip(docxPath);
+                const verifyEntry = verifyZip.getEntry('word/document.xml');
+                if (!verifyEntry) {
+                    throw new Error('DOCX_INVALID: Missing word/document.xml after write');
+                }
+                // Try to read the XML to ensure it's valid
+                const verifyXml = verifyEntry.getData().toString('utf8');
+                if (!verifyXml || verifyXml.trim().length === 0) {
+                    throw new Error('DOCX_INVALID: Empty word/document.xml after write');
+                }
+                console.log(`✅ DOCX validé: ${docxPath} (${finalStats.size} bytes)`);
+            } catch (verifyError) {
+                console.error(`❌ DOCX invalide après écriture:`, verifyError.message);
+                // Try to restore from backup if possible
+                if (backupPath) {
+                    try {
+                        await fsp.copyFile(backupPath, docxPath);
+                        console.log(`🔄 Fichier restauré depuis la sauvegarde`);
+                        await fsp.unlink(backupPath).catch(() => {});
+                    } catch (restoreError) {
+                        console.error(`❌ Impossible de restaurer depuis la sauvegarde:`, restoreError.message);
+                    }
+                }
+                throw new Error(`DOCX_INVALID: Le fichier généré est corrompu: ${verifyError.message}`);
+            }
+            
+            // Remove backup if everything is OK
+            if (backupPath) {
+                try {
+                    await fsp.unlink(backupPath).catch(() => {});
+                } catch (_) {
+                    // Ignore cleanup errors
+                }
+            }
+            
             console.log(`✅ DOCX modifié avec succès: ${docxPath} (${finalStats.size} bytes)`);
         } catch (writeError) {
             // Clean up temp file if it exists
@@ -383,6 +477,21 @@ async function injectIntoDocx(docxPath, replacements = {}, tableData = {}, passF
         }
     } catch (error) {
         console.error(`❌ Erreur lors de l'injection dans le DOCX: ${docxPath}`, error.message);
+        
+        // Try to restore from backup if available
+        if (backupPath) {
+            try {
+                const backupExists = await safeIsFile(backupPath);
+                if (backupExists) {
+                    await fsp.copyFile(backupPath, docxPath);
+                    console.log(`🔄 Fichier restauré depuis la sauvegarde après erreur`);
+                    await fsp.unlink(backupPath).catch(() => {});
+                }
+            } catch (restoreError) {
+                console.error(`❌ Impossible de restaurer depuis la sauvegarde:`, restoreError.message);
+            }
+        }
+        
         throw new Error(`Impossible de modifier le fichier DOCX: ${error.message}`);
     }
 }
@@ -454,33 +563,86 @@ function injectTableData(xml, tableData) {
                         });
                     }
                     
-                    // Replace cell content
+                    // Replace cell content - use safer approach to preserve XML structure
+                    // Build a map of cell indices to their original XML for safe replacement
+                    const cellReplacements = new Map();
+                    
                     for (const [columnIndex, value] of Object.entries(cells)) {
                         const targetCellIndex = parseInt(columnIndex, 10);
                         if (targetCellIndex >= 0 && targetCellIndex < rowCells.length) {
                             const cell = rowCells[targetCellIndex];
-                            // Replace text content in cell
-                            const cellXml = cell.content.replace(
-                                /<w:t[^>]*>([^<]*)<\/w:t>/g,
-                                `<w:t>${escapeXml(String(value))}</w:t>`
-                            );
-                            rowXml = rowXml.substring(0, cell.startIndex) + 
-                                     `<w:tc>${cellXml}</w:tc>` + 
-                                     rowXml.substring(cell.endIndex);
+                            const escapedValue = escapeXml(String(value || ''));
+                            
+                            // Replace only the text content, preserving all other XML structure
+                            // Use a more specific pattern that matches the text run content
+                            let updatedCellXml = cell.xml;
+                            
+                            // Find all text runs in the cell and replace the first one (or all if needed)
+                            const textRunPattern = /<w:t[^>]*>([^<]*)<\/w:t>/;
+                            const textRunMatch = updatedCellXml.match(textRunPattern);
+                            
+                            if (textRunMatch) {
+                                // Replace only the first text run content, preserving attributes
+                                updatedCellXml = updatedCellXml.replace(
+                                    textRunPattern,
+                                    (match, content) => {
+                                        // Preserve any attributes from the original w:t tag
+                                        const tagMatch = match.match(/<w:t([^>]*)>/);
+                                        const attrs = tagMatch ? tagMatch[1] : '';
+                                        return `<w:t${attrs}>${escapedValue}</w:t>`;
+                                    }
+                                );
+                            } else {
+                                // If no text run found, add one (shouldn't happen in valid Word docs)
+                                console.warn(`⚠️ No text run found in cell ${targetCellIndex}, adding one`);
+                                updatedCellXml = updatedCellXml.replace(
+                                    /<\/w:tc>/,
+                                    `<w:t>${escapedValue}</w:t></w:tc>`
+                                );
+                            }
+                            
+                            cellReplacements.set(targetCellIndex, {
+                                original: cell.xml,
+                                updated: updatedCellXml
+                            });
                         }
                     }
                     
-                    // Update table XML with modified row
-                    tableXml = tableXml.substring(0, row.startIndex) + 
-                              `<w:tr>${rowXml}</w:tr>` + 
-                              tableXml.substring(row.endIndex);
+                    // Apply replacements in reverse order to preserve indices
+                    const sortedReplacements = Array.from(cellReplacements.entries()).sort((a, b) => b[0] - a[0]);
+                    for (const [_, replacement] of sortedReplacements) {
+                        // Use replace with the exact original XML to avoid multiple matches
+                        const index = rowXml.indexOf(replacement.original);
+                        if (index !== -1) {
+                            rowXml = rowXml.substring(0, index) + 
+                                    replacement.updated + 
+                                    rowXml.substring(index + replacement.original.length);
+                        }
+                    }
+                    
+                    // Update table XML with modified row - use index-based replacement for safety
+                    // Replace using the exact position to avoid multiple matches
+                    const rowIndexInTable = tableXml.indexOf(row.xml);
+                    if (rowIndexInTable !== -1) {
+                        tableXml = tableXml.substring(0, rowIndexInTable) + 
+                                  `<w:tr>${rowXml}</w:tr>` + 
+                                  tableXml.substring(rowIndexInTable + row.xml.length);
+                    } else {
+                        console.warn(`⚠️ Could not find row XML in table, skipping update for row ${targetRowIndex}`);
+                    }
                 }
             }
             
-            // Update main XML with modified table
-            xml = xml.substring(0, table.startIndex) + 
-                  `<w:tbl>${tableXml}</w:tbl>` + 
-                  xml.substring(table.endIndex);
+            // Update main XML with modified table - use index-based replacement for safety
+            // Replace using the exact position to avoid multiple matches
+            const tableIndexInXml = xml.indexOf(table.xml);
+            if (tableIndexInXml !== -1) {
+                xml = xml.substring(0, tableIndexInXml) + 
+                      `<w:tbl>${tableXml}</w:tbl>` + 
+                      xml.substring(tableIndexInXml + table.xml.length);
+            } else {
+                console.warn(`⚠️ Could not find table XML in document, skipping update for table ${targetTableIndex}`);
+            }
         }
     }
     
