@@ -1,6 +1,7 @@
 const express = require('express');
 const path = require('path');
 const fs = require('fs/promises');
+const fsp = fs; // Alias for consistency with other parts of the codebase
 
 const {
     safeIsDirectory,
@@ -317,11 +318,40 @@ router.post('/open', async (req, res) => {
 
         const fsopDir = path.join(rootLt, 'FSOP');
         console.log(`🔍 Vérification du répertoire FSOP: ${fsopDir}`);
-        if (!(await safeIsDirectory(fsopDir))) {
-            console.warn(`⚠️ Répertoire FSOP introuvable, création: ${fsopDir}`);
+        
+        // Vérifier d'abord si le répertoire existe déjà
+        const fsopDirExists = await safeIsDirectory(fsopDir);
+        
+        if (!fsopDirExists) {
+            // Créer le répertoire FSOP s'il n'existe pas
+            // recursive: true crée aussi les répertoires parents si nécessaire
             try {
                 await fs.mkdir(fsopDir, { recursive: true });
+                console.log(`✅ Répertoire FSOP créé: ${fsopDir}`);
+                
+                // Vérifier que la création a réussi
+                if (!(await safeIsDirectory(fsopDir))) {
+                    console.error(`❌ Répertoire FSOP introuvable après création: ${fsopDir}`);
+                    return res.status(422).json({
+                        error: 'FSOP_DIR_NOT_FOUND',
+                        fsopDir,
+                        rootLt,
+                        message: `Le répertoire FSOP n'a pas pu être créé ou n'est pas accessible: ${fsopDir}`
+                    });
+                }
             } catch (err) {
+                // Vérifier si c'est parce qu'un fichier existe avec le même nom
+                const existsAsFile = await safeIsFile(fsopDir);
+                if (existsAsFile) {
+                    console.error(`❌ Un fichier existe déjà avec le nom du répertoire FSOP: ${fsopDir}`);
+                    return res.status(422).json({
+                        error: 'FSOP_DIR_CONFLICT',
+                        fsopDir,
+                        rootLt,
+                        message: `Un fichier existe déjà avec le nom du répertoire FSOP. Impossible de créer le répertoire: ${fsopDir}`
+                    });
+                }
+                
                 console.error(`❌ Impossible de créer le répertoire FSOP: ${fsopDir}`, err.message);
                 return res.status(422).json({
                     error: 'FSOP_DIR_CREATE_FAILED',
@@ -331,16 +361,9 @@ router.post('/open', async (req, res) => {
                     details: process.env.NODE_ENV === 'development' ? err.message : undefined
                 });
             }
+        } else {
+            console.log(`✅ Répertoire FSOP existe déjà: ${fsopDir}`);
         }
-        if (!(await safeIsDirectory(fsopDir))) {
-            console.error(`❌ Répertoire FSOP introuvable après création: ${fsopDir}`);
-            return res.status(422).json({
-                error: 'FSOP_DIR_NOT_FOUND',
-                fsopDir,
-                rootLt
-            });
-        }
-        console.log(`✅ Répertoire FSOP prêt: ${fsopDir}`);
 
         // Les templates sont dans le répertoire centralisé (où se trouve l'Excel)
         // X:\Qualite\4_Public\A disposition\DOSSIER SMI\Formulaires\
@@ -418,19 +441,50 @@ router.post('/open', async (req, res) => {
                 console.log(`📋 Copie depuis template: ${templatePath}`);
                 await fs.copyFile(templatePath, destPath);
             }
-            console.log(`✅ Fichier copié avec succès`);
+            
+            // Verify the copied file exists and has content
+            const copiedStats = await fsp.stat(destPath);
+            if (copiedStats.size === 0) {
+                throw new Error('Le fichier copié est vide');
+            }
+            console.log(`✅ Fichier copié avec succès: ${copiedStats.size} bytes`);
         } catch (err) {
             console.error(`❌ Erreur lors de la copie:`, err.message);
-            throw new Error(`Impossible de copier le fichier: ${err.message}`);
+            return res.status(500).json({
+                error: 'TEMPLATE_COPY_FAILED',
+                message: `Impossible de copier le fichier vers ${destPath}`,
+                details: process.env.NODE_ENV === 'development' ? err.message : undefined
+            });
         }
 
         console.log(`🔧 Injection des données dans le document...`);
         try {
             await injectIntoDocx(destPath, { '{{LT}}': launchNumber, '{{SN}}': serialNumber });
             console.log(`✅ Données injectées avec succès`);
+            
+            // Verify the final file is valid
+            const finalStats = await fsp.stat(destPath);
+            if (finalStats.size === 0) {
+                throw new Error('Le fichier final est vide après injection');
+            }
+            console.log(`✅ Fichier final vérifié: ${finalStats.size} bytes`);
         } catch (err) {
             console.error(`❌ Erreur lors de l'injection:`, err.message);
-            throw new Error(`Impossible d'injecter les données: ${err.message}`);
+            
+            // Try to clean up corrupted file
+            try {
+                await fsp.unlink(destPath).catch(() => {});
+                console.log(`🧹 Fichier corrompu supprimé: ${destPath}`);
+            } catch (_) {
+                // Ignore cleanup errors
+            }
+            
+            return res.status(500).json({
+                error: 'DOCX_INJECTION_FAILED',
+                message: `Impossible d'injecter les données dans le document DOCX: ${err.message}`,
+                details: process.env.NODE_ENV === 'development' ? err.message : undefined,
+                hint: 'Le fichier peut être corrompu. Vérifiez les données injectées (caractères spéciaux, structure XML).'
+            });
         }
 
         console.log(`📥 Envoi du fichier au client...`);
@@ -473,20 +527,67 @@ router.post('/save', async (req, res) => {
         }
 
         // Resolve LT root directory
+        console.log(`🔍 Recherche du répertoire LT: ${launchNumber} dans ${traceRoot}`);
         const rootLt = await resolveLtRoot(traceRoot, launchNumber);
         if (!rootLt) {
+            console.error(`❌ Répertoire LT introuvable: ${launchNumber} dans ${traceRoot}`);
+            // Try to list what directories exist for debugging
+            let availableDirs = [];
+            try {
+                const entries = await fsp.readdir(traceRoot, { withFileTypes: true });
+                availableDirs = entries
+                    .filter(e => e.isDirectory())
+                    .map(e => e.name)
+                    .slice(0, 20); // Limit to first 20 for response size
+            } catch (err) {
+                console.warn(`⚠️ Impossible de lister les répertoires dans ${traceRoot}:`, err.message);
+            }
+            
             return res.status(422).json({ 
                 error: 'LT_DIR_NOT_FOUND',
-                launchNumber: launchNumber
+                launchNumber: launchNumber,
+                traceRoot: traceRoot,
+                message: `Le répertoire pour le lancement ${launchNumber} est introuvable dans ${traceRoot}`,
+                hint: 'Vérifiez que le répertoire existe. Le format attendu est: <traceRoot>/<LT> ou <traceRoot>/<child>/<LT>',
+                availableDirectories: availableDirs.length > 0 ? availableDirs : undefined
             });
         }
+        console.log(`✅ Répertoire LT trouvé: ${rootLt}`);
 
         const fsopDir = path.join(rootLt, 'FSOP');
-        if (!(await safeIsDirectory(fsopDir))) {
-            console.warn(`⚠️ Répertoire FSOP introuvable, création: ${fsopDir}`);
+        
+        // Vérifier d'abord si le répertoire existe déjà
+        const fsopDirExists = await safeIsDirectory(fsopDir);
+        
+        if (!fsopDirExists) {
+            // Créer le répertoire FSOP s'il n'existe pas
+            // recursive: true crée aussi les répertoires parents si nécessaire
             try {
                 await fs.mkdir(fsopDir, { recursive: true });
+                console.log(`✅ Répertoire FSOP créé: ${fsopDir}`);
+                
+                // Vérifier que la création a réussi
+                if (!(await safeIsDirectory(fsopDir))) {
+                    console.error(`❌ Répertoire FSOP introuvable après création: ${fsopDir}`);
+                    return res.status(422).json({ 
+                        error: 'FSOP_DIR_NOT_FOUND',
+                        fsopDir: fsopDir,
+                        message: `Le répertoire FSOP n'a pas pu être créé ou n'est pas accessible: ${fsopDir}`
+                    });
+                }
             } catch (err) {
+                // Vérifier si c'est parce qu'un fichier existe avec le même nom
+                const existsAsFile = await safeIsFile(fsopDir);
+                if (existsAsFile) {
+                    console.error(`❌ Un fichier existe déjà avec le nom du répertoire FSOP: ${fsopDir}`);
+                    return res.status(422).json({
+                        error: 'FSOP_DIR_CONFLICT',
+                        fsopDir,
+                        rootLt,
+                        message: `Un fichier existe déjà avec le nom du répertoire FSOP. Impossible de créer le répertoire: ${fsopDir}`
+                    });
+                }
+                
                 console.error(`❌ Impossible de créer le répertoire FSOP: ${fsopDir}`, err.message);
                 return res.status(422).json({
                     error: 'FSOP_DIR_CREATE_FAILED',
@@ -496,12 +597,8 @@ router.post('/save', async (req, res) => {
                     details: process.env.NODE_ENV === 'development' ? err.message : undefined
                 });
             }
-        }
-        if (!(await safeIsDirectory(fsopDir))) {
-            return res.status(422).json({ 
-                error: 'FSOP_DIR_NOT_FOUND',
-                fsopDir: fsopDir
-            });
+        } else {
+            console.log(`✅ Répertoire FSOP existe déjà: ${fsopDir}`);
         }
 
         // Find template
@@ -542,7 +639,24 @@ router.post('/save', async (req, res) => {
         const destPath = path.join(fsopDir, destName);
 
         // Copy template to destination
-        await fs.copyFile(templatePath, destPath);
+        try {
+            await fs.copyFile(templatePath, destPath);
+            console.log(`✅ Template copié: ${templatePath} -> ${destPath}`);
+            
+            // Verify the copied file exists and has content
+            const copiedStats = await fsp.stat(destPath);
+            if (copiedStats.size === 0) {
+                throw new Error('Le fichier copié est vide');
+            }
+            console.log(`✅ Fichier copié vérifié: ${copiedStats.size} bytes`);
+        } catch (copyError) {
+            console.error(`❌ Erreur lors de la copie du template:`, copyError.message);
+            return res.status(500).json({
+                error: 'TEMPLATE_COPY_FAILED',
+                message: `Impossible de copier le template vers ${destPath}`,
+                details: process.env.NODE_ENV === 'development' ? copyError.message : undefined
+            });
+        }
 
         // Prepare replacements
         const replacements = {
@@ -571,16 +685,41 @@ router.post('/save', async (req, res) => {
         }
 
         // Inject data into document
-        await injectIntoDocx(
-            destPath,
-            replacements,
-            sanitizedTables,
-            formData.passFail || {},
-            formData.checkboxes || {},
-            formData.textFields || {}
-        );
-
-        console.log(`✅ FSOP sauvegardé: ${destPath}`);
+        try {
+            await injectIntoDocx(
+                destPath,
+                replacements,
+                sanitizedTables,
+                formData.passFail || {},
+                formData.checkboxes || {},
+                formData.textFields || {}
+            );
+            console.log(`✅ FSOP sauvegardé: ${destPath}`);
+            
+            // Verify the final file is valid
+            const finalStats = await fsp.stat(destPath);
+            if (finalStats.size === 0) {
+                throw new Error('Le fichier final est vide après injection');
+            }
+            console.log(`✅ Fichier final vérifié: ${finalStats.size} bytes`);
+        } catch (injectError) {
+            console.error(`❌ Erreur lors de l'injection dans le DOCX:`, injectError.message);
+            
+            // Try to clean up corrupted file
+            try {
+                await fsp.unlink(destPath).catch(() => {});
+                console.log(`🧹 Fichier corrompu supprimé: ${destPath}`);
+            } catch (_) {
+                // Ignore cleanup errors
+            }
+            
+            return res.status(500).json({
+                error: 'DOCX_INJECTION_FAILED',
+                message: `Impossible d'injecter les données dans le document DOCX: ${injectError.message}`,
+                details: process.env.NODE_ENV === 'development' ? injectError.message : undefined,
+                hint: 'Le fichier peut être corrompu. Vérifiez les données injectées (caractères spéciaux, structure XML).'
+            });
+        }
 
         // Extract reference and tagged measures for Excel transfer
         let excelUpdateResult = null;

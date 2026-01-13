@@ -135,7 +135,30 @@ class ApiService {
                 }
                 
                 const errorData = await response.json().catch(() => ({}));
-                throw new Error(errorData.error || `HTTP ${response.status}: ${response.statusText}`);
+                
+                // Build a comprehensive error message
+                let errorMessage = errorData.error || `HTTP ${response.status}: ${response.statusText}`;
+                
+                // Add message if available
+                if (errorData.message) {
+                    errorMessage += `: ${errorData.message}`;
+                } else if (errorData.hint) {
+                    errorMessage += `: ${errorData.hint}`;
+                }
+                
+                // For specific errors, include additional context
+                if (errorData.error === 'LT_DIR_NOT_FOUND' && errorData.launchNumber) {
+                    errorMessage = `LT_DIR_NOT_FOUND: Le répertoire pour le lancement ${errorData.launchNumber} est introuvable`;
+                    if (errorData.traceRoot) {
+                        errorMessage += ` dans ${errorData.traceRoot}`;
+                    }
+                }
+                
+                const error = new Error(errorMessage);
+                // Attach the full error data for detailed error handling
+                error.errorCode = errorData.error;
+                error.errorData = errorData;
+                throw error;
             }
 
             return await response.json();

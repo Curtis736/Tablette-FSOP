@@ -507,7 +507,58 @@ class OperateurInterface {
             this.closeFsopFormModal();
         } catch (error) {
             console.error('Erreur lors de la sauvegarde:', error);
-            this.notificationManager.error('Erreur lors de la sauvegarde du FSOP');
+            
+            // Extract error message from the error object
+            let errorMessage = 'Erreur lors de la sauvegarde du FSOP';
+            
+            // Use errorCode if available (from enhanced ApiService)
+            if (error.errorCode) {
+                switch (error.errorCode) {
+                    case 'LT_DIR_NOT_FOUND':
+                        const launchNumber = error.errorData?.launchNumber || this.currentFsopData?.launchNumber || 'N/A';
+                        const traceRoot = error.errorData?.traceRoot || 'X:\\Tracabilite';
+                        errorMessage = `Dossier LT introuvable: ${launchNumber}`;
+                        if (error.errorData?.message) {
+                            errorMessage += `. ${error.errorData.message}`;
+                        } else {
+                            errorMessage += `. Vérifiez que le répertoire existe dans ${traceRoot}`;
+                        }
+                        if (error.errorData?.hint) {
+                            errorMessage += ` (${error.errorData.hint})`;
+                        }
+                        break;
+                    case 'TRACEABILITY_UNAVAILABLE':
+                        errorMessage = error.errorData?.message || 'Partage réseau de traçabilité non accessible. Vérifiez la connexion réseau.';
+                        break;
+                    case 'TEMPLATE_NOT_FOUND':
+                        errorMessage = error.errorData?.message || `Template introuvable: ${this.currentFsopData?.templateCode || 'N/A'}`;
+                        break;
+                    case 'INPUT_INVALID':
+                        errorMessage = 'Données invalides. Vérifiez le numéro de lancement, le code template et le numéro de série.';
+                        break;
+                    case 'FSOP_DIR_CREATE_FAILED':
+                        errorMessage = error.errorData?.message || 'Impossible de créer le répertoire FSOP.';
+                        break;
+                    default:
+                        errorMessage = error.message || errorMessage;
+                }
+            } else if (error.message) {
+                // Fallback to parsing the error message string
+                if (error.message.includes('LT_DIR_NOT_FOUND')) {
+                    const launchNumber = this.currentFsopData?.launchNumber || 'N/A';
+                    errorMessage = `Dossier LT introuvable: ${launchNumber}. Vérifiez que le répertoire existe dans le partage réseau de traçabilité.`;
+                } else if (error.message.includes('TRACEABILITY_UNAVAILABLE')) {
+                    errorMessage = 'Partage réseau de traçabilité non accessible. Vérifiez la connexion réseau.';
+                } else if (error.message.includes('TEMPLATE_NOT_FOUND')) {
+                    errorMessage = `Template introuvable: ${this.currentFsopData?.templateCode || 'N/A'}`;
+                } else if (error.message.includes('INPUT_INVALID')) {
+                    errorMessage = 'Données invalides. Vérifiez le numéro de lancement, le code template et le numéro de série.';
+                } else {
+                    errorMessage = error.message;
+                }
+            }
+            
+            this.notificationManager.error(errorMessage);
         } finally {
             if (this.fsopFormSaveBtn) {
                 this.fsopFormSaveBtn.disabled = false;

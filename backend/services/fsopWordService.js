@@ -281,41 +281,110 @@ async function resolveLtRoot(traceRoot, launchNumber) {
  * @param {Object} textFieldsData - Optional: Object with text field values { sectionId: { fieldIndex: value } }
  */
 async function injectIntoDocx(docxPath, replacements = {}, tableData = {}, passFailData = {}, checkboxData = {}, textFieldsData = {}) {
-    const zip = new AdmZip(docxPath);
-    const entry = zip.getEntry('word/document.xml');
-    if (!entry) {
-        throw new Error('DOCX_DOCUMENT_XML_NOT_FOUND');
-    }
+    let zip;
+    try {
+        // Load the DOCX file
+        zip = new AdmZip(docxPath);
+        const entry = zip.getEntry('word/document.xml');
+        if (!entry) {
+            throw new Error('DOCX_DOCUMENT_XML_NOT_FOUND');
+        }
 
-    let xml = entry.getData().toString('utf8');
-    
-    // Replace placeholders (existing functionality)
-    for (const [needle, value] of Object.entries(replacements)) {
-        xml = xml.split(String(needle)).join(String(value));
-    }
-    
-    // Inject table data
-    if (Object.keys(tableData).length > 0) {
-        xml = injectTableData(xml, tableData);
-    }
-    
-    // Inject PASS/FAIL selections
-    if (Object.keys(passFailData).length > 0) {
-        xml = injectPassFailData(xml, passFailData);
-    }
-    
-    // Inject checkbox states
-    if (Object.keys(checkboxData).length > 0) {
-        xml = injectCheckboxData(xml, checkboxData);
-    }
-    
-    // Inject text field values
-    if (Object.keys(textFieldsData).length > 0) {
-        xml = injectTextFieldsData(xml, textFieldsData);
-    }
+        let xml = entry.getData().toString('utf8');
+        
+        // Validate that we have valid XML before modifications
+        if (!xml || xml.trim().length === 0) {
+            throw new Error('DOCX_DOCUMENT_XML_EMPTY');
+        }
+        
+        // Store original length for validation
+        const originalLength = xml.length;
+        
+        // Replace placeholders (existing functionality)
+        // Escape replacement values to prevent XML corruption
+        for (const [needle, value] of Object.entries(replacements)) {
+            const escapedValue = escapeXml(String(value || ''));
+            xml = xml.split(String(needle)).join(escapedValue);
+        }
+        
+        // Inject table data
+        if (Object.keys(tableData).length > 0) {
+            xml = injectTableData(xml, tableData);
+        }
+        
+        // Inject PASS/FAIL selections
+        if (Object.keys(passFailData).length > 0) {
+            xml = injectPassFailData(xml, passFailData);
+        }
+        
+        // Inject checkbox states
+        if (Object.keys(checkboxData).length > 0) {
+            xml = injectCheckboxData(xml, checkboxData);
+        }
+        
+        // Inject text field values
+        if (Object.keys(textFieldsData).length > 0) {
+            xml = injectTextFieldsData(xml, textFieldsData);
+        }
+        
+        // Basic XML validation: check for well-formed tags
+        // Ensure we still have opening and closing tags
+        const openTags = (xml.match(/</g) || []).length;
+        const closeTags = (xml.match(/>/g) || []).length;
+        if (openTags === 0 || closeTags === 0 || openTags !== closeTags) {
+            console.error(`⚠️ XML structure may be corrupted. Open tags: ${openTags}, Close tags: ${closeTags}`);
+            // Don't throw, but log the warning - sometimes the count can be off due to CDATA sections
+        }
+        
+        // Ensure XML is not empty
+        if (!xml || xml.trim().length === 0) {
+            throw new Error('DOCX_DOCUMENT_XML_BECAME_EMPTY');
+        }
 
-    zip.updateFile('word/document.xml', Buffer.from(xml, 'utf8'));
-    zip.writeZip(docxPath);
+        // Update the ZIP entry
+        zip.updateFile('word/document.xml', Buffer.from(xml, 'utf8'));
+        
+        // Write to a temporary file first to avoid corruption if write fails
+        const tempPath = docxPath + '.tmp';
+        try {
+            zip.writeZip(tempPath);
+            
+            // Verify the temp file was created and has content
+            const tempStats = await fsp.stat(tempPath);
+            if (tempStats.size === 0) {
+                throw new Error('DOCX_TEMP_FILE_EMPTY');
+            }
+            
+            // Replace original file with temp file atomically
+            await fsp.rename(tempPath, docxPath);
+            
+            // Verify the final file exists and has content
+            const finalStats = await fsp.stat(docxPath);
+            if (finalStats.size === 0) {
+                throw new Error('DOCX_FINAL_FILE_EMPTY');
+            }
+            
+            console.log(`✅ DOCX modifié avec succès: ${docxPath} (${finalStats.size} bytes)`);
+        } catch (writeError) {
+            // Clean up temp file if it exists
+            try {
+                await fsp.unlink(tempPath).catch(() => {});
+            } catch (_) {
+                // Ignore cleanup errors
+            }
+            
+            // If rename failed, try direct write as fallback
+            if (writeError.code === 'EACCES' || writeError.code === 'EPERM' || writeError.code === 'EBUSY') {
+                console.warn(`⚠️ Impossible d'écrire le fichier temporaire, tentative d'écriture directe...`);
+                zip.writeZip(docxPath);
+            } else {
+                throw writeError;
+            }
+        }
+    } catch (error) {
+        console.error(`❌ Erreur lors de l'injection dans le DOCX: ${docxPath}`, error.message);
+        throw new Error(`Impossible de modifier le fichier DOCX: ${error.message}`);
+    }
 }
 
 /**
