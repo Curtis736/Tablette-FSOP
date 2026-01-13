@@ -13,6 +13,13 @@ services:
       - "3001:3001"
     environment:
       - NODE_ENV=production
+      # Database (override via docker/.env for your VM)
+      - DB_SERVER=${DB_SERVER:-SERVEURERP}
+      - DB_DATABASE=${DB_DATABASE:-SEDI_ERP}
+      - DB_USER=${DB_USER:-QUALITE}
+      - DB_PASSWORD=${DB_PASSWORD:-QUALITE}
+      - DB_ENCRYPT=${DB_ENCRYPT:-false}
+      - DB_TRUST_CERT=${DB_TRUST_CERT:-true}
       # Default container paths (override via docker/.env if needed)
       - TRACEABILITY_DIR=${TRACEABILITY_DIR:-/mnt/services/Tracabilite}
       - FSOP_SEARCH_DEPTH=${FSOP_SEARCH_DEPTH:-3}

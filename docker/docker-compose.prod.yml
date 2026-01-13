@@ -11,12 +11,13 @@ services:
     environment:
       - NODE_ENV=production
       - PORT=3001
-      - DB_SERVER=SERVEURERP
-      - DB_DATABASE=SEDI_ERP
-      - DB_USER=QUALITE
-      - DB_PASSWORD=QUALITE
-      - DB_ENCRYPT=false
-      - DB_TRUST_CERT=true
+      # Database (override via docker/.env for your VM)
+      - DB_SERVER=${DB_SERVER:-SERVEURERP}
+      - DB_DATABASE=${DB_DATABASE:-SEDI_ERP}
+      - DB_USER=${DB_USER:-QUALITE}
+      - DB_PASSWORD=${DB_PASSWORD:-QUALITE}
+      - DB_ENCRYPT=${DB_ENCRYPT:-false}
+      - DB_TRUST_CERT=${DB_TRUST_CERT:-true}
       - FRONTEND_URL=http://localhost:8080
       - API_TIMEOUT=30000
       - API_RETRY_ATTEMPTS=3
