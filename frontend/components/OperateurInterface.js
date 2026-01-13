@@ -227,6 +227,24 @@ class OperateurInterface {
             this.fsopFormSaveBtn.addEventListener('click', () => this.handleSaveFsopForm());
         }
 
+        // Validation automatique du numéro de série
+        if (this.fsopSerialNumberInput) {
+            // Debounce pour éviter trop de requêtes
+            let validationTimeout = null;
+            this.fsopSerialNumberInput.addEventListener('input', () => {
+                clearTimeout(validationTimeout);
+                validationTimeout = setTimeout(() => {
+                    this.validateSerialNumber();
+                }, 800); // Attendre 800ms après la dernière saisie
+            });
+
+            // Valider aussi quand l'utilisateur quitte le champ
+            this.fsopSerialNumberInput.addEventListener('blur', () => {
+                clearTimeout(validationTimeout);
+                this.validateSerialNumber();
+            });
+        }
+
         // Fermer les modals avec Escape (scanner + FSOP)
         document.addEventListener('keydown', (e) => {
             if (e.key !== 'Escape') {
@@ -305,6 +323,33 @@ class OperateurInterface {
             return;
         }
 
+        // Valider le numéro de série avant de continuer
+        try {
+            const endpoint = `${this.apiService.baseUrl}/fsop/validate-serial`;
+            const res = await fetch(endpoint, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    launchNumber: lt,
+                    serialNumber: serialNumber
+                })
+            });
+
+            const data = await res.json();
+
+            if (!res.ok || !data.exists) {
+                // Numéro non trouvé - empêcher de continuer
+                this.notificationManager.error(data.message || 'Le numéro de série doit être créé au préalable dans le fichier mesure avant de continuer.');
+                return;
+            }
+
+            // Numéro trouvé - continuer normalement
+        } catch (error) {
+            console.error('Erreur lors de la validation du numéro de série:', error);
+            this.notificationManager.error('Erreur lors de la validation du numéro de série. Veuillez réessayer.');
+            return;
+        }
+
         const endpoint = `${this.apiService.baseUrl}/fsop/open`;
 
         const originalHtml = this.openFsopWordBtn?.innerHTML;
@@ -378,6 +423,40 @@ class OperateurInterface {
         }
     }
 
+    async validateSerialNumber() {
+        const lt = this.getCurrentLaunchNumberForFsop();
+        const serialNumber = (this.fsopSerialNumberInput?.value || '').trim();
+
+        if (!lt || !serialNumber) {
+            return; // Pas de validation si les champs ne sont pas remplis
+        }
+
+        try {
+            const endpoint = `${this.apiService.baseUrl}/fsop/validate-serial`;
+            const res = await fetch(endpoint, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    launchNumber: lt,
+                    serialNumber: serialNumber
+                })
+            });
+
+            const data = await res.json();
+
+            if (res.ok && data.exists) {
+                // Numéro trouvé - afficher un message de succès discret
+                this.notificationManager.success(`Numéro de série validé dans le fichier mesure`, 3000);
+            } else {
+                // Numéro non trouvé - afficher un avertissement
+                this.notificationManager.warning(data.message || 'Numéro de série non trouvé dans le fichier mesure', 5000);
+            }
+        } catch (error) {
+            console.error('Erreur lors de la validation du numéro de série:', error);
+            // Ne pas afficher d'erreur pour ne pas perturber l'utilisateur
+        }
+    }
+
     async handleOpenFsopForm() {
         const lt = this.getCurrentLaunchNumberForFsop();
         const templateCode = (this.fsopTemplateCodeInput?.value || '').trim().toUpperCase();
@@ -393,6 +472,34 @@ class OperateurInterface {
         }
         if (!serialNumber) {
             this.notificationManager.error('Numéro de série obligatoire');
+            return;
+        }
+
+        // Valider le numéro de série avant de continuer
+        try {
+            const endpoint = `${this.apiService.baseUrl}/fsop/validate-serial`;
+            const res = await fetch(endpoint, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    launchNumber: lt,
+                    serialNumber: serialNumber
+                })
+            });
+
+            const data = await res.json();
+
+            if (!res.ok || !data.exists) {
+                // Numéro non trouvé - empêcher de continuer
+                this.notificationManager.error(data.message || 'Le numéro de série doit être créé au préalable dans le fichier mesure avant de continuer.');
+                return;
+            }
+
+            // Numéro trouvé - continuer normalement
+            this.notificationManager.success(`Numéro de série validé`, 2000);
+        } catch (error) {
+            console.error('Erreur lors de la validation du numéro de série:', error);
+            this.notificationManager.error('Erreur lors de la validation du numéro de série. Veuillez réessayer.');
             return;
         }
 

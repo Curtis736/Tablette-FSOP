@@ -500,6 +500,62 @@ router.post('/open', async (req, res) => {
     }
 });
 
+router.post('/validate-serial', async (req, res) => {
+    try {
+        const launchNumber = normalizeLaunchNumber(req.body?.launchNumber);
+        const serialNumber = normalizeSerialNumber(req.body?.serialNumber);
+
+        if (!launchNumber || !serialNumber) {
+            return res.status(400).json({ 
+                error: 'INPUT_INVALID',
+                message: 'Numéro de lancement et numéro de série requis'
+            });
+        }
+
+        const traceRoot = process.env.TRACEABILITY_DIR;
+        if (!traceRoot) {
+            return res.status(503).json({ 
+                error: 'TRACEABILITY_UNAVAILABLE',
+                message: 'Répertoire de traçabilité non configuré'
+            });
+        }
+        
+        if (!(await safeIsDirectory(traceRoot))) {
+            return res.status(503).json({ 
+                error: 'TRACEABILITY_UNAVAILABLE',
+                message: 'Répertoire de traçabilité introuvable'
+            });
+        }
+
+        // Validate serial number in mesure file
+        const { validateSerialNumberInMesure } = require('../services/fsopExcelService');
+        const result = await validateSerialNumberInMesure(launchNumber, serialNumber, traceRoot);
+
+        if (result.exists) {
+            return res.json({
+                success: true,
+                exists: true,
+                excelPath: result.excelPath,
+                message: result.message
+            });
+        } else {
+            return res.status(422).json({
+                success: false,
+                exists: false,
+                excelPath: result.excelPath,
+                message: result.message
+            });
+        }
+
+    } catch (error) {
+        console.error('❌ FSOP validate-serial error:', error);
+        return res.status(500).json({ 
+            error: 'INTERNAL_ERROR',
+            message: error.message
+        });
+    }
+});
+
 router.post('/save', async (req, res) => {
     try {
         const launchNumber = normalizeLaunchNumber(req.body?.launchNumber);
@@ -759,12 +815,18 @@ router.post('/save', async (req, res) => {
         const reference = formData.reference || formData.placeholders?.REF || formData.placeholders?.REFERENCE;
         const taggedMeasures = formData.taggedMeasures || {};
 
-        if (reference && Object.keys(taggedMeasures).length > 0) {
+        if (Object.keys(taggedMeasures).length > 0) {
             try {
-                const { findExcelFileByReference, updateExcelWithTaggedMeasures } = require('../services/fsopExcelService');
+                const { findMesureFileInLaunch, findExcelFileByReference, updateExcelWithTaggedMeasures } = require('../services/fsopExcelService');
                 
-                console.log(`🔍 Recherche du fichier Excel pour la référence: ${reference}`);
-                const excelPath = await findExcelFileByReference(reference, traceRoot);
+                // Priorité 1: Utiliser le fichier mesure du lancement (déjà validé lors de la saisie du numéro de série)
+                let excelPath = await findMesureFileInLaunch(launchNumber, traceRoot);
+                
+                // Priorité 2: Si pas trouvé et référence fournie, chercher par référence
+                if (!excelPath && reference) {
+                    console.log(`🔍 Recherche du fichier Excel pour la référence: ${reference}`);
+                    excelPath = await findExcelFileByReference(reference, traceRoot);
+                }
                 
                 if (excelPath) {
                     console.log(`📊 Mise à jour du fichier Excel: ${excelPath}`);
@@ -776,10 +838,10 @@ router.post('/save', async (req, res) => {
                     });
                     console.log(`✅ ${excelUpdateResult.message}`);
                 } else {
-                    console.warn(`⚠️ Fichier Excel non trouvé pour la référence: ${reference}`);
+                    console.warn(`⚠️ Fichier Excel mesure non trouvé pour le lancement ${launchNumber}${reference ? ` ou la référence ${reference}` : ''}`);
                     excelUpdateResult = {
                         success: false,
-                        message: `Fichier Excel non trouvé pour la référence: ${reference}`,
+                        message: `Fichier Excel mesure non trouvé pour le lancement ${launchNumber}${reference ? ` ou la référence ${reference}` : ''}`,
                         updated: 0,
                         missing: []
                     };
@@ -794,12 +856,7 @@ router.post('/save', async (req, res) => {
                 };
             }
         } else {
-            if (!reference) {
-                console.log(`ℹ️ Aucune référence fournie, pas de mise à jour Excel`);
-            }
-            if (Object.keys(taggedMeasures).length === 0) {
-                console.log(`ℹ️ Aucune mesure taguée fournie, pas de mise à jour Excel`);
-            }
+            console.log(`ℹ️ Aucune mesure taguée fournie, pas de mise à jour Excel`);
         }
 
         return res.json({

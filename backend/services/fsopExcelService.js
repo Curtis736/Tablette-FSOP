@@ -4,6 +4,73 @@ const path = require('path');
 const fsp = require('fs/promises');
 
 /**
+ * Find mesure Excel file in launch directory or parent directories (flexible search)
+ * Searches in: LT directory, parent directory, and up to 2 levels up
+ * 
+ * @param {string} launchNumber - Launch number (e.g., "LT2501132")
+ * @param {string} traceRoot - Root traceability directory (e.g., "X:/Tracabilité")
+ * @returns {Promise<string|null>} Path to Excel file or null if not found
+ */
+async function findMesureFileInLaunch(launchNumber, traceRoot) {
+    if (!launchNumber || !traceRoot) {
+        return null;
+    }
+
+    try {
+        // Import resolveLtRoot from fsopWordService
+        const { resolveLtRoot } = require('./fsopWordService');
+        
+        // Resolve launch directory
+        const rootLt = await resolveLtRoot(traceRoot, launchNumber);
+        if (!rootLt) {
+            return null;
+        }
+
+        // Search strategy: check multiple locations
+        const searchDirs = [rootLt];
+        
+        // Add parent directories (up to 2 levels up, but not beyond traceRoot)
+        let currentDir = rootLt;
+        for (let i = 0; i < 2; i++) {
+            const parentDir = path.dirname(currentDir);
+            // Stop if we've reached traceRoot or if parent is same as current (root reached)
+            if (parentDir === traceRoot || parentDir === currentDir || !parentDir) {
+                break;
+            }
+            searchDirs.push(parentDir);
+            currentDir = parentDir;
+        }
+
+        // Search in all directories (in order of priority)
+        for (const searchDir of searchDirs) {
+            try {
+                const excelFiles = await listExcelFiles(searchDir);
+                const mesureFiles = excelFiles.filter(f => 
+                    f.name.toLowerCase().includes('mesure')
+                );
+
+                if (mesureFiles.length > 0) {
+                    // Use the most recent mesure file if multiple exist
+                    const sortedFiles = mesureFiles.sort((a, b) => b.mtime - a.mtime);
+                    console.log(`✅ Fichier mesure trouvé: ${sortedFiles[0].path}`);
+                    return sortedFiles[0].path;
+                }
+            } catch (error) {
+                // Continue to next directory if this one fails
+                console.debug(`⚠️ Impossible de lire le répertoire ${searchDir}:`, error.message);
+                continue;
+            }
+        }
+
+        console.warn(`⚠️ Aucun fichier mesure trouvé pour ${launchNumber} dans les répertoires: ${searchDirs.join(', ')}`);
+        return null;
+    } catch (error) {
+        console.error(`❌ Erreur lors de la recherche du fichier mesure pour ${launchNumber}:`, error.message);
+        return null;
+    }
+}
+
+/**
  * Find Excel file by reference in the traceability directory
  * Searches in: X:/Tracabilité/reference/ or X:/Tracabilité/reference/*.xlsx
  * 
@@ -276,9 +343,174 @@ async function listDirectories(dirPath) {
     return dirs;
 }
 
+/**
+ * Find mesure Excel file in launch directory and validate serial number exists
+ * 
+ * @param {string} launchNumber - Launch number (e.g., "LT2501132")
+ * @param {string} serialNumber - Serial number to search for (e.g., "20-24-30")
+ * @param {string} traceRoot - Root traceability directory (e.g., "X:/Tracabilité")
+ * @returns {Promise<{exists: boolean, excelPath: string|null, message: string}>}
+ */
+async function validateSerialNumberInMesure(launchNumber, serialNumber, traceRoot) {
+    if (!launchNumber || !serialNumber || !traceRoot) {
+        return {
+            exists: false,
+            excelPath: null,
+            message: 'Paramètres manquants'
+        };
+    }
+
+    try {
+        // Import resolveLtRoot from fsopWordService
+        const { resolveLtRoot } = require('./fsopWordService');
+        
+        // Resolve launch directory
+        const rootLt = await resolveLtRoot(traceRoot, launchNumber);
+        if (!rootLt) {
+            return {
+                exists: false,
+                excelPath: null,
+                message: `Répertoire du lancement ${launchNumber} introuvable`
+            };
+        }
+
+        // Search strategy: check multiple locations (LT directory and parent directories)
+        const searchDirs = [rootLt];
+        
+        // Add parent directories (up to 2 levels up, but not beyond traceRoot)
+        let currentDir = rootLt;
+        for (let i = 0; i < 2; i++) {
+            const parentDir = path.dirname(currentDir);
+            // Stop if we've reached traceRoot or if parent is same as current (root reached)
+            if (parentDir === traceRoot || parentDir === currentDir || !parentDir) {
+                break;
+            }
+            searchDirs.push(parentDir);
+            currentDir = parentDir;
+        }
+
+        // Search in all directories (in order of priority)
+        let mesureFiles = [];
+        for (const searchDir of searchDirs) {
+            try {
+                const excelFiles = await listExcelFiles(searchDir);
+                const foundFiles = excelFiles.filter(f => 
+                    f.name.toLowerCase().includes('mesure')
+                );
+                mesureFiles.push(...foundFiles);
+            } catch (error) {
+                // Continue to next directory if this one fails
+                console.debug(`⚠️ Impossible de lire le répertoire ${searchDir}:`, error.message);
+                continue;
+            }
+        }
+
+        if (mesureFiles.length === 0) {
+            return {
+                exists: false,
+                excelPath: null,
+                message: `Aucun fichier mesure trouvé dans le répertoire du lancement ${launchNumber} ou ses dossiers parents`
+            };
+        }
+
+        // Use the most recent mesure file if multiple exist
+        const sortedFiles = mesureFiles.sort((a, b) => b.mtime - a.mtime);
+        const excelPath = sortedFiles[0].path;
+
+        console.log(`🔍 Recherche du numéro de série "${serialNumber}" dans ${excelPath}`);
+
+        // Open Excel file and search for serial number
+        let workbook;
+        try {
+            workbook = new ExcelJS.Workbook();
+            await workbook.xlsx.readFile(excelPath);
+        } catch (error) {
+            if (error.message && (error.message.includes('EBUSY') || error.message.includes('locked'))) {
+                return {
+                    exists: false,
+                    excelPath: excelPath,
+                    message: `Le fichier Excel est verrouillé. Veuillez le fermer et réessayer.`
+                };
+            }
+            throw error;
+        }
+
+        // Search for serial number in all worksheets and cells
+        // Format can be "20-24-30" or variations
+        const serialNumberNormalized = serialNumber.trim();
+        // Also try variations: with/without spaces, different separators
+        const searchPatterns = [
+            serialNumberNormalized,
+            serialNumberNormalized.replace(/-/g, ' '),
+            serialNumberNormalized.replace(/-/g, '.'),
+            serialNumberNormalized.replace(/\s+/g, '-')
+        ];
+
+        let found = false;
+        let foundLocation = null;
+
+        for (const worksheet of workbook.worksheets) {
+            worksheet.eachRow((row, rowNumber) => {
+                row.eachCell((cell, colNumber) => {
+                    if (cell.value !== null && cell.value !== undefined) {
+                        const cellValue = String(cell.value).trim();
+                        
+                        // Check if any pattern matches
+                        for (const pattern of searchPatterns) {
+                            if (cellValue === pattern || cellValue.includes(pattern)) {
+                                found = true;
+                                foundLocation = {
+                                    sheet: worksheet.name,
+                                    row: rowNumber,
+                                    col: colNumber
+                                };
+                                return false; // Stop iteration
+                            }
+                        }
+                    }
+                });
+                
+                if (found) {
+                    return false; // Stop row iteration
+                }
+            });
+            
+            if (found) {
+                break; // Stop worksheet iteration
+            }
+        }
+
+        if (found) {
+            console.log(`✅ Numéro de série "${serialNumber}" trouvé dans ${excelPath} à ${foundLocation.sheet}!${foundLocation.row}:${foundLocation.col}`);
+            return {
+                exists: true,
+                excelPath: excelPath,
+                message: `Numéro de série trouvé dans le fichier mesure`
+            };
+        } else {
+            console.log(`❌ Numéro de série "${serialNumber}" non trouvé dans ${excelPath}`);
+            return {
+                exists: false,
+                excelPath: excelPath,
+                message: `Le numéro de série "${serialNumber}" n'existe pas dans le fichier mesure. Il doit être créé au préalable avant de continuer.`
+            };
+        }
+
+    } catch (error) {
+        console.error(`❌ Erreur lors de la validation du numéro de série:`, error.message);
+        return {
+            exists: false,
+            excelPath: null,
+            message: `Erreur lors de la validation: ${error.message}`
+        };
+    }
+}
+
 module.exports = {
     findExcelFileByReference,
-    updateExcelWithTaggedMeasures
+    findMesureFileInLaunch,
+    updateExcelWithTaggedMeasures,
+    validateSerialNumberInMesure
 };
 
 
