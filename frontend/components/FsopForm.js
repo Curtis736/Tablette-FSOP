@@ -994,6 +994,34 @@ class FsopForm {
                 // no-op: value is read on save
             });
         });
+        
+        // ⚡ FIX: Special handling for launch number input field
+        this.container.querySelectorAll('input[data-launch-number="true"]').forEach((el) => {
+            el.addEventListener('input', (e) => {
+                const value = e.target.value;
+                // Save to placeholders
+                this.formData.placeholders['{{LT}}'] = value;
+                // Also save to table data if it's in a table
+                const row = e.target.getAttribute('data-row');
+                const col = e.target.getAttribute('data-col');
+                if (row !== null && col !== null) {
+                    const table = e.target.closest('table');
+                    if (table) {
+                        const tableIdx = table.getAttribute('data-table-idx');
+                        if (tableIdx !== null) {
+                            if (!this.formData.tables[tableIdx]) {
+                                this.formData.tables[tableIdx] = {};
+                            }
+                            if (!this.formData.tables[tableIdx][row]) {
+                                this.formData.tables[tableIdx][row] = {};
+                            }
+                            this.formData.tables[tableIdx][row][col] = value;
+                        }
+                    }
+                }
+                console.log(`✅ Numéro lancement mis à jour: ${value}`);
+            });
+        });
     }
 
     /**
