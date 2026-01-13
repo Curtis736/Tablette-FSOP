@@ -69,6 +69,12 @@ class FsopForm {
             reference: initialData.reference || this.structure.reference?.value || this.structure.reference?.placeholder || '',
             taggedMeasures: { ...initialData.taggedMeasures }
         };
+        
+        // ⚡ FIX: S'assurer que le numéro de lancement est toujours dans placeholders pour {{LT}}
+        if (initialData.launchNumber && !this.formData.placeholders['{{LT}}']) {
+            this.formData.placeholders['{{LT}}'] = initialData.launchNumber;
+            console.log(`✅ Numéro lancement ajouté aux placeholders: ${initialData.launchNumber}`);
+        }
 
         // Word-like rendering: preserve exact order (paragraphs/tables/page breaks)
         if (Array.isArray(this.structure.blocks) && this.structure.blocks.length > 0) {
@@ -143,6 +149,9 @@ class FsopForm {
                            initialData.placeholders?.[fieldKey] || '';
                 }
                 
+                // Pour "Numéro lancement", rendre le champ éditable (pas readonly)
+                const isReadonly = field.key === 'NUMERO_LANCEMENT' ? false : false; // Toujours éditable pour l'instant
+                
                 html += `
                     <div class="fsop-header-box-field">
                         <label for="header_${field.key}">${this.escapeHtml(field.label)}</label>
@@ -150,11 +159,20 @@ class FsopForm {
                             type="text" 
                             id="header_${field.key}" 
                             data-placeholder="${field.placeholder || field.key}"
+                            data-field-key="${field.key}"
                             value="${this.escapeHtml(value)}"
                             class="fsop-input fsop-header-box-input"
+                            ${isReadonly ? 'readonly' : ''}
                         />
                     </div>
                 `;
+                
+                // Debug pour Numéro lancement
+                if (field.key === 'NUMERO_LANCEMENT') {
+                    console.log(`🔍 Numéro lancement - value: "${value}", placeholder: "${field.placeholder}", fieldKey: "${fieldKey}"`);
+                    console.log(`🔍 initialData.placeholders:`, initialData.placeholders);
+                    console.log(`🔍 this.formData.placeholders:`, this.formData.placeholders);
+                }
             });
             
             html += '</div>'; // End header-box
