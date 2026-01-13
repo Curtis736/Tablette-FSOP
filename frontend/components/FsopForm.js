@@ -375,23 +375,40 @@ class FsopForm {
                 
                 // ⚡ FIX: Detect if this column is for "Numéro lancement" by checking:
                 // 1. If any header cell in this column contains "Numéro lancement"
-                // 2. If any cell in the first data row contains "Numéro lancement"
+                // 2. If any cell in ANY data row contains "Numéro lancement:" (with colon)
                 // 3. If the cell text itself contains "Numéro lancement" or "{{LT}}"
+                // 4. If the cell is in a column where the previous cell (same row) contains "Numéro lancement:"
                 const checkIfLaunchNumberColumn = () => {
                     // Check header cells in this column
                     if (head[colIdx] && /numéro\s*lancement/i.test(String(head[colIdx]?.text || ''))) {
                         return true;
                     }
-                    // Check first data row if available
-                    if (body.length > 0 && body[0] && body[0][colIdx]) {
-                        const firstRowCell = body[0][colIdx];
-                        if (/numéro\s*lancement/i.test(String(firstRowCell?.text || ''))) {
-                            return true;
+                    // Check ALL data rows for "Numéro lancement:" label
+                    for (let i = 0; i < body.length; i++) {
+                        if (body[i] && body[i][colIdx]) {
+                            const cell = body[i][colIdx];
+                            if (/numéro\s*lancement/i.test(String(cell?.text || ''))) {
+                                return true;
+                            }
+                        }
+                        // Also check if previous column in same row has "Numéro lancement:"
+                        if (colIdx > 0 && body[i] && body[i][colIdx - 1]) {
+                            const prevCell = body[i][colIdx - 1];
+                            if (/numéro\s*lancement\s*:?/i.test(String(prevCell?.text || ''))) {
+                                return true;
+                            }
                         }
                     }
                     // Check current cell
                     if (/numéro\s*lancement/i.test(cellText) || cellText.includes('{{LT}}')) {
                         return true;
+                    }
+                    // Check if previous cell in same row has "Numéro lancement:"
+                    if (!isHeader && rowIdx >= 0 && body[rowIdx] && colIdx > 0 && body[rowIdx][colIdx - 1]) {
+                        const prevCell = body[rowIdx][colIdx - 1];
+                        if (/numéro\s*lancement\s*:?/i.test(String(prevCell?.text || ''))) {
+                            return true;
+                        }
                     }
                     return false;
                 };
@@ -426,6 +443,7 @@ class FsopForm {
                     // Use a proper input field instead of contenteditable for better UX
                     if (isLaunchNumberColumn) {
                         const launchValue = saved || this.formData.placeholders?.['{{LT}}'] || '';
+                        console.log(`🔍 Rendering launch number input at row ${rowIdx}, col ${colIdx} with value: "${launchValue}"`);
                         return `<input 
                             type="text" 
                             class="fsop-cell-input fsop-cell-input-text" 
@@ -433,8 +451,28 @@ class FsopForm {
                             data-col="${colIdx}" 
                             data-launch-number="true"
                             value="${this.escapeHtml(launchValue)}" 
-                            style="width: 100%; border: 1px solid #ccc; padding: 4px;"
+                            style="width: 100%; border: 1px solid #ccc; padding: 4px; background: white;"
                         />`;
+                    }
+                    
+                    // ⚡ FIX: Also check if this is an empty cell that follows "Numéro lancement:" in the same row
+                    // This handles the case where "Numéro lancement:" is in col 0 and the input should be in col 1
+                    if (isBlank && !isHeader && rowIdx >= 0 && body[rowIdx] && colIdx > 0) {
+                        const prevCell = body[rowIdx][colIdx - 1];
+                        if (prevCell && /numéro\s*lancement\s*:?\s*$/i.test(String(prevCell?.text || '').trim())) {
+                            // This is the cell right after "Numéro lancement:" - make it an input
+                            const launchValue = saved || this.formData.placeholders?.['{{LT}}'] || '';
+                            console.log(`🔍 Rendering launch number input (detected from prev cell) at row ${rowIdx}, col ${colIdx} with value: "${launchValue}"`);
+                            return `<input 
+                                type="text" 
+                                class="fsop-cell-input fsop-cell-input-text" 
+                                data-row="${rowIdx}" 
+                                data-col="${colIdx}" 
+                                data-launch-number="true"
+                                value="${this.escapeHtml(launchValue)}" 
+                                style="width: 100%; border: 1px solid #ccc; padding: 4px; background: white;"
+                            />`;
+                        }
                     }
                     
                     // For other columns: make empty cells editable, keep filled cells as text (to avoid perturbing reading)
