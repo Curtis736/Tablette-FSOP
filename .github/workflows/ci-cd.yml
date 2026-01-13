@@ -236,7 +236,9 @@ jobs:
     name: Deploy to serveurproduction
     runs-on: [self-hosted, Linux, X64]
     needs: [docker-build, notify]
-    if: github.ref == 'refs/heads/master'
+    # Déployer automatiquement sur la branche principale.
+    # (Historiquement, le repo utilisait "master", mais il est maintenant sur "main".)
+    if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master'
     steps:
       - name: Checkout workflow files
         uses: actions/checkout@v4
