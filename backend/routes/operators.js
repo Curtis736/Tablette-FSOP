@@ -948,8 +948,11 @@ router.get('/:operatorCode/operations',
     async (req, res) => {
     try {
         const { operatorCode } = req.params;
+        const { page = 1, limit = 50 } = req.query; // ⚡ OPTIMISATION : Pagination
+        const pageNum = parseInt(page, 10);
+        const limitNum = Math.min(parseInt(limit, 10), 100); // Max 100 par page
         
-        console.log(`🔍 Récupération de l'historique pour l'opérateur ${operatorCode}...`);
+        console.log(`🔍 Récupération de l'historique pour l'opérateur ${operatorCode} (page ${pageNum}, limit ${limitNum})...`);
         
         // Récupérer tous les événements de cet opérateur depuis ABHISTORIQUE_OPERATEURS
         // 🔒 FILTRE IMPORTANT : Exclure les lancements transférés (StatutTraitement = 'T')
