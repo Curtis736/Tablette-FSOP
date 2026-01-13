@@ -1,14 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { readTemplatesFromExcel } from '../services/fsopTemplatesExcelService.js';
 import ExcelJS from 'exceljs';
-import fs from 'fs/promises';
-
-// Mock fs/promises
-vi.mock('fs/promises', () => ({
-    default: {
-        access: vi.fn()
-    }
-}));
 
 // Mock ExcelJS
 vi.mock('exceljs', () => {
@@ -48,7 +40,7 @@ describe('FSOP Templates Excel Service', () => {
     });
 
     it('should throw error when Excel file is not accessible', async () => {
-        fs.access.mockRejectedValue(new Error('File not found'));
+        mockWorkbook.xlsx.readFile.mockRejectedValue(new Error('File not found'));
 
         await expect(
             readTemplatesFromExcel('nonexistent.xlsx')
@@ -56,7 +48,6 @@ describe('FSOP Templates Excel Service', () => {
     });
 
     it('should throw error when no worksheet found', async () => {
-        fs.access.mockResolvedValue(undefined);
         mockWorkbook.getWorksheet.mockReturnValue(null);
         mockWorkbook.worksheets = [];
 
@@ -66,8 +57,6 @@ describe('FSOP Templates Excel Service', () => {
     });
 
     it('should throw error when header row is not found', async () => {
-        fs.access.mockResolvedValue(undefined);
-        
         // Mock rows that don't contain headers
         const mockRow = {
             eachCell: vi.fn((callback) => {
@@ -83,11 +72,10 @@ describe('FSOP Templates Excel Service', () => {
     });
 
     it('should successfully parse templates from Excel', async () => {
-        fs.access.mockResolvedValue(undefined);
-
         // Mock header row (row 3)
         const headerRow = {
-            eachCell: vi.fn((callback) => {
+            eachCell: vi.fn((opts, cb) => {
+                const callback = typeof opts === 'function' ? opts : cb;
                 callback({ value: 'N°' }, 1); // Column B (index 1)
                 callback({ value: 'Désignation' }, 2); // Column C (index 2)
                 callback({ value: 'Processus' }, 3); // Column D (index 3)
@@ -139,10 +127,9 @@ describe('FSOP Templates Excel Service', () => {
     });
 
     it('should skip empty rows', async () => {
-        fs.access.mockResolvedValue(undefined);
-
         const headerRow = {
-            eachCell: vi.fn((callback) => {
+            eachCell: vi.fn((opts, cb) => {
+                const callback = typeof opts === 'function' ? opts : cb;
                 callback({ value: 'N°' }, 1);
                 callback({ value: 'Désignation' }, 2);
                 callback({ value: 'Processus' }, 3);
@@ -177,10 +164,9 @@ describe('FSOP Templates Excel Service', () => {
     });
 
     it('should deduplicate templates by code', async () => {
-        fs.access.mockResolvedValue(undefined);
-
         const headerRow = {
-            eachCell: vi.fn((callback) => {
+            eachCell: vi.fn((opts, cb) => {
+                const callback = typeof opts === 'function' ? opts : cb;
                 callback({ value: 'N°' }, 1);
                 callback({ value: 'Désignation' }, 2);
                 callback({ value: 'Processus' }, 3);

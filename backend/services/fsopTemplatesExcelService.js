@@ -1,6 +1,14 @@
-const ExcelJS = require('exceljs');
-const fs = require('fs/promises');
 const path = require('path');
+
+// Use dynamic import so Vitest's ESM mocking can intercept `exceljs` reliably
+// even when this service is consumed from a CommonJS codebase.
+let _ExcelJS = null;
+async function getExcelJS() {
+    if (_ExcelJS) return _ExcelJS;
+    const mod = await import('exceljs');
+    _ExcelJS = mod && mod.default ? mod.default : mod;
+    return _ExcelJS;
+}
 
 /**
  * Read templates list from Excel file.
@@ -14,9 +22,11 @@ const path = require('path');
  */
 async function readTemplatesFromExcel(excelPath) {
     try {
-        // Check if file exists
+        // Open workbook
+        const ExcelJS = await getExcelJS();
+        const workbook = new ExcelJS.Workbook();
         try {
-            await fs.access(excelPath);
+            await workbook.xlsx.readFile(excelPath);
         } catch (error) {
             const errorMsg = `TEMPLATES_SOURCE_UNAVAILABLE: Excel file not found or not accessible: ${excelPath}`;
             console.error(`❌ ${errorMsg}`);
@@ -24,10 +34,6 @@ async function readTemplatesFromExcel(excelPath) {
             console.error(`💡 Vous pouvez définir FSOP_TEMPLATES_XLSX_PATH dans votre fichier .env`);
             throw new Error(errorMsg);
         }
-
-        // Open workbook
-        const workbook = new ExcelJS.Workbook();
-        await workbook.xlsx.readFile(excelPath);
 
         // Try to find sheet named "Liste des formulaires" first, otherwise use first sheet
         let worksheet = workbook.getWorksheet('Liste des formulaires');
@@ -48,6 +54,9 @@ async function readTemplatesFromExcel(excelPath) {
         // Search from row 1 to row 10 for headers
         for (let rowNum = 1; rowNum <= 10; rowNum++) {
             const row = worksheet.getRow(rowNum);
+            if (!row || typeof row.eachCell !== 'function') {
+                continue;
+            }
             const rowValues = [];
             
             row.eachCell({ includeEmpty: true }, (cell, colNumber) => {
