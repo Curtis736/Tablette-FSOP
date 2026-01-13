@@ -232,14 +232,17 @@ class OperateurInterface {
             // Debounce pour éviter trop de requêtes
             let validationTimeout = null;
             this.fsopSerialNumberInput.addEventListener('input', () => {
+                console.log('🔍 [VALIDATION] Saisie détectée dans le champ numéro de série');
                 clearTimeout(validationTimeout);
                 validationTimeout = setTimeout(() => {
+                    console.log('🔍 [VALIDATION] Déclenchement validation automatique (après 800ms de pause)');
                     this.validateSerialNumber();
                 }, 800); // Attendre 800ms après la dernière saisie
             });
 
             // Valider aussi quand l'utilisateur quitte le champ
             this.fsopSerialNumberInput.addEventListener('blur', () => {
+                console.log('🔍 [VALIDATION] Champ numéro de série quitté (blur) - validation immédiate');
                 clearTimeout(validationTimeout);
                 this.validateSerialNumber();
             });
@@ -324,8 +327,12 @@ class OperateurInterface {
         }
 
         // Valider le numéro de série avant de continuer
+        console.log('🔍 [VALIDATION OBLIGATOIRE] Validation du numéro de série avant ouverture du document Word');
+        console.log('🔍 [VALIDATION OBLIGATOIRE] LT:', lt, '| SN:', serialNumber);
         try {
             const endpoint = `${this.apiService.baseUrl}/fsop/validate-serial`;
+            console.log('🔍 [VALIDATION OBLIGATOIRE] Appel API:', endpoint);
+            
             const res = await fetch(endpoint, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
@@ -336,16 +343,19 @@ class OperateurInterface {
             });
 
             const data = await res.json();
+            console.log('🔍 [VALIDATION OBLIGATOIRE] Réponse API:', data);
 
             if (!res.ok || !data.exists) {
                 // Numéro non trouvé - empêcher de continuer
+                console.log('❌ [VALIDATION OBLIGATOIRE] Numéro NON trouvé - ouverture du document Word BLOQUÉE');
                 this.notificationManager.error(data.message || 'Le numéro de série doit être créé au préalable dans le fichier mesure avant de continuer.');
                 return;
             }
 
             // Numéro trouvé - continuer normalement
+            console.log('✅ [VALIDATION OBLIGATOIRE] Numéro trouvé - ouverture du document Word autorisée');
         } catch (error) {
-            console.error('Erreur lors de la validation du numéro de série:', error);
+            console.error('❌ [VALIDATION OBLIGATOIRE] Erreur lors de la validation:', error);
             this.notificationManager.error('Erreur lors de la validation du numéro de série. Veuillez réessayer.');
             return;
         }
@@ -424,15 +434,21 @@ class OperateurInterface {
     }
 
     async validateSerialNumber() {
+        console.log('🔍 [VALIDATION] === DÉBUT validateSerialNumber ===');
         const lt = this.getCurrentLaunchNumberForFsop();
         const serialNumber = (this.fsopSerialNumberInput?.value || '').trim();
 
+        console.log('🔍 [VALIDATION] LT:', lt, '| SN:', serialNumber);
+
         if (!lt || !serialNumber) {
+            console.log('⚠️ [VALIDATION] Validation annulée - LT ou SN manquant');
             return; // Pas de validation si les champs ne sont pas remplis
         }
 
         try {
             const endpoint = `${this.apiService.baseUrl}/fsop/validate-serial`;
+            console.log('🔍 [VALIDATION] Appel API:', endpoint, 'avec LT:', lt, 'SN:', serialNumber);
+            
             const res = await fetch(endpoint, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
@@ -443,18 +459,22 @@ class OperateurInterface {
             });
 
             const data = await res.json();
+            console.log('🔍 [VALIDATION] Réponse API:', data);
 
             if (res.ok && data.exists) {
                 // Numéro trouvé - afficher un message de succès discret
+                console.log('✅ [VALIDATION] Numéro de série trouvé dans le fichier mesure');
                 this.notificationManager.success(`Numéro de série validé dans le fichier mesure`, 3000);
             } else {
                 // Numéro non trouvé - afficher un avertissement
+                console.log('❌ [VALIDATION] Numéro de série NON trouvé dans le fichier mesure');
                 this.notificationManager.warning(data.message || 'Numéro de série non trouvé dans le fichier mesure', 5000);
             }
         } catch (error) {
-            console.error('Erreur lors de la validation du numéro de série:', error);
+            console.error('❌ [VALIDATION] Erreur lors de la validation du numéro de série:', error);
             // Ne pas afficher d'erreur pour ne pas perturber l'utilisateur
         }
+        console.log('🔍 [VALIDATION] === FIN validateSerialNumber ===');
     }
 
     async handleOpenFsopForm() {
@@ -476,8 +496,12 @@ class OperateurInterface {
         }
 
         // Valider le numéro de série avant de continuer
+        console.log('🔍 [VALIDATION OBLIGATOIRE] Validation du numéro de série avant ouverture du formulaire FSOP');
+        console.log('🔍 [VALIDATION OBLIGATOIRE] LT:', lt, '| SN:', serialNumber);
         try {
             const endpoint = `${this.apiService.baseUrl}/fsop/validate-serial`;
+            console.log('🔍 [VALIDATION OBLIGATOIRE] Appel API:', endpoint);
+            
             const res = await fetch(endpoint, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
@@ -488,17 +512,20 @@ class OperateurInterface {
             });
 
             const data = await res.json();
+            console.log('🔍 [VALIDATION OBLIGATOIRE] Réponse API:', data);
 
             if (!res.ok || !data.exists) {
                 // Numéro non trouvé - empêcher de continuer
+                console.log('❌ [VALIDATION OBLIGATOIRE] Numéro NON trouvé - ouverture du formulaire BLOQUÉE');
                 this.notificationManager.error(data.message || 'Le numéro de série doit être créé au préalable dans le fichier mesure avant de continuer.');
                 return;
             }
 
             // Numéro trouvé - continuer normalement
+            console.log('✅ [VALIDATION OBLIGATOIRE] Numéro trouvé - ouverture du formulaire autorisée');
             this.notificationManager.success(`Numéro de série validé`, 2000);
         } catch (error) {
-            console.error('Erreur lors de la validation du numéro de série:', error);
+            console.error('❌ [VALIDATION OBLIGATOIRE] Erreur lors de la validation:', error);
             this.notificationManager.error('Erreur lors de la validation du numéro de série. Veuillez réessayer.');
             return;
         }
