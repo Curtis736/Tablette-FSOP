@@ -2,6 +2,9 @@ services:
   backend:
     image: docker-sedi-backend:latest
     pull_policy: never
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.backend
     container_name: sedi-tablette-backend
     # By default the image runs as user "node". If your host bind mount is root-owned (common with CIFS),
     # you can override to run as root: BACKEND_USER=0:0 (in docker/.env).
@@ -33,6 +36,9 @@ services:
   frontend:
     image: docker-sedi-frontend:latest
     pull_policy: never
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.frontend
     container_name: sedi-tablette-frontend
     ports:
       - "8080:80"
