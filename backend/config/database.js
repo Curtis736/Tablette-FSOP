@@ -186,6 +186,14 @@ async function executeProcedure(procedureName, params = {}) {
         const result = await request.execute(procedureName);
         return result.recordset;
     } catch (error) {
+        // SQL Server error 2812 = "Could not find stored procedure"
+        // In some environments (e.g., VM without mapping scripts applied), these procedures may be missing.
+        // We treat this as non-fatal to avoid blocking the API for pure "audit/consultation" side effects.
+        const sqlNumber = error?.number ?? error?.originalError?.info?.number;
+        if (sqlNumber === 2812) {
+            console.warn(`⚠️ Procédure stockée introuvable (ignorée): ${procedureName}`);
+            return [];
+        }
         console.error(' Erreur lors de l\'exécution de la procédure:', error);
         throw error;
     }
