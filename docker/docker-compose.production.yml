@@ -30,6 +30,9 @@ services:
       # Host mount -> container mount (defaults keep existing behavior)
       # VM variant example: SERVICES_HOST_PATH=/mnt/partage_fsop and SERVICES_CONTAINER_PATH=/mnt/services/Tracabilite
       - ${SERVICES_HOST_PATH:-/srv/services}:${SERVICES_CONTAINER_PATH:-/mnt/services}:rw
+      # Optional extra mount for FSOP templates (use when traceability and templates are on different mounts)
+      # Example VM: TEMPLATES_HOST_PATH=/mnt/partage_services/Services and TEMPLATES_CONTAINER_PATH=/mnt/templates
+      - ${TEMPLATES_HOST_PATH:-/srv/services}:${TEMPLATES_CONTAINER_PATH:-/mnt/templates}:rw
       - ../backend/logs:/app/logs
     networks:
       - sedi-tablette-network
