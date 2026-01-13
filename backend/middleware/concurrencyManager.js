@@ -8,7 +8,8 @@ class ConcurrencyManager {
         this.activeOperations = new Map(); // Map des opérations actives par opérateur
         this.lancementLocks = new Map();   // Verrous sur les lancements
         this.operatorSessions = new Map(); // Sessions actives par opérateur
-        this.maxConcurrentPerOperator = 3; // Max 3 opérations simultanées par opérateur
+        this.maxConcurrentPerOperator = 5; // Max 5 opérations simultanées par opérateur (augmenté pour flexibilité)
+        this.maxTotalConcurrent = 100;     // Max 100 opérations totales (20 opérateurs × 5 max)
         this.cleanupInterval = 60000;      // Nettoyage toutes les minutes
         
         // Démarrer le nettoyage périodique
@@ -26,6 +27,18 @@ class ConcurrencyManager {
             return {
                 allowed: false,
                 reason: `Opérateur ${operatorCode} a atteint la limite de ${this.maxConcurrentPerOperator} opérations simultanées`
+            };
+        }
+
+        // Vérifier la limite globale (pour éviter la surcharge)
+        let totalOps = 0;
+        for (const ops of this.activeOperations.values()) {
+            totalOps += ops.length;
+        }
+        if (totalOps >= this.maxTotalConcurrent) {
+            return {
+                allowed: false,
+                reason: `Limite globale de ${this.maxTotalConcurrent} opérations simultanées atteinte`
             };
         }
 

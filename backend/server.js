@@ -3,6 +3,7 @@ const cors = require('cors');
 const helmet = require('helmet');
 const morgan = require('morgan');
 const rateLimit = require('express-rate-limit');
+const compression = require('compression');
 require('dotenv').config();
 
 const dbConfig = require('./config/database');
@@ -16,6 +17,8 @@ const fsopRoutes = require('./routes/fsop');
 const heartbeatRoutes = require('./routes/heartbeat');
 const { metricsMiddleware, getMetrics, register } = require('./middleware/metrics');
 const { auditMiddleware } = require('./middleware/audit');
+const apmService = require('./services/APMService');
+const cacheService = require('./services/CacheService');
 
 
 const app = express();
@@ -82,6 +85,19 @@ const limiter = rateLimit({
 });
 app.use(limiter);
 
+// ⚡ OPTIMISATION : Compression HTTP pour réduire la taille des réponses JSON
+app.use(compression({
+    filter: (req, res) => {
+        // Compresser toutes les réponses JSON et texte
+        if (req.headers['x-no-compression']) {
+            return false;
+        }
+        return compression.filter(req, res);
+    },
+    level: 6, // Niveau de compression (1-9, 6 = bon compromis vitesse/taille)
+    threshold: 1024 // Compresser seulement si > 1KB
+}));
+
 // Middleware de parsing
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true }));
@@ -94,6 +110,9 @@ app.use(auditMiddleware);
 
 // Métriques
 app.use(metricsMiddleware);
+
+// ⚡ OPTIMISATION : APM middleware pour monitoring détaillé
+app.use(apmService.httpMiddleware());
 // Rate limiting spécifique pour les routes admin (plus permissif)
 const adminLimiter = rateLimit({
     windowMs: 1 * 60 * 1000, // 1 minute
@@ -136,6 +155,28 @@ app.get('/metrics', async (req, res) => {
     } catch (error) {
         console.error('Erreur lors de la récupération des métriques:', error);
         res.status(500).end();
+    }
+});
+
+// ⚡ OPTIMISATION : Route APM pour monitoring détaillé
+app.get('/api/apm/metrics', async (req, res) => {
+    try {
+        const metrics = await apmService.getMetrics();
+        res.set('Content-Type', 'text/plain');
+        res.end(metrics);
+    } catch (error) {
+        console.error('Erreur lors de la récupération des métriques APM:', error);
+        res.status(500).json({ error: 'Erreur lors de la récupération des métriques' });
+    }
+});
+
+app.get('/api/apm/stats', async (req, res) => {
+    try {
+        const stats = apmService.getPerformanceStats();
+        res.json(stats);
+    } catch (error) {
+        console.error('Erreur lors de la récupération des stats APM:', error);
+        res.status(500).json({ error: 'Erreur lors de la récupération des stats' });
     }
 });
 // Route racine

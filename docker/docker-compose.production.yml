@@ -26,6 +26,10 @@ services:
       # FSOP templates (override in docker/.env for Linux/VM paths)
       - FSOP_TEMPLATES_DIR=${FSOP_TEMPLATES_DIR:-}
       - FSOP_TEMPLATES_XLSX_PATH=${FSOP_TEMPLATES_XLSX_PATH:-}
+      # Redis (optionnel)
+      - REDIS_URL=${REDIS_URL:-redis://redis:6379}
+      - REDIS_PASSWORD=${REDIS_PASSWORD:-}
+      - REDIS_DB=${REDIS_DB:-0}
     volumes:
       # Host mount -> container mount (defaults keep existing behavior)
       # VM variant example: SERVICES_HOST_PATH=/mnt/partage_fsop and SERVICES_CONTAINER_PATH=/mnt/services/Tracabilite
@@ -63,7 +67,29 @@ services:
       timeout: 10s
       retries: 3
 
+  # Redis pour le cache partagé (optionnel)
+  redis:
+    image: redis:7-alpine
+    container_name: sedi-tablette-redis
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+    volumes:
+      - redis-data:/data
+    networks:
+      - sedi-tablette-network
+    restart: always
+    command: redis-server --appendonly yes --maxmemory 256mb --maxmemory-policy allkeys-lru
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+
 networks:
   sedi-tablette-network:
     # Create the network if missing; reuse it if already present.
     name: sedi-tablette-network
+
+volumes:
+  redis-data:
+    name: sedi-tablette-redis-data

@@ -427,6 +427,7 @@ class OperateurInterface {
                     '{{LT}}': lt,
                     '{{SN}}': serialNumber
                 },
+                launchNumber: lt, // Also pass as separate field for direct access
                 tables: {},
                 passFail: {},
                 checkboxes: {}

@@ -12,6 +12,10 @@ const SessionService = require('../services/SessionService');
 const AuditService = require('../services/AuditService');
 const { generateRequestId } = require('../middleware/audit');
 
+// ⚡ OPTIMISATION : Cache pour les validations de lancement (évite les requêtes répétées)
+const lancementCache = new Map();
+const LANCEMENT_CACHE_TTL = 5 * 60 * 1000; // 5 minutes
+
 // Fonction de nettoyage des données incohérentes
 async function cleanupInconsistentData(operatorId) {
     try {
@@ -163,8 +167,16 @@ function processLancementEvents(events) {
 }
 
 // Fonction pour valider et récupérer les informations d'un lancement depuis LCTE
+// ⚡ OPTIMISATION : Cache pour éviter les requêtes répétées
 async function validateLancement(codeLancement) {
     try {
+        // Vérifier le cache
+        const cached = lancementCache.get(codeLancement);
+        if (cached && (Date.now() - cached.timestamp) < LANCEMENT_CACHE_TTL) {
+            console.log(`📦 Cache hit pour lancement ${codeLancement}`);
+            return cached.data;
+        }
+        
         console.log(`🔍 Validation du lancement ${codeLancement} dans LCTE...`);
         
         const query = `
@@ -181,6 +193,7 @@ async function validateLancement(codeLancement) {
         
         const result = await executeQuery(query, { codeLancement });
         
+        let validationResult;
         if (result && result.length > 0) {
             const lancement = result[0];
             console.log(`✅ Lancement ${codeLancement} trouvé:`, {
@@ -197,17 +210,32 @@ async function validateLancement(codeLancement) {
                 console.warn(`⚠️ Erreur enregistrement consultation lancement ${codeLancement}:`, error.message);
             }
 
-            return {
+            validationResult = {
                 valid: true,
                 data: lancement
             };
         } else {
             console.log(`❌ Lancement ${codeLancement} non trouvé dans LCTE`);
-            return {
+            validationResult = {
                 valid: false,
                 error: `Le numéro de lancement ${codeLancement} n'existe pas dans la base de données`
             };
         }
+        
+        // Mettre en cache (même les résultats négatifs pour éviter les requêtes répétées)
+        lancementCache.set(codeLancement, {
+            data: validationResult,
+            timestamp: Date.now()
+        });
+        
+        // Nettoyer le cache périodiquement (garder max 1000 entrées)
+        if (lancementCache.size > 1000) {
+            const oldestKey = Array.from(lancementCache.entries())
+                .sort((a, b) => a[1].timestamp - b[1].timestamp)[0][0];
+            lancementCache.delete(oldestKey);
+        }
+        
+        return validationResult;
     } catch (error) {
         console.error('❌ Erreur lors de la validation du lancement:', error);
         return {
@@ -685,6 +713,25 @@ router.post('/pause', async (req, res) => {
     try {
         const { operatorId, lancementCode } = req.body;
         
+        // 🔒 VÉRIFICATION DE SÉCURITÉ : S'assurer que l'opérateur possède ce lancement
+        const ownershipCheck = `
+            SELECT TOP 1 OperatorCode, Ident, Statut
+            FROM [SEDI_APP_INDEPENDANTE].[dbo].[ABHISTORIQUE_OPERATEURS]
+            WHERE CodeLanctImprod = @lancementCode
+              AND OperatorCode = @operatorId
+              AND Statut IN ('EN_COURS', 'EN_PAUSE')
+              AND CAST(DateCreation AS DATE) = CAST(GETDATE() AS DATE)
+            ORDER BY DateCreation DESC
+        `;
+        const ownership = await executeQuery(ownershipCheck, { operatorId, lancementCode });
+        if (ownership.length === 0) {
+            return res.status(403).json({
+                success: false,
+                error: `Vous ne pouvez pas mettre en pause ce lancement. Il ne vous appartient pas ou n'est pas en cours.`,
+                security: 'DATA_OWNERSHIP_VIOLATION'
+            });
+        }
+        
         if (!operatorId || !lancementCode) {
             return res.status(400).json({
                 success: false,
@@ -743,6 +790,25 @@ router.post('/resume', async (req, res) => {
     try {
         const { operatorId, lancementCode } = req.body;
         
+        // 🔒 VÉRIFICATION DE SÉCURITÉ : S'assurer que l'opérateur possède ce lancement
+        const ownershipCheck = `
+            SELECT TOP 1 OperatorCode, Ident, Statut
+            FROM [SEDI_APP_INDEPENDANTE].[dbo].[ABHISTORIQUE_OPERATEURS]
+            WHERE CodeLanctImprod = @lancementCode
+              AND OperatorCode = @operatorId
+              AND Statut IN ('EN_COURS', 'EN_PAUSE')
+              AND CAST(DateCreation AS DATE) = CAST(GETDATE() AS DATE)
+            ORDER BY DateCreation DESC
+        `;
+        const ownership = await executeQuery(ownershipCheck, { operatorId, lancementCode });
+        if (ownership.length === 0) {
+            return res.status(403).json({
+                success: false,
+                error: `Vous ne pouvez pas reprendre ce lancement. Il ne vous appartient pas ou n'est pas en pause.`,
+                security: 'DATA_OWNERSHIP_VIOLATION'
+            });
+        }
+        
         if (!operatorId || !lancementCode) {
             return res.status(400).json({
                 success: false,
@@ -800,6 +866,25 @@ router.post('/resume', async (req, res) => {
 router.post('/stop', async (req, res) => {
     try {
         const { operatorId, lancementCode } = req.body;
+        
+        // 🔒 VÉRIFICATION DE SÉCURITÉ : S'assurer que l'opérateur possède ce lancement
+        const ownershipCheck = `
+            SELECT TOP 1 OperatorCode, Ident, Statut
+            FROM [SEDI_APP_INDEPENDANTE].[dbo].[ABHISTORIQUE_OPERATEURS]
+            WHERE CodeLanctImprod = @lancementCode
+              AND OperatorCode = @operatorId
+              AND Statut IN ('EN_COURS', 'EN_PAUSE')
+              AND CAST(DateCreation AS DATE) = CAST(GETDATE() AS DATE)
+            ORDER BY DateCreation DESC
+        `;
+        const ownership = await executeQuery(ownershipCheck, { operatorId, lancementCode });
+        if (ownership.length === 0) {
+            return res.status(403).json({
+                success: false,
+                error: `Vous ne pouvez pas terminer ce lancement. Il ne vous appartient pas ou n'est pas en cours.`,
+                security: 'DATA_OWNERSHIP_VIOLATION'
+            });
+        }
         
         if (!operatorId || !lancementCode) {
             return res.status(400).json({
@@ -866,20 +951,16 @@ router.get('/:operatorCode/operations',
         
         console.log(`🔍 Récupération de l'historique pour l'opérateur ${operatorCode}...`);
         
-        // Récupérer tous les événements de cet opérateur depuis ABHISTORIQUE_OPERATEURS avec la phase depuis abetemps
+        // Récupérer tous les événements de cet opérateur depuis ABHISTORIQUE_OPERATEURS
+        // 🔒 FILTRE IMPORTANT : Exclure les lancements transférés (StatutTraitement = 'T')
+        // L'opérateur doit voir ses lancements tant qu'ils n'ont pas été transférés par l'admin
+        // ⚡ OPTIMISATION : Utiliser LEFT JOIN avec sous-requête dérivée au lieu de sous-requête corrélée
         const eventsQuery = `
             SELECT 
                 h.NoEnreg,
                 h.Ident,
                 h.CodeLanctImprod,
-                COALESCE(
-                    (SELECT TOP 1 a.Phase 
-                     FROM [SEDI_ERP].[GPSQL].[abetemps] a 
-                     WHERE a.CodeLanctImprod = h.CodeLanctImprod 
-                     ORDER BY a.NoEnreg DESC), 
-                    h.Phase, 
-                    'PRODUCTION'
-                ) as Phase,
+                COALESCE(phase_latest.Phase, h.Phase, 'PRODUCTION') as Phase,
                 h.OperatorCode,
                 h.CodeRubrique,
                 h.Statut,
@@ -887,10 +968,30 @@ router.get('/:operatorCode/operations',
                 h.HeureFin,
                 h.DateCreation,
                 l.DesignationLct1 as Article,
-                l.DesignationLct2 as ArticleDetail
+                l.DesignationLct2 as ArticleDetail,
+                t.StatutTraitement
             FROM [SEDI_APP_INDEPENDANTE].[dbo].[ABHISTORIQUE_OPERATEURS] h
             LEFT JOIN [SEDI_ERP].[dbo].[LCTE] l ON l.CodeLancement = h.CodeLanctImprod
+            LEFT JOIN [SEDI_APP_INDEPENDANTE].[dbo].[ABTEMPS_OPERATEURS] t 
+                ON t.OperatorCode = h.OperatorCode 
+                AND t.LancementCode = h.CodeLanctImprod
+                AND CAST(t.DateCreation AS DATE) = CAST(h.DateCreation AS DATE)
+            -- ⚡ OPTIMISATION : Sous-requête dérivée pour la Phase (plus efficace qu'une corrélée)
+            LEFT JOIN (
+                SELECT 
+                    CodeLanctImprod,
+                    Phase
+                FROM (
+                    SELECT 
+                        CodeLanctImprod,
+                        Phase,
+                        ROW_NUMBER() OVER (PARTITION BY CodeLanctImprod ORDER BY NoEnreg DESC) as rn
+                    FROM [SEDI_ERP].[GPSQL].[abetemps]
+                ) ranked
+                WHERE rn = 1
+            ) phase_latest ON phase_latest.CodeLanctImprod = h.CodeLanctImprod
             WHERE h.OperatorCode = @operatorCode
+              AND (t.StatutTraitement IS NULL OR t.StatutTraitement != 'T')
             ORDER BY h.DateCreation DESC, h.NoEnreg DESC
         `;
         
@@ -899,7 +1000,7 @@ router.get('/:operatorCode/operations',
         
         // Utiliser la fonction qui garde les pauses séparées
         const { processLancementEventsWithPauses } = require('./admin');
-        const formattedOperations = processLancementEventsWithPauses(events).map(operation => ({
+        const allFormattedOperations = processLancementEventsWithPauses(events).map(operation => ({
             id: operation.id,
             operatorCode: operation.operatorCode,
             lancementCode: operation.lancementCode,
@@ -913,10 +1014,22 @@ router.get('/:operatorCode/operations',
             type: operation.type // Ajouter le type pour distinguer les pauses
         }));
         
+        // ⚡ OPTIMISATION : Pagination côté serveur
+        const totalCount = allFormattedOperations.length;
+        const startIndex = (pageNum - 1) * limitNum;
+        const endIndex = startIndex + limitNum;
+        const paginatedOperations = allFormattedOperations.slice(startIndex, endIndex);
+        
         res.json({
             success: true,
-            operations: formattedOperations,
-            count: formattedOperations.length
+            operations: paginatedOperations,
+            count: paginatedOperations.length,
+            total: totalCount,
+            page: pageNum,
+            limit: limitNum,
+            totalPages: Math.ceil(totalCount / limitNum),
+            hasNextPage: endIndex < totalCount,
+            hasPrevPage: pageNum > 1
         });
         
     } catch (error) {
@@ -936,6 +1049,7 @@ router.get('/current/:operatorCode', authenticateOperator, async (req, res) => {
         console.log(`🔍 Recherche d'opération en cours pour l'opérateur ${operatorCode}...`);
         
         // Chercher la dernière opération non terminée
+        // 🔒 FILTRE : Exclure les lancements transférés (StatutTraitement = 'T')
         const query = `
             SELECT TOP 1
                 h.CodeLanctImprod,
@@ -946,8 +1060,13 @@ router.get('/current/:operatorCode', authenticateOperator, async (req, res) => {
                 l.DesignationLct1 as Article
             FROM [SEDI_APP_INDEPENDANTE].[dbo].[ABHISTORIQUE_OPERATEURS] h
             LEFT JOIN [SEDI_ERP].[dbo].[LCTE] l ON l.CodeLancement = h.CodeLanctImprod
+            LEFT JOIN [SEDI_APP_INDEPENDANTE].[dbo].[ABTEMPS_OPERATEURS] t 
+                ON t.OperatorCode = h.OperatorCode 
+                AND t.LancementCode = h.CodeLanctImprod
+                AND CAST(t.DateCreation AS DATE) = CAST(h.DateCreation AS DATE)
             WHERE h.OperatorCode = @operatorCode
               AND h.Statut IN ('EN_COURS', 'EN_PAUSE')
+              AND (t.StatutTraitement IS NULL OR t.StatutTraitement != 'T')
             ORDER BY h.DateCreation DESC, h.NoEnreg DESC
         `;
         

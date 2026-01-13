@@ -1720,6 +1720,20 @@ tr:hover {
     flex-direction: column;
     box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
     overflow: hidden;
+    margin: 0 auto;
+}
+
+.fsop-form-modal-content {
+    background: white;
+    border-radius: 20px;
+    width: 95%;
+    max-width: 900px;
+    max-height: 95vh;
+    display: flex;
+    flex-direction: column;
+    box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
+    overflow: hidden;
+    margin: 2.5vh auto;
 }
 
 .scanner-modal-header {
@@ -2123,6 +2137,8 @@ tr:hover {
     color: #2c3e50;
     max-width: 100%;
     line-height: 1.6;
+    margin: 0;
+    border-radius: 0;
 }
 
 /* Header section (like Word document header) */
@@ -2132,6 +2148,8 @@ tr:hover {
     border-radius: 4px;
     padding: 20px;
     margin-bottom: 35px;
+    margin-left: 0;
+    margin-right: 0;
     box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
 }
 
@@ -2314,6 +2332,8 @@ tr:hover {
     border-bottom: 1px solid #e8ecf0;
     padding: 25px;
     margin-bottom: 25px;
+    margin-left: 0;
+    margin-right: 0;
     border-radius: 4px;
     box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
     transition: box-shadow 0.3s ease;
@@ -2726,10 +2746,149 @@ tr:hover {
 }
 
 /* Responsive */
+/* Optimisations tablette pour formulaire FSOP */
+@media (max-width: 1024px) {
+    .fsop-form-modal-content {
+        max-width: 98%;
+        max-height: 98vh;
+        margin: 1vh auto;
+        border-radius: 12px;
+    }
+    
+    .fsop-form-modal-body {
+        padding: 15px;
+    }
+    
+    .fsop-form-container {
+        padding: 20px 15px;
+        margin: 0;
+    }
+    
+    .fsop-header-section {
+        padding: 15px;
+        margin-bottom: 20px;
+        margin-left: 0;
+        margin-right: 0;
+    }
+    
+    .fsop-header-top {
+        flex-wrap: wrap;
+        gap: 15px;
+        margin-bottom: 15px;
+        padding-bottom: 12px;
+    }
+    
+    .fsop-header-logo {
+        min-width: auto;
+        flex: 1 1 auto;
+    }
+    
+    .fsop-header-title {
+        flex: 1 1 100%;
+        text-align: center;
+        padding: 10px 0;
+        font-size: 1.4rem;
+    }
+    
+    .fsop-header-cordon {
+        min-width: auto;
+        flex: 1 1 auto;
+    }
+    
+    .fsop-section {
+        padding: 18px 15px;
+        margin-bottom: 18px;
+        margin-left: 0;
+        margin-right: 0;
+    }
+    
+    .fsop-section-title {
+        font-size: 1.1rem;
+        margin-bottom: 15px;
+        padding-bottom: 8px;
+    }
+    
+    .fsop-table {
+        font-size: 0.9rem;
+    }
+    
+    .fsop-table th,
+    .fsop-table td {
+        padding: 10px 8px;
+    }
+    
+    .fsop-input {
+        padding: 14px 12px;
+        font-size: 16px; /* Évite le zoom automatique sur iOS */
+    }
+    
+    .fsop-header-box-input {
+        padding: 10px 8px;
+        font-size: 16px;
+    }
+    
+    .fsop-radio-group {
+        flex-wrap: wrap;
+        gap: 12px;
+    }
+    
+    .fsop-radio-label {
+        padding: 14px 18px;
+        min-width: 120px;
+        flex: 1 1 auto;
+    }
+}
+
 @media (max-width: 768px) {
     .fsop-form-modal-content {
-        max-width: 95%;
-        max-height: 95vh;
+        max-width: 100%;
+        max-height: 100vh;
+        margin: 0;
+        border-radius: 0;
+    }
+    
+    .fsop-form-modal-body {
+        padding: 12px;
+    }
+    
+    .fsop-form-container {
+        padding: 15px 10px;
+    }
+    
+    .fsop-header-section {
+        padding: 12px;
+        margin-bottom: 15px;
+    }
+    
+    .fsop-header-top {
+        flex-direction: column;
+        align-items: stretch;
+        gap: 12px;
+    }
+    
+    .fsop-header-title {
+        font-size: 1.2rem;
+        padding: 8px 0;
+    }
+    
+    .fsop-header-box {
+        flex-direction: column;
+        border: 2px solid #000000;
+    }
+    
+    .fsop-header-box-field {
+        border-right: none;
+        border-bottom: 2px solid #000000;
+        padding: 12px;
+    }
+    
+    .fsop-header-box-field:last-child {
+        border-bottom: none;
+    }
+    
+    .fsop-section {
+        padding: 15px 12px;
+        margin-bottom: 15px;
     }
     
     .fsop-radio-group {
@@ -2742,7 +2901,7 @@ tr:hover {
     
     .fsop-table th,
     .fsop-table td {
-        padding: 8px;
+        padding: 8px 6px;
     }
 }
 

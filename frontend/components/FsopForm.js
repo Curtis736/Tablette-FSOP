@@ -125,10 +125,23 @@ class FsopForm {
             
             otherHeaderFields.forEach(field => {
                 const fieldKey = field.placeholder || field.key;
-                const value = this.formData.placeholders[field.placeholder] || 
-                             this.formData.placeholders[fieldKey] || 
-                             initialData.placeholders?.[field.placeholder] || 
-                             initialData.placeholders?.[fieldKey] || '';
+                // Special handling for "Numéro lancement" - always pre-fill with LT if available
+                let value = '';
+                if (field.key === 'NUMERO_LANCEMENT') {
+                    // Try multiple ways to find the launch number
+                    value = this.formData.placeholders['{{LT}}'] || 
+                           this.formData.placeholders[field.placeholder] || 
+                           this.formData.placeholders[fieldKey] || 
+                           initialData.placeholders?.['{{LT}}'] ||
+                           initialData.placeholders?.[field.placeholder] || 
+                           initialData.placeholders?.[fieldKey] || 
+                           initialData.launchNumber || '';
+                } else {
+                    value = this.formData.placeholders[field.placeholder] || 
+                           this.formData.placeholders[fieldKey] || 
+                           initialData.placeholders?.[field.placeholder] || 
+                           initialData.placeholders?.[fieldKey] || '';
+                }
                 
                 html += `
                     <div class="fsop-header-box-field">

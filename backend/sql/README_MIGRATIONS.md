@@ -119,7 +119,7 @@ Liste des lancements en cours depuis l'ERP SILOG.
 ## Ordre d'exécution recommandé
 
 1. **migration_extend_comments.sql** : Ajouter les colonnes pour la gestion des PNC
-2. **migration_extend_historique.sql** : Colonnes SessionId, CreatedAt, RequestId (pas de QteProd)
+2. **migration_extend_historique.sql** : Colonnes SessionId, CreatedAt, RequestId
 3. **migration_extend_temps.sql** : Ajouter Phase, CodeRubrique, StatutTraitement aux temps
 4. **migration_create_silog_views.sql** : Créer les vues pour la lecture des données SILOG
 5. **migration_create_operator_mapping.sql** + **scripts_operator_mapping.sql** : Mapping opérateurs (V_RESSOURC)

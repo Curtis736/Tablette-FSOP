@@ -466,13 +466,33 @@ function processLancementEventsSingleLine(events) {
 function processLancementEventsWithPauses(events) {
     const lancementGroups = {};
     
-    // Regrouper par CodeLanctImprod et OperatorCode
+    // 🔒 ISOLATION STRICTE : Regrouper par CodeLanctImprod ET OperatorCode
+    // Chaque opérateur a son propre historique pour chaque lancement
+    // Un même lancement peut avoir plusieurs historiques (un par opérateur)
     events.forEach(event => {
+        // Clé unique = Lancement + Opérateur (garantit l'isolation)
         const key = `${event.CodeLanctImprod}_${event.OperatorCode}`;
         if (!lancementGroups[key]) {
             lancementGroups[key] = [];
         }
         lancementGroups[key].push(event);
+    });
+    
+    // Log pour debug si plusieurs opérateurs sur le même lancement
+    const lancementByCode = {};
+    events.forEach(event => {
+        if (!lancementByCode[event.CodeLanctImprod]) {
+            lancementByCode[event.CodeLanctImprod] = new Set();
+        }
+        lancementByCode[event.CodeLanctImprod].add(event.OperatorCode);
+    });
+    
+    Object.keys(lancementByCode).forEach(lancementCode => {
+        if (lancementByCode[lancementCode].size > 1) {
+            const operators = Array.from(lancementByCode[lancementCode]);
+            console.log(`ℹ️ Lancement ${lancementCode} partagé entre ${operators.length} opérateurs: ${operators.join(', ')}`);
+            console.log(`   → Chaque opérateur aura son propre historique isolé`);
+        }
     });
     
     const processedItems = [];
@@ -1225,6 +1245,30 @@ router.put('/operations/:id', async (req, res) => {
             });
         }
         
+        // 🔒 VÉRIFICATION DE SÉCURITÉ : Vérifier que l'enregistrement existe et récupérer l'OperatorCode
+        const checkQuery = `
+            SELECT OperatorCode, CodeLanctImprod
+            FROM [SEDI_APP_INDEPENDANTE].[dbo].[ABHISTORIQUE_OPERATEURS]
+            WHERE NoEnreg = @id
+        `;
+        const existing = await executeQuery(checkQuery, { id: parseInt(id) });
+        
+        if (existing.length === 0) {
+            return res.status(404).json({
+                success: false,
+                error: 'Opération non trouvée'
+            });
+        }
+        
+        // Si un operatorId est fourni dans le body, vérifier qu'il correspond
+        if (req.body.operatorId && req.body.operatorId !== existing[0].OperatorCode) {
+            return res.status(403).json({
+                success: false,
+                error: 'Vous ne pouvez modifier que vos propres opérations',
+                security: 'DATA_OWNERSHIP_VIOLATION'
+            });
+        }
+        
         const updateQuery = `
             UPDATE [SEDI_APP_INDEPENDANTE].[dbo].[ABHISTORIQUE_OPERATEURS]
             SET ${updateFields.join(', ')}
@@ -1233,6 +1277,7 @@ router.put('/operations/:id', async (req, res) => {
         
         console.log(`🔧 Requête de mise à jour:`, updateQuery);
         console.log(`🔧 Paramètres:`, params);
+        console.log(`🔒 Opération appartenant à l'opérateur: ${existing[0].OperatorCode}`);
         
         await executeQuery(updateQuery, params);
         
@@ -1816,13 +1861,16 @@ router.get('/operators/:operatorCode/operations', async (req, res) => {
         console.log(`🔍 Récupération des événements pour l'opérateur ${operatorCode}...`);
 
         // Récupérer tous les événements de cet opérateur depuis ABHISTORIQUE_OPERATEURS
+        // 🔒 FILTRE IMPORTANT : Exclure les lancements transférés (StatutTraitement = 'T')
+        // L'opérateur doit voir ses lancements tant qu'ils n'ont pas été transférés par l'admin
+        // ⚡ OPTIMISATION : Utiliser LEFT JOIN avec sous-requête dérivée au lieu de sous-requête corrélée
         const operatorEventsQuery = `
         SELECT 
                 h.NoEnreg,
                 h.Ident,
                 h.DateCreation,
                 h.CodeLanctImprod,
-                h.Phase,
+                COALESCE(phase_latest.Phase, h.Phase, 'PRODUCTION') as Phase,
                 h.OperatorCode,
                 h.CodeRubrique,
                 h.Statut,
@@ -1830,11 +1878,31 @@ router.get('/operators/:operatorCode/operations', async (req, res) => {
                 h.HeureFin,
                 r.Designation1 as operatorName,
                 l.DesignationLct1 as Article,
-                l.DesignationLct2 as ArticleDetail
+                l.DesignationLct2 as ArticleDetail,
+                t.StatutTraitement
             FROM [SEDI_APP_INDEPENDANTE].[dbo].[ABHISTORIQUE_OPERATEURS] h
             LEFT JOIN [SEDI_ERP].[dbo].[RESSOURC] r ON h.OperatorCode = r.Coderessource
             LEFT JOIN [SEDI_ERP].[dbo].[LCTE] l ON l.CodeLancement = h.CodeLanctImprod
+            LEFT JOIN [SEDI_APP_INDEPENDANTE].[dbo].[ABTEMPS_OPERATEURS] t 
+                ON t.OperatorCode = h.OperatorCode 
+                AND t.LancementCode = h.CodeLanctImprod
+                AND CAST(t.DateCreation AS DATE) = CAST(h.DateCreation AS DATE)
+            -- ⚡ OPTIMISATION : Sous-requête dérivée pour la Phase (plus efficace qu'une corrélée)
+            LEFT JOIN (
+                SELECT 
+                    CodeLanctImprod,
+                    Phase
+                FROM (
+                    SELECT 
+                        CodeLanctImprod,
+                        Phase,
+                        ROW_NUMBER() OVER (PARTITION BY CodeLanctImprod ORDER BY NoEnreg DESC) as rn
+                    FROM [SEDI_ERP].[GPSQL].[abetemps]
+                ) ranked
+                WHERE rn = 1
+            ) phase_latest ON phase_latest.CodeLanctImprod = h.CodeLanctImprod
             WHERE h.OperatorCode = @operatorCode
+              AND (t.StatutTraitement IS NULL OR t.StatutTraitement != 'T')
             ORDER BY h.DateCreation DESC
         `;
         
@@ -3102,6 +3170,30 @@ router.put('/monitoring/:tempsId', async (req, res) => {
         const { tempsId } = req.params;
         const corrections = req.body;
         
+        // 🔒 VÉRIFICATION DE SÉCURITÉ : Vérifier que l'enregistrement existe
+        const checkQuery = `
+            SELECT OperatorCode, LancementCode, StatutTraitement
+            FROM [SEDI_APP_INDEPENDANTE].[dbo].[ABTEMPS_OPERATEURS]
+            WHERE TempsId = @tempsId
+        `;
+        const existing = await executeQuery(checkQuery, { tempsId: parseInt(tempsId) });
+        
+        if (existing.length === 0) {
+            return res.status(404).json({
+                success: false,
+                error: 'Enregistrement non trouvé'
+            });
+        }
+        
+        // Si un operatorCode est fourni dans le body, vérifier qu'il correspond
+        if (corrections.OperatorCode && corrections.OperatorCode !== existing[0].OperatorCode) {
+            return res.status(403).json({
+                success: false,
+                error: 'Vous ne pouvez modifier que vos propres enregistrements',
+                security: 'DATA_OWNERSHIP_VIOLATION'
+            });
+        }
+        
         const result = await MonitoringService.correctRecord(parseInt(tempsId), corrections);
         
         if (result.success) {
@@ -3130,6 +3222,30 @@ router.put('/monitoring/:tempsId', async (req, res) => {
 router.delete('/monitoring/:tempsId', async (req, res) => {
     try {
         const { tempsId } = req.params;
+        
+        // 🔒 VÉRIFICATION DE SÉCURITÉ : Vérifier que l'enregistrement existe
+        const checkQuery = `
+            SELECT OperatorCode, LancementCode, StatutTraitement
+            FROM [SEDI_APP_INDEPENDANTE].[dbo].[ABTEMPS_OPERATEURS]
+            WHERE TempsId = @tempsId
+        `;
+        const existing = await executeQuery(checkQuery, { tempsId: parseInt(tempsId) });
+        
+        if (existing.length === 0) {
+            return res.status(404).json({
+                success: false,
+                error: 'Enregistrement non trouvé'
+            });
+        }
+        
+        // Si un operatorCode est fourni dans le body, vérifier qu'il correspond
+        if (req.body.operatorCode && req.body.operatorCode !== existing[0].OperatorCode) {
+            return res.status(403).json({
+                success: false,
+                error: 'Vous ne pouvez supprimer que vos propres enregistrements',
+                security: 'DATA_OWNERSHIP_VIOLATION'
+            });
+        }
         
         const result = await MonitoringService.deleteRecord(parseInt(tempsId));
         

@@ -1000,26 +1000,81 @@ class AdminPage {
     }
 
     async editMonitoringRecord(id) {
+        // Trouver l'enregistrement actuel pour pré-remplir les prompts
+        const record = this.operations.find(op => op.TempsId == id);
+        const currentPhase = record?.Phase || '';
+        const currentCodeRubrique = record?.CodeRubrique || '';
+        const currentStartTime = record?.StartTime ? this.formatDateTime(record.StartTime) : '';
+        const currentEndTime = record?.EndTime ? this.formatDateTime(record.EndTime) : '';
+
         // Correction simple via prompts (Phase/CodeRubrique/Start/End)
-        const phase = prompt('Phase (laisser vide pour ne pas changer) :');
-        const codeRubrique = prompt('CodeRubrique (laisser vide pour ne pas changer) :');
-        const startTime = prompt('Heure début (YYYY-MM-DDTHH:mm:ss ou HH:mm, vide = inchangé) :');
-        const endTime = prompt('Heure fin (YYYY-MM-DDTHH:mm:ss ou HH:mm, vide = inchangé) :');
+        const phase = prompt(`Phase (actuel: ${currentPhase || 'vide'}) :`, currentPhase);
+        const codeRubrique = prompt(`CodeRubrique (actuel: ${currentCodeRubrique || 'vide'}) :`, currentCodeRubrique);
+        const startTime = prompt(`Heure début (actuel: ${currentStartTime || 'vide'}) (YYYY-MM-DDTHH:mm:ss ou HH:mm) :`, currentStartTime);
+        const endTime = prompt(`Heure fin (actuel: ${currentEndTime || 'vide'}) (YYYY-MM-DDTHH:mm:ss ou HH:mm) :`, currentEndTime);
 
         const corrections = {};
-        if (phase !== null && phase !== '') corrections.Phase = phase;
-        if (codeRubrique !== null && codeRubrique !== '') corrections.CodeRubrique = codeRubrique;
-        if (startTime !== null && startTime !== '') corrections.StartTime = startTime;
-        if (endTime !== null && endTime !== '') corrections.EndTime = endTime;
+        if (phase !== null && phase !== '' && phase !== currentPhase) corrections.Phase = phase;
+        if (codeRubrique !== null && codeRubrique !== '' && codeRubrique !== currentCodeRubrique) corrections.CodeRubrique = codeRubrique;
+        if (startTime !== null && startTime !== '' && startTime !== currentStartTime) corrections.StartTime = startTime;
+        if (endTime !== null && endTime !== '' && endTime !== currentEndTime) corrections.EndTime = endTime;
 
-        if (Object.keys(corrections).length === 0) return;
+        if (Object.keys(corrections).length === 0) {
+            this.notificationManager.info('Aucune modification effectuée');
+            return;
+        }
 
-        const result = await this.apiService.correctMonitoringTemps(id, corrections);
-        if (result && result.success) {
-            this.notificationManager.success('Enregistrement corrigé');
-            await this.loadData();
-        } else {
-            this.notificationManager.error(result?.error || 'Erreur correction');
+        try {
+            const result = await this.apiService.correctMonitoringTemps(id, corrections);
+            if (result && result.success) {
+                this.notificationManager.success('Enregistrement corrigé');
+                
+                // Mettre à jour l'enregistrement en mémoire immédiatement
+                if (record) {
+                    if (corrections.Phase !== undefined) record.Phase = corrections.Phase;
+                    if (corrections.CodeRubrique !== undefined) record.CodeRubrique = corrections.CodeRubrique;
+                    if (corrections.StartTime !== undefined) record.StartTime = corrections.StartTime;
+                    if (corrections.EndTime !== undefined) record.EndTime = corrections.EndTime;
+                    
+                    // Mettre à jour la ligne dans le tableau sans tout recharger
+                    this.updateMonitoringRowInTable(id, record);
+                }
+                
+                // Recharger les données après un court délai pour s'assurer que tout est synchronisé
+                setTimeout(async () => {
+                    await this.loadMonitoringRecords(new Date().toISOString().split('T')[0]);
+                    this.updateOperationsTable();
+                }, 500);
+            } else {
+                this.notificationManager.error(result?.error || 'Erreur correction');
+            }
+        } catch (error) {
+            console.error('❌ Erreur lors de la correction:', error);
+            this.notificationManager.error('Erreur lors de la correction');
+        }
+    }
+
+    updateMonitoringRowInTable(tempsId, record) {
+        const row = document.querySelector(`tr[data-operation-id="${tempsId}"]`);
+        if (!row) {
+            console.warn(`⚠️ Ligne non trouvée pour TempsId ${tempsId}, rechargement complet`);
+            this.updateOperationsTable();
+            return;
+        }
+
+        const cells = row.querySelectorAll('td');
+        if (cells.length >= 6) {
+            // Mettre à jour les heures (cellules 3 et 4)
+            const formattedStartTime = this.formatDateTime(record.StartTime);
+            const formattedEndTime = this.formatDateTime(record.EndTime);
+            
+            cells[3].textContent = formattedStartTime;
+            cells[4].textContent = formattedEndTime;
+            
+            console.log(`✅ Ligne ${tempsId} mise à jour dans le tableau:`, {
+                StartTime: formattedStartTime,
+                EndTime: formattedEndTime
+            });
         }
     }
 
@@ -1828,7 +1883,24 @@ class AdminPage {
 
             console.log(`💾 Sauvegarde opération ${id}:`, updateData);
 
-            const response = await this.apiService.updateOperation(id, updateData);
+            // Vérifier si c'est un enregistrement de monitoring (ABTEMPS_OPERATEURS) ou historique (ABHISTORIQUE_OPERATEURS)
+            const record = this.operations.find(op => op.TempsId == id || op.id == id);
+            const isMonitoringRecord = record && record.TempsId !== undefined;
+            
+            let response;
+            if (isMonitoringRecord) {
+                // C'est un enregistrement de monitoring - utiliser la route de correction
+                const corrections = {};
+                if (updateData.startTime) corrections.StartTime = updateData.startTime;
+                if (updateData.endTime) corrections.EndTime = updateData.endTime;
+                if (updateData.Phase) corrections.Phase = updateData.Phase;
+                if (updateData.CodeRubrique) corrections.CodeRubrique = updateData.CodeRubrique;
+                
+                response = await this.apiService.correctMonitoringTemps(record.TempsId, corrections);
+            } else {
+                // C'est un enregistrement historique - utiliser la route operations
+                response = await this.apiService.updateOperation(id, updateData);
+            }
             
             if (response.success) {
                 this.notificationManager.success('Opération mise à jour avec succès');
@@ -1837,22 +1909,33 @@ class AdminPage {
                 this.lastEditTime = Date.now();
                 
                 // Mettre à jour en mémoire AVANT de mettre à jour l'affichage
-                this.updateOperationInMemory(id, updateData);
+                if (isMonitoringRecord) {
+                    // Pour monitoring, mettre à jour avec les noms de champs corrects
+                    if (updateData.startTime) record.StartTime = updateData.startTime;
+                    if (updateData.endTime) record.EndTime = updateData.endTime;
+                    if (updateData.Phase) record.Phase = updateData.Phase;
+                    if (updateData.CodeRubrique) record.CodeRubrique = updateData.CodeRubrique;
+                } else {
+                    this.updateOperationInMemory(id, updateData);
+                }
                 
                 // Vérifier que la mise à jour en mémoire a bien fonctionné
-                const updatedOperation = this.operations.find(op => op.id == id);
+                const updatedOperation = this.operations.find(op => (op.TempsId == id || op.id == id));
                 console.log('🔍 Opération après mise à jour en mémoire:', updatedOperation);
-                console.log('🔍 Statut après mise à jour:', updatedOperation?.statusCode, updatedOperation?.status);
                 
                 // Mettre à jour l'affichage
-                this.updateSingleRowInTable(id);
-                
-                // Vérifier que l'affichage a bien été mis à jour
-                const rowAfterUpdate = document.querySelector(`tr[data-operation-id="${id}"]`);
-                if (rowAfterUpdate) {
-                    const statusCell = rowAfterUpdate.querySelectorAll('td')[5];
-                    console.log('🔍 Statut affiché après updateSingleRowInTable:', statusCell?.innerHTML);
+                if (isMonitoringRecord) {
+                    this.updateMonitoringRowInTable(record.TempsId, record);
+                } else {
+                    this.updateSingleRowInTable(id);
                 }
+                
+                // Recharger les données après un court délai pour s'assurer de la synchronisation
+                setTimeout(async () => {
+                    const today = new Date().toISOString().split('T')[0];
+                    await this.loadMonitoringRecords(today);
+                    this.updateOperationsTable();
+                }, 500);
             } else {
                 const errorMessage = response.error || 'Erreur lors de la mise à jour';
                 this.notificationManager.error(`Erreur: ${errorMessage}`);
