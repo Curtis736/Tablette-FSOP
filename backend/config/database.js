@@ -35,7 +35,7 @@ const config = {
         destroyTimeoutMillis: 5000,   // Timeout pour détruire une connexion
         reapIntervalMillis: 1000,     // Intervalle de nettoyage
         createRetryIntervalMillis: 200, // Intervalle de retry
-        evictionRunIntervalMillis: 10000 // Nettoyage périodique des connexions inactives
+        // Note: evictionRunIntervalMillis n'est pas supporté par cette version de tarn
     }
 };
 
@@ -69,7 +69,7 @@ const erpConfig = {
         destroyTimeoutMillis: 5000,   // Timeout pour détruire une connexion
         reapIntervalMillis: 1000,     // Intervalle de nettoyage
         createRetryIntervalMillis: 200, // Intervalle de retry
-        evictionRunIntervalMillis: 10000 // Nettoyage périodique des connexions inactives
+        // Note: evictionRunIntervalMillis n'est pas supporté par cette version de tarn
     }
 };
 
