@@ -86,7 +86,7 @@ services:
 
 networks:
   sedi-network:
-    external: true
+    # Create the network if missing; reuse it if already present.
     name: sedi-tablette-network
 
 volumes:

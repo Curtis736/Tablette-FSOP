@@ -49,4 +49,5 @@ services:
 
 networks:
   sedi-tablette-network:
-    external: true
+    # Create the network if missing; reuse it if already present.
+    name: sedi-tablette-network
