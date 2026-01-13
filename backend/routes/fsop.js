@@ -265,14 +265,29 @@ router.post('/open', async (req, res) => {
         const fsopDir = path.join(rootLt, 'FSOP');
         console.log(`🔍 Vérification du répertoire FSOP: ${fsopDir}`);
         if (!(await safeIsDirectory(fsopDir))) {
-            console.error(`❌ Répertoire FSOP introuvable: ${fsopDir}`);
-            return res.status(422).json({ 
+            console.warn(`⚠️ Répertoire FSOP introuvable, création: ${fsopDir}`);
+            try {
+                await fs.mkdir(fsopDir, { recursive: true });
+            } catch (err) {
+                console.error(`❌ Impossible de créer le répertoire FSOP: ${fsopDir}`, err.message);
+                return res.status(422).json({
+                    error: 'FSOP_DIR_CREATE_FAILED',
+                    fsopDir,
+                    rootLt,
+                    message: `Impossible de créer le répertoire FSOP dans ${rootLt}`,
+                    details: process.env.NODE_ENV === 'development' ? err.message : undefined
+                });
+            }
+        }
+        if (!(await safeIsDirectory(fsopDir))) {
+            console.error(`❌ Répertoire FSOP introuvable après création: ${fsopDir}`);
+            return res.status(422).json({
                 error: 'FSOP_DIR_NOT_FOUND',
-                fsopDir: fsopDir,
-                rootLt: rootLt
+                fsopDir,
+                rootLt
             });
         }
-        console.log(`✅ Répertoire FSOP trouvé: ${fsopDir}`);
+        console.log(`✅ Répertoire FSOP prêt: ${fsopDir}`);
 
         // Les templates sont dans le répertoire centralisé (où se trouve l'Excel)
         // X:\Qualite\4_Public\A disposition\DOSSIER SMI\Formulaires\
@@ -405,6 +420,21 @@ router.post('/save', async (req, res) => {
         }
 
         const fsopDir = path.join(rootLt, 'FSOP');
+        if (!(await safeIsDirectory(fsopDir))) {
+            console.warn(`⚠️ Répertoire FSOP introuvable, création: ${fsopDir}`);
+            try {
+                await fs.mkdir(fsopDir, { recursive: true });
+            } catch (err) {
+                console.error(`❌ Impossible de créer le répertoire FSOP: ${fsopDir}`, err.message);
+                return res.status(422).json({
+                    error: 'FSOP_DIR_CREATE_FAILED',
+                    fsopDir,
+                    rootLt,
+                    message: `Impossible de créer le répertoire FSOP dans ${rootLt}`,
+                    details: process.env.NODE_ENV === 'development' ? err.message : undefined
+                });
+            }
+        }
         if (!(await safeIsDirectory(fsopDir))) {
             return res.status(422).json({ 
                 error: 'FSOP_DIR_NOT_FOUND',
