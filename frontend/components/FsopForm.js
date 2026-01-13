@@ -477,6 +477,21 @@ class FsopForm {
                     
                     // For other columns: make empty cells editable, keep filled cells as text (to avoid perturbing reading)
                     if (isBlank) {
+                        // ⚡ FIX: If this is the first table (tableIdx === 0) and first data row (rowIdx === 0) and second column (colIdx === 1),
+                        // and we have a launch number, make it an input (fallback detection)
+                        if (tableIdx === 0 && rowIdx === 0 && colIdx === 1 && this.formData.placeholders?.['{{LT}}']) {
+                            const launchValue = this.formData.placeholders['{{LT}}'] || '';
+                            console.log(`🔍 Fallback: Rendering launch number input at first table, row 0, col 1 with value: "${launchValue}"`);
+                            return `<input 
+                                type="text" 
+                                class="fsop-cell-input fsop-cell-input-text" 
+                                data-row="${rowIdx}" 
+                                data-col="${colIdx}" 
+                                data-launch-number="true"
+                                value="${this.escapeHtml(launchValue)}" 
+                                style="width: 100%; border: 1px solid #ccc; padding: 4px; background: white;"
+                            />`;
+                        }
                         const initial = saved ? this.escapeHtml(String(saved)) : '';
                         return `<div class="fsop-cell-edit" contenteditable="true" data-row="${rowIdx}" data-col="${colIdx}">${initial}</div>`;
                     }
