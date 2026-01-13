@@ -15,6 +15,31 @@ const { parseWordStructure } = require('../services/fsopWordParser');
 
 const router = express.Router();
 
+const DEFAULT_TEMPLATES_DIR_WIN = 'X:\\Qualite\\4_Public\\A disposition\\DOSSIER SMI\\Formulaires';
+const DEFAULT_TEMPLATES_XLSX_WIN = 'X:\\Qualite\\4_Public\\A disposition\\DOSSIER SMI\\Formulaires\\Liste des formulaires.xlsx';
+
+// Common Linux/container locations we support out of the box (VM/Docker).
+const DEFAULT_TEMPLATES_DIR_LINUX = '/mnt/templates/Qualite/4_Public/A disposition/DOSSIER SMI/Formulaires';
+const DEFAULT_TEMPLATES_DIR_LINUX_ALT = '/mnt/services/Qualite/4_Public/A disposition/DOSSIER SMI/Formulaires';
+const DEFAULT_TEMPLATES_XLSX_LINUX = '/mnt/templates/Qualite/4_Public/A disposition/DOSSIER SMI/Formulaires/Liste des formulaires.xlsx';
+const DEFAULT_TEMPLATES_XLSX_LINUX_ALT = '/mnt/services/Qualite/4_Public/A disposition/DOSSIER SMI/Formulaires/Liste des formulaires.xlsx';
+
+async function resolveFirstExistingDir(candidates) {
+    for (const p of candidates) {
+        if (!p) continue;
+        if (await safeIsDirectory(p)) return p;
+    }
+    return null;
+}
+
+async function resolveFirstExistingFile(candidates) {
+    for (const p of candidates) {
+        if (!p) continue;
+        if (await safeIsFile(p)) return p;
+    }
+    return null;
+}
+
 function normalizeTemplateCode(value) {
     const raw = String(value || '').trim().toUpperCase();
     // Accept "F469" only (MVP) – keep it strict to match template naming rules.
@@ -124,9 +149,27 @@ router.get('/debug/:launchNumber', async (req, res) => {
 
 router.get('/templates', async (req, res) => {
     try {
-        // Get Excel file path from environment variable or use default
-        const excelPath = process.env.FSOP_TEMPLATES_XLSX_PATH || 
-            'X:\\Qualite\\4_Public\\A disposition\\DOSSIER SMI\\Formulaires\\Liste des formulaires.xlsx';
+        // Excel templates list: try env, then common Linux paths, then Windows default.
+        const excelPath = await resolveFirstExistingFile([
+            process.env.FSOP_TEMPLATES_XLSX_PATH,
+            DEFAULT_TEMPLATES_XLSX_LINUX,
+            DEFAULT_TEMPLATES_XLSX_LINUX_ALT,
+            DEFAULT_TEMPLATES_XLSX_WIN
+        ]);
+
+        if (!excelPath) {
+            return res.status(503).json({
+                error: 'TEMPLATES_SOURCE_UNAVAILABLE',
+                message: 'Le fichier Excel des templates est introuvable ou inaccessible',
+                tried: [
+                    process.env.FSOP_TEMPLATES_XLSX_PATH,
+                    DEFAULT_TEMPLATES_XLSX_LINUX,
+                    DEFAULT_TEMPLATES_XLSX_LINUX_ALT,
+                    DEFAULT_TEMPLATES_XLSX_WIN
+                ].filter(Boolean),
+                hint: 'Définissez FSOP_TEMPLATES_XLSX_PATH (Linux: /mnt/templates/... ou /mnt/services/... ).'
+            });
+        }
 
         console.log(`📋 Lecture des templates depuis: ${excelPath}`);
         const result = await readTemplatesFromExcel(excelPath);
@@ -140,8 +183,8 @@ router.get('/templates', async (req, res) => {
             return res.status(503).json({ 
                 error: 'TEMPLATES_SOURCE_UNAVAILABLE',
                 message: 'Le fichier Excel des templates est introuvable ou inaccessible',
-                path: process.env.FSOP_TEMPLATES_XLSX_PATH || 'X:\\Qualite\\4_Public\\A disposition\\DOSSIER SMI\\Formulaires\\Liste des formulaires.xlsx',
-                hint: 'Vérifiez que le fichier existe et que le chemin est correct. Vous pouvez définir FSOP_TEMPLATES_XLSX_PATH dans votre fichier .env'
+                path: process.env.FSOP_TEMPLATES_XLSX_PATH || DEFAULT_TEMPLATES_XLSX_WIN,
+                hint: 'Vérifiez que le fichier existe et que le chemin est correct. Vous pouvez définir FSOP_TEMPLATES_XLSX_PATH (Linux: /mnt/templates/... ou /mnt/services/... ).'
             });
         }
         
@@ -167,15 +210,25 @@ router.get('/template/:templateCode/structure', async (req, res) => {
             });
         }
 
-        // Les templates sont dans le répertoire centralisé
-        const templatesBaseDir = process.env.FSOP_TEMPLATES_DIR || 
-            'X:\\Qualite\\4_Public\\A disposition\\DOSSIER SMI\\Formulaires';
-        
-        if (!(await safeIsDirectory(templatesBaseDir))) {
+        // Templates: try env, then common Linux paths, then Windows default.
+        const templatesBaseDir = await resolveFirstExistingDir([
+            process.env.FSOP_TEMPLATES_DIR,
+            DEFAULT_TEMPLATES_DIR_LINUX,
+            DEFAULT_TEMPLATES_DIR_LINUX_ALT,
+            DEFAULT_TEMPLATES_DIR_WIN
+        ]);
+
+        if (!templatesBaseDir) {
             return res.status(503).json({ 
                 error: 'TEMPLATES_DIR_NOT_FOUND',
                 message: 'Répertoire des templates introuvable',
-                templatesDir: templatesBaseDir
+                tried: [
+                    process.env.FSOP_TEMPLATES_DIR,
+                    DEFAULT_TEMPLATES_DIR_LINUX,
+                    DEFAULT_TEMPLATES_DIR_LINUX_ALT,
+                    DEFAULT_TEMPLATES_DIR_WIN
+                ].filter(Boolean),
+                hint: 'Définissez FSOP_TEMPLATES_DIR (Linux: /mnt/templates/... ou /mnt/services/... ).'
             });
         }
 
@@ -291,17 +344,26 @@ router.post('/open', async (req, res) => {
 
         // Les templates sont dans le répertoire centralisé (où se trouve l'Excel)
         // X:\Qualite\4_Public\A disposition\DOSSIER SMI\Formulaires\
-        const templatesBaseDir = process.env.FSOP_TEMPLATES_DIR || 
-            'X:\\Qualite\\4_Public\\A disposition\\DOSSIER SMI\\Formulaires';
+        const templatesBaseDir = await resolveFirstExistingDir([
+            process.env.FSOP_TEMPLATES_DIR,
+            DEFAULT_TEMPLATES_DIR_LINUX,
+            DEFAULT_TEMPLATES_DIR_LINUX_ALT,
+            DEFAULT_TEMPLATES_DIR_WIN
+        ]);
         
-        console.log(`🔍 Recherche du template ${templateCode} dans le répertoire centralisé: ${templatesBaseDir}`);
+        console.log(`🔍 Recherche du template ${templateCode} dans le répertoire centralisé: ${templatesBaseDir || '(introuvable)'}`);
         
-        if (!(await safeIsDirectory(templatesBaseDir))) {
-            console.error(`❌ Répertoire des templates introuvable: ${templatesBaseDir}`);
+        if (!templatesBaseDir) {
+            console.error(`❌ Répertoire des templates introuvable (tous chemins testés)`);
             return res.status(503).json({ 
                 error: 'TEMPLATES_DIR_NOT_FOUND',
-                templatesDir: templatesBaseDir,
-                hint: 'Définissez FSOP_TEMPLATES_DIR dans votre fichier .env pour pointer vers le répertoire contenant les templates'
+                tried: [
+                    process.env.FSOP_TEMPLATES_DIR,
+                    DEFAULT_TEMPLATES_DIR_LINUX,
+                    DEFAULT_TEMPLATES_DIR_LINUX_ALT,
+                    DEFAULT_TEMPLATES_DIR_WIN
+                ].filter(Boolean),
+                hint: 'Définissez FSOP_TEMPLATES_DIR (Linux: /mnt/templates/... ou /mnt/services/... ).'
             });
         }
 
@@ -443,8 +505,25 @@ router.post('/save', async (req, res) => {
         }
 
         // Find template
-        const templatesBaseDir = process.env.FSOP_TEMPLATES_DIR || 
-            'X:\\Qualite\\4_Public\\A disposition\\DOSSIER SMI\\Formulaires';
+        const templatesBaseDir = await resolveFirstExistingDir([
+            process.env.FSOP_TEMPLATES_DIR,
+            DEFAULT_TEMPLATES_DIR_LINUX,
+            DEFAULT_TEMPLATES_DIR_LINUX_ALT,
+            DEFAULT_TEMPLATES_DIR_WIN
+        ]);
+        if (!templatesBaseDir) {
+            return res.status(503).json({ 
+                error: 'TEMPLATES_DIR_NOT_FOUND',
+                message: 'Répertoire des templates introuvable',
+                tried: [
+                    process.env.FSOP_TEMPLATES_DIR,
+                    DEFAULT_TEMPLATES_DIR_LINUX,
+                    DEFAULT_TEMPLATES_DIR_LINUX_ALT,
+                    DEFAULT_TEMPLATES_DIR_WIN
+                ].filter(Boolean),
+                hint: 'Définissez FSOP_TEMPLATES_DIR (Linux: /mnt/templates/... ou /mnt/services/... ).'
+            });
+        }
         
         const depthLimit = Number.parseInt(process.env.FSOP_SEARCH_DEPTH || '3', 10);
         const searchDepth = Number.isFinite(depthLimit) && depthLimit >= 0 ? depthLimit : 3;
