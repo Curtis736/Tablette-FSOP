@@ -90,8 +90,8 @@ Système complet de gestion FSOP (Formulaires de Suivi Opérationnel) avec 3 com
 ## 4️⃣ DOCKER - Configuration Production
 
 ### Fichiers modifiés
-- `docker/docker-compose.production.yml` - Bind mount `/srv/services`
-- `docker/docker-compose.prod.yml` - Bind mount + variables d'environnement
+- `docker/docker-compose.production.yml` - Bind mount paramétrable (défaut: `/srv/services`)
+- `docker/docker-compose.prod.yml` - Bind mount paramétrable + variables d'environnement
 
 ### Variables d'environnement
 - `TRACEABILITY_DIR=/mnt/services/Tracabilite`
@@ -129,8 +129,14 @@ curl -X POST http://localhost:3001/api/fsop/open \
 ## 📝 NOTES IMPORTANTES
 
 ### Montage SMB (à faire sur VM)
-- Partage doit être monté sur `/srv/services`
-- Bind mount vers conteneur : `/mnt/services`
+- Cas standard : partage monté sur `/srv/services` → conteneur `/mnt/services`
+- Variante VM : si la VM a déjà `/mnt/partage_fsop` (racine traçabilité), utilisez `docker/env.vm.example` :
+
+```bash
+cd docker
+cp env.vm.example .env
+docker compose -f docker-compose.production.yml up -d
+```
 - Voir instructions dans email IT
 
 ### Conventions tags

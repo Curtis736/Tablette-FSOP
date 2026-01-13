@@ -3,14 +3,23 @@ services:
     image: docker-sedi-backend:latest
     pull_policy: never
     container_name: sedi-tablette-backend
+    # By default the image runs as user "node". If your host bind mount is root-owned (common with CIFS),
+    # you can override to run as root: BACKEND_USER=0:0 (in docker/.env).
+    user: ${BACKEND_USER:-node}
     ports:
       - "3001:3001"
     environment:
       - NODE_ENV=production
-      - TRACEABILITY_DIR=/mnt/services/Tracabilite
-      - FSOP_SEARCH_DEPTH=3
+      # Default container paths (override via docker/.env if needed)
+      - TRACEABILITY_DIR=${TRACEABILITY_DIR:-/mnt/services/Tracabilite}
+      - FSOP_SEARCH_DEPTH=${FSOP_SEARCH_DEPTH:-3}
+      # FSOP templates (override in docker/.env for Linux/VM paths)
+      - FSOP_TEMPLATES_DIR=${FSOP_TEMPLATES_DIR:-}
+      - FSOP_TEMPLATES_XLSX_PATH=${FSOP_TEMPLATES_XLSX_PATH:-}
     volumes:
-      - /srv/services:/mnt/services:rw
+      # Host mount -> container mount (defaults keep existing behavior)
+      # VM variant example: SERVICES_HOST_PATH=/mnt/partage_fsop and SERVICES_CONTAINER_PATH=/mnt/services/Tracabilite
+      - ${SERVICES_HOST_PATH:-/srv/services}:${SERVICES_CONTAINER_PATH:-/mnt/services}:rw
       - ../backend/logs:/app/logs
     networks:
       - sedi-tablette-network

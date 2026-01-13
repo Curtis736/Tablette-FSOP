@@ -152,15 +152,25 @@ Implémentation complète d'un système FSOP en 3 composants :
 **Volumes** :
 ```yaml
 volumes:
-  - /srv/services:/mnt/services:rw
+  - ${SERVICES_HOST_PATH:-/srv/services}:${SERVICES_CONTAINER_PATH:-/mnt/services}:rw
   - ../backend/logs:/app/logs
 ```
 
 **Variables d'environnement** :
 ```yaml
 environment:
-  TRACEABILITY_DIR: /mnt/services/Tracabilite
-  FSOP_SEARCH_DEPTH: "3"
+  TRACEABILITY_DIR: ${TRACEABILITY_DIR:-/mnt/services/Tracabilite}
+  FSOP_SEARCH_DEPTH: ${FSOP_SEARCH_DEPTH:-3}
+```
+
+### Variante VM (montage existant sur /mnt/partage_fsop)
+
+Si la VM a déjà un montage direct sur la traçabilité (ex: `/mnt/partage_fsop`), utilisez le fichier `docker/env.vm.example` :
+
+```bash
+cd docker
+cp env.vm.example .env
+docker compose -f docker-compose.production.yml up -d
 ```
 
 ---

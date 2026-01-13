@@ -649,8 +649,11 @@ La fonctionnalité FSOP permet aux opérateurs de générer et ouvrir des docume
 
 #### Linux (VM Ubuntu + Docker)
 - **Montage SMB** : Le partage est monté sur la VM hôte, puis bind mount vers le conteneur
-- **Chemin monté** : `/srv/services` (sur la VM hôte)
-- **Chemin dans conteneur** : `/mnt/services` (bind mount depuis `/srv/services`)
+- **Cas standard (recommandé)** :
+  - **Chemin monté** : `/srv/services` (sur la VM hôte)
+  - **Chemin dans conteneur** : `/mnt/services` (bind mount depuis `/srv/services`)
+- **Variante VM (déjà monté ailleurs)** :
+  - Si la VM a déjà un montage direct sur la traçabilité (ex: `/mnt/partage_fsop`), on garde ce montage et on adapte Docker via variables (`SERVICES_HOST_PATH` / `SERVICES_CONTAINER_PATH`) pour exposer la traçabilité au bon endroit dans le conteneur.
 
 #### Chemins FSOP (Règles bloquantes)
 
@@ -737,16 +740,26 @@ ls /srv/services
 
 ### Configuration Docker Compose
 
-Dans `docker/docker-compose.production.yml` (service backend), ajouter :
+Dans `docker/docker-compose.production.yml` (service backend), utiliser un bind mount + variables :
 
 ```yaml
 volumes:
-  - /srv/services:/mnt/services:rw
+  - ${SERVICES_HOST_PATH:-/srv/services}:${SERVICES_CONTAINER_PATH:-/mnt/services}:rw
   - ../backend/logs:/app/logs
 
 environment:
-  TRACEABILITY_DIR: /mnt/services/Tracabilite
-  FSOP_SEARCH_DEPTH: "3"
+  TRACEABILITY_DIR: ${TRACEABILITY_DIR:-/mnt/services/Tracabilite}
+  FSOP_SEARCH_DEPTH: ${FSOP_SEARCH_DEPTH:-3}
+```
+
+#### Variante VM (montage existant sur /mnt/partage_fsop)
+
+Si la VM a déjà `/mnt/partage_fsop` qui pointe sur la racine de la traçabilité (contenu: dossiers produits / LT...), ne changez pas le SMB. Adaptez Docker :
+
+```bash
+cd docker
+cp env.vm.example .env
+docker compose -f docker-compose.production.yml up -d
 ```
 
 ### Convention des templates
