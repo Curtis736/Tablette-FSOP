@@ -372,8 +372,34 @@ class FsopForm {
 
                 const cellText = (cell?.text || '').trim();
                 const isBlank = !cellText || /^_{3,}$/.test(cellText);
+                
+                // ⚡ FIX: Detect if this column is for "Numéro lancement" by checking:
+                // 1. If any header cell in this column contains "Numéro lancement"
+                // 2. If any cell in the first data row contains "Numéro lancement"
+                // 3. If the cell text itself contains "Numéro lancement" or "{{LT}}"
+                const checkIfLaunchNumberColumn = () => {
+                    // Check header cells in this column
+                    if (head[colIdx] && /numéro\s*lancement/i.test(String(head[colIdx]?.text || ''))) {
+                        return true;
+                    }
+                    // Check first data row if available
+                    if (body.length > 0 && body[0] && body[0][colIdx]) {
+                        const firstRowCell = body[0][colIdx];
+                        if (/numéro\s*lancement/i.test(String(firstRowCell?.text || ''))) {
+                            return true;
+                        }
+                    }
+                    // Check current cell
+                    if (/numéro\s*lancement/i.test(cellText) || cellText.includes('{{LT}}')) {
+                        return true;
+                    }
+                    return false;
+                };
+                
+                const isLaunchNumberColumn = checkIfLaunchNumberColumn();
+                
                 const content = (() => {
-                    // Header cells are never editable
+                    // Header cells are never editable (except for placeholders)
                     if (isHeader) {
                         return cellText ? renderTextWithInputs(cellText) : `<span class="fsop-cell-empty"></span>`;
                     }
@@ -396,16 +422,25 @@ class FsopForm {
                         return `<input class="fsop-cell-input fsop-cell-input-time" type="time" data-row="${rowIdx}" data-col="${colIdx}"${valueAttr} />`;
                     }
 
-                    // ⚡ FIX: Special handling for "Numéro lancement" - always make it editable
-                    const isLaunchNumberField = /numéro\s*lancement/i.test(cellText) || 
-                                                /numéro\s*lancement/i.test(String(head[colIdx]?.text || '')) ||
-                                                cellText.includes('{{LT}}');
+                    // ⚡ FIX: Special handling for "Numéro lancement" column - ALWAYS make it editable
+                    // Use a proper input field instead of contenteditable for better UX
+                    if (isLaunchNumberColumn) {
+                        const launchValue = saved || this.formData.placeholders?.['{{LT}}'] || '';
+                        return `<input 
+                            type="text" 
+                            class="fsop-cell-input fsop-cell-input-text" 
+                            data-row="${rowIdx}" 
+                            data-col="${colIdx}" 
+                            data-launch-number="true"
+                            value="${this.escapeHtml(launchValue)}" 
+                            style="width: 100%; border: 1px solid #ccc; padding: 4px;"
+                        />`;
+                    }
                     
                     // For other columns: make empty cells editable, keep filled cells as text (to avoid perturbing reading)
-                    if (isBlank || isLaunchNumberField) {
-                        const initial = saved ? this.escapeHtml(String(saved)) : 
-                                       (isLaunchNumberField ? (this.formData.placeholders?.['{{LT}}'] || '') : '');
-                        return `<div class="fsop-cell-edit" contenteditable="true" data-row="${rowIdx}" data-col="${colIdx}" ${isLaunchNumberField ? 'data-launch-number="true"' : ''}>${initial}</div>`;
+                    if (isBlank) {
+                        const initial = saved ? this.escapeHtml(String(saved)) : '';
+                        return `<div class="fsop-cell-edit" contenteditable="true" data-row="${rowIdx}" data-col="${colIdx}">${initial}</div>`;
                     }
 
                     // If we have a saved value for a non-empty cell, prefer showing it (e.g. when re-opening a saved FSOP)
