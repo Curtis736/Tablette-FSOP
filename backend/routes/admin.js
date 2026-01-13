@@ -1870,7 +1870,7 @@ router.get('/operators/:operatorCode/operations', async (req, res) => {
                 h.Ident,
                 h.DateCreation,
                 h.CodeLanctImprod,
-                COALESCE(phase_latest.Phase, h.Phase, 'PRODUCTION') as Phase,
+                COALESCE(h.Phase, 'PRODUCTION') as Phase,
                 h.OperatorCode,
                 h.CodeRubrique,
                 h.Statut,
@@ -1887,20 +1887,7 @@ router.get('/operators/:operatorCode/operations', async (req, res) => {
                 ON t.OperatorCode = h.OperatorCode 
                 AND t.LancementCode = h.CodeLanctImprod
                 AND CAST(t.DateCreation AS DATE) = CAST(h.DateCreation AS DATE)
-            -- ⚡ OPTIMISATION : Sous-requête dérivée pour la Phase (plus efficace qu'une corrélée)
-            LEFT JOIN (
-                SELECT 
-                    CodeLanctImprod,
-                    Phase
-                FROM (
-                    SELECT 
-                        CodeLanctImprod,
-                        Phase,
-                        ROW_NUMBER() OVER (PARTITION BY CodeLanctImprod ORDER BY NoEnreg DESC) as rn
-                    FROM [SEDI_ERP].[GPSQL].[abetemps]
-                ) ranked
-                WHERE rn = 1
-            ) phase_latest ON phase_latest.CodeLanctImprod = h.CodeLanctImprod
+            -- ⚡ OPTIMISATION : Utiliser h.Phase directement (plus simple et fiable)
             WHERE h.OperatorCode = @operatorCode
               AND (t.StatutTraitement IS NULL OR t.StatutTraitement != 'T')
             ORDER BY h.DateCreation DESC
