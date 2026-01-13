@@ -234,11 +234,13 @@ jobs:
 
   deploy:
     name: Deploy to serveurproduction
-    runs-on: [self-hosted, Linux, X64]
+    # Le déploiement se fait via SSH vers le serveur de prod, donc un runner GitHub-hosted suffit.
+    # Cela évite les jobs "en attente" / "skipped" liés à un runner self-hosted indisponible.
+    runs-on: ubuntu-latest
     needs: [docker-build, notify]
     # Déployer automatiquement sur la branche principale.
     # (Historiquement, le repo utilisait "master", mais il est maintenant sur "main".)
-    if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master'
+    if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master')
     steps:
       - name: Checkout workflow files
         uses: actions/checkout@v4
@@ -252,7 +254,17 @@ jobs:
           key: ${{ secrets.PROD_SSH_KEY }}
           passphrase: ${{ secrets.PROD_SSH_PASSPHRASE }}
           script: |
-            cd tablette_better
+            set -e
+            # Dossier de déploiement sur le serveur :
+            # - par défaut: nom du repo GitHub (ex: Tablette-FSOP)
+            # - override possible via secret PROD_REPO_DIR (ex: /opt/tablette_better)
+            REPO_DIR="${{ secrets.PROD_REPO_DIR }}"
+            if [ -z "$REPO_DIR" ]; then
+              REPO_DIR="${{ github.event.repository.name }}"
+            fi
+
+            echo "📁 Repo dir: $REPO_DIR"
+            cd "$REPO_DIR"
 
             echo "📦 Gestion des modifications locales..."
             git stash || true
