@@ -253,7 +253,9 @@ class FsopForm {
             let out = this.escapeHtml(text);
             out = out.replace(/\{\{([A-Z0-9_]+)\}\}/g, (_m, tag) => {
                 const placeholder = `{{${tag}}}`;
-                const val = this.formData.placeholders?.[placeholder] || '';
+                // ⚡ FIX: Ensure {{LT}} gets the launch number value
+                const val = this.formData.placeholders?.[placeholder] || 
+                           (tag === 'LT' ? (this.formData.placeholders?.['{{LT}}'] || '') : '');
                 return `<input class="fsop-inline-input" type="text" data-placeholder="${placeholder}" value="${this.escapeHtml(val)}" />`;
             });
             return out;
@@ -394,10 +396,16 @@ class FsopForm {
                         return `<input class="fsop-cell-input fsop-cell-input-time" type="time" data-row="${rowIdx}" data-col="${colIdx}"${valueAttr} />`;
                     }
 
+                    // ⚡ FIX: Special handling for "Numéro lancement" - always make it editable
+                    const isLaunchNumberField = /numéro\s*lancement/i.test(cellText) || 
+                                                /numéro\s*lancement/i.test(String(head[colIdx]?.text || '')) ||
+                                                cellText.includes('{{LT}}');
+                    
                     // For other columns: make empty cells editable, keep filled cells as text (to avoid perturbing reading)
-                    if (isBlank) {
-                        const initial = saved ? this.escapeHtml(String(saved)) : '';
-                        return `<div class="fsop-cell-edit" contenteditable="true" data-row="${rowIdx}" data-col="${colIdx}">${initial}</div>`;
+                    if (isBlank || isLaunchNumberField) {
+                        const initial = saved ? this.escapeHtml(String(saved)) : 
+                                       (isLaunchNumberField ? (this.formData.placeholders?.['{{LT}}'] || '') : '');
+                        return `<div class="fsop-cell-edit" contenteditable="true" data-row="${rowIdx}" data-col="${colIdx}" ${isLaunchNumberField ? 'data-launch-number="true"' : ''}>${initial}</div>`;
                     }
 
                     // If we have a saved value for a non-empty cell, prefer showing it (e.g. when re-opening a saved FSOP)
