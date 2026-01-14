@@ -310,7 +310,9 @@ class AdminPage {
                     EventsCount: op.events || 0,
                     Phase: op.phase || 'PRODUCTION',
                     CodeRubrique: op.operatorId,
-                    StatutTraitement: null,
+                    StatutTraitement: null, // Statut de consolidation/transfert (null = non traité)
+                    Status: op.status || 'En cours', // Statut de l'opération (Terminé, En cours, En pause)
+                    StatusCode: op.statusCode || 'EN_COURS', // Code du statut de l'opération
                     DateCreation: today,
                     CalculatedAt: null,
                     CalculationMethod: null,
@@ -943,10 +945,24 @@ class AdminPage {
             const tempsId = operation.TempsId;
             row.setAttribute('data-operation-id', tempsId);
 
-            const statutCode = (operation.StatutTraitement === null || operation.StatutTraitement === undefined)
-                ? 'NULL'
-                : String(operation.StatutTraitement).toUpperCase();
-            const statutLabel = this.getMonitoringStatusText(statutCode);
+            // Utiliser le statut de l'opération (Status/StatusCode) si disponible
+            // Si une opération a une heure de fin, elle est considérée comme TERMINÉ
+            let statutCode, statutLabel;
+            if (operation.StatusCode && operation.Status) {
+                // Statut de l'opération (Terminé, En cours, En pause)
+                statutCode = operation.StatusCode.toUpperCase().replace(/[^A-Z0-9_]/g, '_');
+                statutLabel = operation.Status;
+            } else if (operation.HeureFin && operation.HeureFin.trim() !== '') {
+                // Si l'opération a une heure de fin, elle est terminée
+                statutCode = 'TERMINE';
+                statutLabel = 'Terminé';
+            } else {
+                // Statut de traitement/consolidation (NON TRAITÉ, VALIDÉ, etc.)
+                statutCode = (operation.StatutTraitement === null || operation.StatutTraitement === undefined)
+                    ? 'NULL'
+                    : String(operation.StatutTraitement).toUpperCase();
+                statutLabel = this.getMonitoringStatusText(statutCode);
+            }
             
             row.innerHTML = `
                 <td>${operation.OperatorName || operation.OperatorCode || '-'}</td>

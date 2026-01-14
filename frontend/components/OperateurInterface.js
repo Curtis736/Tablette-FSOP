@@ -1114,7 +1114,22 @@ class OperateurInterface {
             
         } catch (error) {
             console.error('Erreur:', error);
-            this.notificationManager.error(error.message || 'Erreur de connexion');
+            
+            // Si le lancement est déjà terminé, c'est normal - on affiche juste un message informatif
+            if (error.message && error.message.includes('déjà terminé')) {
+                this.notificationManager.warning('Ce lancement est déjà terminé.');
+                // Réinitialiser quand même l'interface
+                this.stopTimer();
+                this.resetControls();
+                this.statusDisplay.textContent = 'Terminé';
+                this.lancementInput.value = '';
+                this.lancementInput.disabled = false;
+                this.lancementInput.placeholder = "Saisir un nouveau code de lancement...";
+                this.controlsSection.style.display = 'none';
+                this.loadOperatorHistory();
+            } else {
+                this.notificationManager.error(error.message || 'Erreur de connexion');
+            }
         }
     }
 
