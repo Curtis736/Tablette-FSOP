@@ -530,8 +530,30 @@ function processLancementEventsWithPauses(events) {
         );
         const lastDebutEvent = debutEvents[0];
         
-        // Si l'événement DEBUT a un statut explicite (modifié manuellement), l'utiliser en priorité
-        if (lastDebutEvent && lastDebutEvent.Statut && lastDebutEvent.Statut.trim() !== '') {
+        // Trouver le dernier événement pour déterminer le statut actuel (priorité sur le statut de DEBUT)
+        const lastEvent = groupEvents[groupEvents.length - 1];
+        
+        // PRIORITÉ 1 : Vérifier le dernier événement pour déterminer le statut réel
+        if (finEvent) {
+            currentStatus = 'TERMINE';
+            statusLabel = 'Terminé';
+        } else if (lastEvent && lastEvent.Ident === 'PAUSE') {
+            // Si le dernier événement est PAUSE, l'opération est en pause (priorité absolue)
+            currentStatus = 'EN_PAUSE';
+            statusLabel = 'En pause';
+            console.log(`✅ Statut déterminé depuis dernier événement PAUSE: ${currentStatus}`);
+        } else if (lastEvent && lastEvent.Ident === 'REPRISE') {
+            // Si le dernier événement est REPRISE, l'opération est en cours
+            currentStatus = 'EN_COURS';
+            statusLabel = 'En cours';
+            console.log(`✅ Statut déterminé depuis dernier événement REPRISE: ${currentStatus}`);
+        } else if (pauseEvents.length > repriseEvents.length) {
+            // Si il y a plus de pauses que de reprises, l'opération est en pause
+            currentStatus = 'EN_PAUSE';
+            statusLabel = 'En pause';
+            console.log(`✅ Statut déterminé depuis nombre de pauses: ${currentStatus}`);
+        } else if (lastDebutEvent && lastDebutEvent.Statut && lastDebutEvent.Statut.trim() !== '') {
+            // Utiliser le statut de DEBUT seulement si aucun événement récent ne l'a modifié
             const dbStatus = lastDebutEvent.Statut.toUpperCase().trim();
             const statusMap = {
                 'EN_COURS': 'En cours',
@@ -544,32 +566,18 @@ function processLancementEventsWithPauses(events) {
                 'FORCE_STOP': 'Arrêt forcé'
             };
             
-            // Utiliser le statut de la base de données si c'est un statut valide
             if (statusMap[dbStatus] || dbStatus === 'TERMINE' || dbStatus === 'TERMINÉ') {
                 currentStatus = dbStatus;
                 statusLabel = statusMap[dbStatus] || (dbStatus === 'TERMINE' || dbStatus === 'TERMINÉ' ? 'Terminé' : dbStatus);
                 console.log(`✅ Utilisation du statut de la base de données depuis événement DEBUT: ${currentStatus} (${statusLabel})`);
-                console.log(`🔍 Événement DEBUT utilisé:`, {
-                    NoEnreg: lastDebutEvent.NoEnreg,
-                    Statut: lastDebutEvent.Statut,
-                    DateCreation: lastDebutEvent.DateCreation
-                });
-            }
-        }
-        
-        // Si aucun statut explicite n'a été trouvé sur l'événement DEBUT, calculer à partir des événements
-        if (!lastDebutEvent || !lastDebutEvent.Statut || lastDebutEvent.Statut.trim() === '') {
-            if (finEvent) {
-                currentStatus = 'TERMINE';
-                statusLabel = 'Terminé';
-            } else if (pauseEvents.length > 0 && repriseEvents.length === 0) {
-                // En pause seulement si il y a des pauses sans reprise
-                currentStatus = 'EN_PAUSE';
-                statusLabel = 'En pause';
             } else {
                 currentStatus = 'EN_COURS';
                 statusLabel = 'En cours';
             }
+        } else {
+            // Par défaut, en cours
+            currentStatus = 'EN_COURS';
+            statusLabel = 'En cours';
         }
         
         // Créer UNE SEULE ligne par opérateur/lancement (pas de doublons)

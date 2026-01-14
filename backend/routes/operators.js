@@ -714,12 +714,13 @@ router.post('/pause', async (req, res) => {
         const { operatorId, lancementCode } = req.body;
         
         // 🔒 VÉRIFICATION DE SÉCURITÉ : S'assurer que l'opérateur possède ce lancement
+        // Vérifier qu'il existe un événement DEBUT pour ce lancement et cet opérateur aujourd'hui
         const ownershipCheck = `
             SELECT TOP 1 OperatorCode, Ident, Statut
             FROM [SEDI_APP_INDEPENDANTE].[dbo].[ABHISTORIQUE_OPERATEURS]
             WHERE CodeLanctImprod = @lancementCode
               AND OperatorCode = @operatorId
-              AND Statut IN ('EN_COURS', 'EN_PAUSE')
+              AND Ident = 'DEBUT'
               AND CAST(DateCreation AS DATE) = CAST(GETDATE() AS DATE)
             ORDER BY DateCreation DESC
         `;
@@ -729,6 +730,24 @@ router.post('/pause', async (req, res) => {
                 success: false,
                 error: `Vous ne pouvez pas mettre en pause ce lancement. Il ne vous appartient pas ou n'est pas en cours.`,
                 security: 'DATA_OWNERSHIP_VIOLATION'
+            });
+        }
+        
+        // Vérifier que le dernier événement n'est pas déjà PAUSE (pour éviter les doublons)
+        const lastEventCheck = `
+            SELECT TOP 1 Ident, Statut
+            FROM [SEDI_APP_INDEPENDANTE].[dbo].[ABHISTORIQUE_OPERATEURS]
+            WHERE CodeLanctImprod = @lancementCode
+              AND OperatorCode = @operatorId
+              AND CAST(DateCreation AS DATE) = CAST(GETDATE() AS DATE)
+            ORDER BY DateCreation DESC, NoEnreg DESC
+        `;
+        const lastEvent = await executeQuery(lastEventCheck, { operatorId, lancementCode });
+        if (lastEvent.length > 0 && (lastEvent[0].Ident === 'PAUSE' || lastEvent[0].Statut === 'PAUSE' || lastEvent[0].Statut === 'EN_PAUSE')) {
+            return res.status(403).json({
+                success: false,
+                error: `Ce lancement est déjà en pause.`,
+                security: 'ALREADY_PAUSED'
             });
         }
         
@@ -791,12 +810,13 @@ router.post('/resume', async (req, res) => {
         const { operatorId, lancementCode } = req.body;
         
         // 🔒 VÉRIFICATION DE SÉCURITÉ : S'assurer que l'opérateur possède ce lancement
+        // Vérifier qu'il existe un événement DEBUT pour ce lancement et cet opérateur aujourd'hui
         const ownershipCheck = `
             SELECT TOP 1 OperatorCode, Ident, Statut
             FROM [SEDI_APP_INDEPENDANTE].[dbo].[ABHISTORIQUE_OPERATEURS]
             WHERE CodeLanctImprod = @lancementCode
               AND OperatorCode = @operatorId
-              AND Statut IN ('EN_COURS', 'EN_PAUSE')
+              AND Ident = 'DEBUT'
               AND CAST(DateCreation AS DATE) = CAST(GETDATE() AS DATE)
             ORDER BY DateCreation DESC
         `;
@@ -806,6 +826,24 @@ router.post('/resume', async (req, res) => {
                 success: false,
                 error: `Vous ne pouvez pas reprendre ce lancement. Il ne vous appartient pas ou n'est pas en pause.`,
                 security: 'DATA_OWNERSHIP_VIOLATION'
+            });
+        }
+        
+        // Vérifier que le dernier événement est bien PAUSE (pour permettre la reprise)
+        const lastEventCheck = `
+            SELECT TOP 1 Ident, Statut
+            FROM [SEDI_APP_INDEPENDANTE].[dbo].[ABHISTORIQUE_OPERATEURS]
+            WHERE CodeLanctImprod = @lancementCode
+              AND OperatorCode = @operatorId
+              AND CAST(DateCreation AS DATE) = CAST(GETDATE() AS DATE)
+            ORDER BY DateCreation DESC, NoEnreg DESC
+        `;
+        const lastEvent = await executeQuery(lastEventCheck, { operatorId, lancementCode });
+        if (lastEvent.length === 0 || (lastEvent[0].Ident !== 'PAUSE' && lastEvent[0].Statut !== 'PAUSE' && lastEvent[0].Statut !== 'EN_PAUSE')) {
+            return res.status(403).json({
+                success: false,
+                error: `Vous ne pouvez pas reprendre ce lancement. Il n'est pas en pause.`,
+                security: 'INVALID_STATE'
             });
         }
         
@@ -868,12 +906,13 @@ router.post('/stop', async (req, res) => {
         const { operatorId, lancementCode } = req.body;
         
         // 🔒 VÉRIFICATION DE SÉCURITÉ : S'assurer que l'opérateur possède ce lancement
+        // Vérifier qu'il existe un événement DEBUT pour ce lancement et cet opérateur aujourd'hui
         const ownershipCheck = `
             SELECT TOP 1 OperatorCode, Ident, Statut
             FROM [SEDI_APP_INDEPENDANTE].[dbo].[ABHISTORIQUE_OPERATEURS]
             WHERE CodeLanctImprod = @lancementCode
               AND OperatorCode = @operatorId
-              AND Statut IN ('EN_COURS', 'EN_PAUSE')
+              AND Ident = 'DEBUT'
               AND CAST(DateCreation AS DATE) = CAST(GETDATE() AS DATE)
             ORDER BY DateCreation DESC
         `;
@@ -883,6 +922,24 @@ router.post('/stop', async (req, res) => {
                 success: false,
                 error: `Vous ne pouvez pas terminer ce lancement. Il ne vous appartient pas ou n'est pas en cours.`,
                 security: 'DATA_OWNERSHIP_VIOLATION'
+            });
+        }
+        
+        // Vérifier qu'il n'y a pas déjà un événement FIN (pour éviter les doublons)
+        const finCheck = `
+            SELECT TOP 1 Ident
+            FROM [SEDI_APP_INDEPENDANTE].[dbo].[ABHISTORIQUE_OPERATEURS]
+            WHERE CodeLanctImprod = @lancementCode
+              AND OperatorCode = @operatorId
+              AND Ident = 'FIN'
+              AND CAST(DateCreation AS DATE) = CAST(GETDATE() AS DATE)
+        `;
+        const finExists = await executeQuery(finCheck, { operatorId, lancementCode });
+        if (finExists.length > 0) {
+            return res.status(403).json({
+                success: false,
+                error: `Ce lancement est déjà terminé.`,
+                security: 'ALREADY_FINISHED'
             });
         }
         
