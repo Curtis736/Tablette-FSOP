@@ -1001,17 +1001,30 @@ class AdminPage {
     // ===== Transfert: choix au moment du transfert =====
     async handleTransfer() {
         try {
-            // Récupérer les lignes VALIDÉES (StatutTraitement = 'O') du jour
             const today = new Date().toISOString().split('T')[0];
-            const validated = await this.apiService.getMonitoringTemps({ date: today, statutTraitement: 'O' });
-            const records = validated?.data || [];
+            
+            // Récupérer toutes les opérations du jour
+            const allRecords = await this.apiService.getMonitoringTemps({ date: today });
+            const allRecordsData = allRecords?.data || [];
+            
+            // Filtrer pour ne garder que les opérations terminées (avec heure de fin) qui ne sont pas déjà transférées
+            const terminatedRecords = allRecordsData.filter(op => {
+                // Avoir une heure de fin valide
+                const hasEndTime = op.EndTime && op.EndTime.trim() !== '' && op.EndTime !== '-';
+                // Ne pas être déjà transférée (StatutTraitement !== 'T')
+                const notTransferred = op.StatutTraitement !== 'T';
+                return hasEndTime && notTransferred;
+            });
 
-            if (records.length === 0) {
-                this.notificationManager.warning('Aucune ligne VALIDÉE à transférer');
+            if (terminatedRecords.length === 0) {
+                this.notificationManager.warning('Aucune opération TERMINÉE à transférer');
                 return;
             }
-
-            const transferAll = confirm(`Transférer TOUTES les lignes VALIDÉES (${records.length}) ?\n\nOK = tout transférer\nAnnuler = choisir les lignes`);
+            
+            const records = terminatedRecords;
+            
+            const message = `Transférer ${records.length} opération(s) TERMINÉE(S) ?\n\nOK = tout transférer\nAnnuler = choisir les lignes`;
+            const transferAll = confirm(message);
             if (transferAll) {
                 const triggerEdiJob = confirm('Déclencher EDI_JOB après transfert ?');
                 const ids = records.map(r => r.TempsId).filter(Boolean);
