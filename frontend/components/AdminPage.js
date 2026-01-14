@@ -411,10 +411,10 @@ class AdminPage {
                 consolidatedOps = result.data || [];
             }
             
-            // Si aucun enregistrement consolidé et pas de filtre de statut, charger aussi depuis ABHISTORIQUE_OPERATEURS
-            // (les opérations non consolidées)
-            if (consolidatedOps.length === 0 && !statutTraitement) {
-                console.log('📊 Aucun enregistrement consolidé trouvé, chargement depuis ABHISTORIQUE_OPERATEURS...');
+            // Toujours charger aussi depuis ABHISTORIQUE_OPERATEURS pour avoir toutes les opérations
+            // (même celles non consolidées ou terminées)
+            if (!statutTraitement) {
+                console.log('📊 Chargement complémentaire depuis ABHISTORIQUE_OPERATEURS...');
                 try {
                     const adminData = await this.apiService.getAdminData(date);
                     if (adminData && adminData.operations && adminData.operations.length > 0) {
@@ -451,8 +451,15 @@ class AdminPage {
                             );
                         }
                         
-                        consolidatedOps = filteredUnconsolidated;
-                        console.log(`📊 ${filteredUnconsolidated.length} opérations non consolidées chargées depuis ABHISTORIQUE_OPERATEURS`);
+                        // Fusionner avec les opérations consolidées, en évitant les doublons
+                        // (si une opération existe déjà dans consolidatedOps, ne pas l'ajouter)
+                        const existingLancementCodes = new Set(consolidatedOps.map(op => `${op.OperatorCode}_${op.LancementCode}`));
+                        const newOps = filteredUnconsolidated.filter(op => 
+                            !existingLancementCodes.has(`${op.OperatorCode}_${op.LancementCode}`)
+                        );
+                        
+                        consolidatedOps = [...consolidatedOps, ...newOps];
+                        console.log(`📊 ${newOps.length} opérations supplémentaires chargées depuis ABHISTORIQUE_OPERATEURS (total: ${consolidatedOps.length})`);
                     }
                 } catch (error) {
                     console.error('❌ Erreur lors du chargement des opérations non consolidées:', error);
