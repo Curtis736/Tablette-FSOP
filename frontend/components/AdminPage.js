@@ -277,14 +277,12 @@ class AdminPage {
                 setTimeout(() => reject(new Error('Timeout: La requête a pris trop de temps')), 30000)
             );
             
-            const dataPromise = Promise.all([
-                this.apiService.getAdminData(today),
-                this.apiService.getConnectedOperators(),
-                this.loadMonitoringRecords(today)
-            ]);
-            
+            // Charger les données en parallèle
             const [adminData, operatorsData] = await Promise.race([
-                dataPromise,
+                Promise.all([
+                    this.apiService.getAdminData(today),
+                    this.apiService.getConnectedOperators()
+                ]),
                 timeoutPromise
             ]);
             
@@ -293,13 +291,12 @@ class AdminPage {
             
             console.log('DONNEES BRUTES:', data);
             console.log('OPERATEURS CONNECTES:', operatorsData);
-            console.log('OPERATIONS APRES loadMonitoringRecords:', this.operations.length);
             
-            // Si loadMonitoringRecords n'a pas chargé d'opérations, utiliser celles de getAdminData
-            if (this.operations.length === 0 && data && data.operations && data.operations.length > 0) {
-                console.log('📊 Aucune opération dans loadMonitoringRecords, utilisation des opérations de getAdminData');
-                // Convertir les opérations admin au format monitoring
-                const adminOps = data.operations.map(op => ({
+            // Convertir d'abord les opérations de getAdminData au format monitoring
+            let adminOps = [];
+            if (data && data.operations && data.operations.length > 0) {
+                console.log('📊 Conversion des opérations de getAdminData au format monitoring');
+                adminOps = data.operations.map(op => ({
                     TempsId: op.id,
                     OperatorCode: op.operatorId,
                     OperatorName: op.operatorName,
@@ -319,9 +316,34 @@ class AdminPage {
                     CalculationMethod: null,
                     _isUnconsolidated: true
                 }));
-                this.operations = adminOps;
-                console.log(`📊 ${adminOps.length} opérations chargées depuis getAdminData`);
+                console.log(`📊 ${adminOps.length} opérations converties depuis getAdminData`);
             }
+            
+            // Charger les opérations de monitoring (peut être vide)
+            await this.loadMonitoringRecords(today);
+            const monitoringOps = this.operations || [];
+            console.log('OPERATIONS APRES loadMonitoringRecords:', monitoringOps.length);
+            
+            // Fusionner les opérations : monitoring en priorité (consolidées), puis admin (non consolidées)
+            // En évitant les doublons basés sur OperatorCode_LancementCode
+            const mergedOpsMap = new Map();
+            
+            // D'abord ajouter les opérations de monitoring (consolidées)
+            monitoringOps.forEach(op => {
+                const key = `${op.OperatorCode}_${op.LancementCode}`;
+                mergedOpsMap.set(key, op);
+            });
+            
+            // Ensuite ajouter les opérations admin qui n'existent pas déjà
+            adminOps.forEach(op => {
+                const key = `${op.OperatorCode}_${op.LancementCode}`;
+                if (!mergedOpsMap.has(key)) {
+                    mergedOpsMap.set(key, op);
+                }
+            });
+            
+            this.operations = Array.from(mergedOpsMap.values());
+            console.log(`📊 Total opérations fusionnées: ${this.operations.length} (monitoring: ${monitoringOps.length}, admin: ${adminOps.length})`);
             
             // Réinitialiser le compteur d'erreurs en cas de succès
             this.consecutiveErrors = 0;
