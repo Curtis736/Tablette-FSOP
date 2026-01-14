@@ -998,7 +998,7 @@ class AdminPage {
         return map[code] || code;
     }
 
-    // ===== Transfert: choix au moment du transfert =====
+    // ===== Transfert: logique simplifiée - si Terminé → éligible =====
     async handleTransfer() {
         try {
             const today = new Date().toISOString().split('T')[0];
@@ -1007,13 +1007,14 @@ class AdminPage {
             const allRecords = await this.apiService.getMonitoringTemps({ date: today });
             const allRecordsData = allRecords?.data || [];
             
-            // Filtrer pour ne garder que les opérations terminées (avec heure de fin) qui ne sont pas déjà transférées
+            // Filtrer uniquement les opérations TERMINÉES (avec EndTime valide)
+            // Logique simple : si EndTime existe et n'est pas vide → Terminé → éligible au transfert
             const terminatedRecords = allRecordsData.filter(op => {
-                // Avoir une heure de fin valide
-                const hasEndTime = op.EndTime && op.EndTime.trim() !== '' && op.EndTime !== '-';
-                // Ne pas être déjà transférée (StatutTraitement !== 'T')
-                const notTransferred = op.StatutTraitement !== 'T';
-                return hasEndTime && notTransferred;
+                const hasEndTime = op.EndTime != null && 
+                                  op.EndTime !== '' && 
+                                  op.EndTime !== '-' &&
+                                  String(op.EndTime).trim() !== '';
+                return hasEndTime;
             });
 
             if (terminatedRecords.length === 0) {
@@ -1021,27 +1022,27 @@ class AdminPage {
                 return;
             }
             
-            const records = terminatedRecords;
-            
-            const message = `Transférer ${records.length} opération(s) TERMINÉE(S) ?\n\nOK = tout transférer\nAnnuler = choisir les lignes`;
+            // Proposer de transférer tous ou sélectionner des lancements
+            const message = `Transférer ${terminatedRecords.length} opération(s) TERMINÉE(S) ?\n\nOK = tout transférer\nAnnuler = choisir les lancements`;
             const transferAll = confirm(message);
+            
             if (transferAll) {
+                // Transférer toutes les opérations terminées
                 const triggerEdiJob = confirm('Déclencher EDI_JOB après transfert ?');
-                const ids = records.map(r => r.TempsId).filter(Boolean);
+                const ids = terminatedRecords.map(r => r.TempsId).filter(Boolean);
                 const result = await this.apiService.validateAndTransmitMonitoringBatch(ids, { triggerEdiJob });
                 if (result?.success) {
-                    this.notificationManager.success('Transfert terminé');
+                    this.notificationManager.success(`Transfert terminé: ${result.count || ids.length} opération(s) transférée(s)`);
                     await this.loadData();
                 } else {
-                    this.notificationManager.error(result?.error || 'Erreur transfert');
+                    this.notificationManager.error(result?.error || 'Erreur lors du transfert');
                 }
-                return;
+            } else {
+                // Ouvrir la modale pour sélectionner les lancements
+                this.openTransferModal(terminatedRecords);
             }
-
-            // Sinon: ouvrir la modale de sélection
-            this.openTransferModal(records);
         } catch (error) {
-            console.error('Erreur lors du transfert (monitoring):', error);
+            console.error('Erreur lors du transfert:', error);
             this.notificationManager.error('Erreur de connexion lors du transfert');
         }
     }
