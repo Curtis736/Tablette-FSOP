@@ -11,6 +11,9 @@ services:
     environment:
       - NODE_ENV=production
       - PORT=3001
+      # Admin authentication (override via docker/.env if needed)
+      - ADMIN_USERNAME=${ADMIN_USERNAME:-admin}
+      - ADMIN_PASSWORD=${ADMIN_PASSWORD:-admin}
       # Database (override via docker/.env for your VM)
       - DB_SERVER=${DB_SERVER:-SERVEURERP}
       - DB_DATABASE=${DB_DATABASE:-SEDI_ERP}

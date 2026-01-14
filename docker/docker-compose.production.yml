@@ -11,8 +11,17 @@ services:
     user: ${BACKEND_USER:-node}
     ports:
       - "3001:3001"
+    # Map SERVEURERP hostname to IP address for DNS resolution inside container
+    # Set DB_SERVER_IP in docker/.env with the actual IP of your SQL Server
+    # Example: DB_SERVER_IP=192.168.1.10
+    # If DB_SERVER_IP is not set, it will try to use the host network gateway
+    extra_hosts:
+      - "SERVEURERP:${DB_SERVER_IP:-172.17.0.1}"
     environment:
       - NODE_ENV=production
+      # Admin authentication (override via docker/.env if needed)
+      - ADMIN_USERNAME=${ADMIN_USERNAME:-admin}
+      - ADMIN_PASSWORD=${ADMIN_PASSWORD:-admin}
       # Database (override via docker/.env for your VM)
       - DB_SERVER=${DB_SERVER:-SERVEURERP}
       - DB_DATABASE=${DB_DATABASE:-SEDI_ERP}
