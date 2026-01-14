@@ -429,8 +429,17 @@ router.post('/open', async (req, res) => {
             existing = null;
         }
 
+        // Prepare destination file - Format: FSOP_<TemplateCode>_<SerialNumber>_<LaunchNumber>.docx
+        // Exemple: FSOP_F479_23.199_LT2500133.docx
+        if (!serialNumber || serialNumber.trim() === '') {
+            return res.status(400).json({
+                error: 'SERIAL_NUMBER_REQUIRED',
+                message: 'Le numéro de série est requis pour générer le nom du fichier FSOP'
+            });
+        }
         const destName = `FSOP_${templateCode}_${serialNumber}_${launchNumber}.docx`;
         const destPath = path.join(fsopDir, destName);
+        console.log(`📝 Nom du fichier généré: ${destName} (Template: ${templateCode}, SN: ${serialNumber}, LT: ${launchNumber})`);
         console.log(`📝 Copie vers: ${destPath}`);
 
         try {
@@ -690,9 +699,17 @@ router.post('/save', async (req, res) => {
             });
         }
 
-        // Prepare destination file
+        // Prepare destination file - Format: FSOP_<TemplateCode>_<SerialNumber>_<LaunchNumber>.docx
+        // Exemple: FSOP_F479_23.199_LT2500133.docx
+        if (!serialNumber || serialNumber.trim() === '') {
+            return res.status(400).json({
+                error: 'SERIAL_NUMBER_REQUIRED',
+                message: 'Le numéro de série est requis pour générer le nom du fichier FSOP'
+            });
+        }
         const destName = `FSOP_${templateCode}_${serialNumber}_${launchNumber}.docx`;
         const destPath = path.join(fsopDir, destName);
+        console.log(`📝 Nom du fichier généré: ${destName} (Template: ${templateCode}, SN: ${serialNumber}, LT: ${launchNumber})`);
 
         // Check if file already exists and is being used
         try {
