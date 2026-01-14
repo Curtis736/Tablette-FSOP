@@ -998,6 +998,25 @@ class AdminPage {
         return map[code] || code;
     }
 
+    // ===== Helper: déterminer si une opération est Terminé (même logique que dans updateOperationsTable) =====
+    isOperationTerminated(operation) {
+        // Si StatusCode/Status existe et indique "Terminé"
+        if (operation.StatusCode && operation.Status) {
+            const statusUpper = String(operation.Status).toUpperCase();
+            if (statusUpper.includes('TERMIN') || statusUpper === 'TERMINE') {
+                return true;
+            }
+        }
+        
+        // Sinon, vérifier EndTime formaté (même logique que dans updateOperationsTable)
+        const formattedEndTime = this.formatDateTime(operation.EndTime);
+        if (formattedEndTime && formattedEndTime !== '-' && formattedEndTime.trim() !== '' && formattedEndTime !== 'N/A') {
+            return true;
+        }
+        
+        return false;
+    }
+
     // ===== Transfert: logique simplifiée - si Terminé → éligible =====
     async handleTransfer() {
         try {
@@ -1007,18 +1026,22 @@ class AdminPage {
             const allRecords = await this.apiService.getMonitoringTemps({ date: today });
             const allRecordsData = allRecords?.data || [];
             
-            // Filtrer uniquement les opérations TERMINÉES (avec EndTime valide)
-            // Logique simple : si EndTime existe et n'est pas vide → Terminé → éligible au transfert
+            console.log(`📊 Total opérations récupérées: ${allRecordsData.length}`);
+            
+            // Filtrer uniquement les opérations TERMINÉES qui ne sont pas déjà transférées
+            // Logique simple : utiliser la même méthode que pour afficher le statut dans le tableau
             const terminatedRecords = allRecordsData.filter(op => {
-                const hasEndTime = op.EndTime != null && 
-                                  op.EndTime !== '' && 
-                                  op.EndTime !== '-' &&
-                                  String(op.EndTime).trim() !== '';
-                return hasEndTime;
+                const isTerminated = this.isOperationTerminated(op);
+                const notTransferred = op.StatutTraitement !== 'T';
+                return isTerminated && notTransferred;
             });
 
+            console.log(`✅ Opérations éligibles au transfert: ${terminatedRecords.length} sur ${allRecordsData.length}`);
+
             if (terminatedRecords.length === 0) {
-                this.notificationManager.warning('Aucune opération TERMINÉE à transférer');
+                const alreadyTransferred = allRecordsData.filter(op => op.StatutTraitement === 'T').length;
+                const terminated = allRecordsData.filter(op => this.isOperationTerminated(op)).length;
+                this.notificationManager.warning(`Aucune opération TERMINÉE à transférer (${terminated} terminées, ${alreadyTransferred} déjà transférées)`);
                 return;
             }
             
