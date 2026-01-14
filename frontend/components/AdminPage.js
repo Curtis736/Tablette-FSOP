@@ -293,6 +293,35 @@ class AdminPage {
             
             console.log('DONNEES BRUTES:', data);
             console.log('OPERATEURS CONNECTES:', operatorsData);
+            console.log('OPERATIONS APRES loadMonitoringRecords:', this.operations.length);
+            
+            // Si loadMonitoringRecords n'a pas chargé d'opérations, utiliser celles de getAdminData
+            if (this.operations.length === 0 && data && data.operations && data.operations.length > 0) {
+                console.log('📊 Aucune opération dans loadMonitoringRecords, utilisation des opérations de getAdminData');
+                // Convertir les opérations admin au format monitoring
+                const adminOps = data.operations.map(op => ({
+                    TempsId: op.id,
+                    OperatorCode: op.operatorId,
+                    OperatorName: op.operatorName,
+                    LancementCode: op.lancementCode,
+                    LancementName: op.article,
+                    StartTime: op.startTime,
+                    EndTime: op.endTime,
+                    TotalDuration: op.duration ? parseInt(op.duration.replace(/[^0-9]/g, '')) : null,
+                    PauseDuration: op.pauseDuration ? parseInt(op.pauseDuration.replace(/[^0-9]/g, '')) : 0,
+                    ProductiveDuration: null,
+                    EventsCount: op.events || 0,
+                    Phase: op.phase || 'PRODUCTION',
+                    CodeRubrique: op.operatorId,
+                    StatutTraitement: null,
+                    DateCreation: today,
+                    CalculatedAt: null,
+                    CalculationMethod: null,
+                    _isUnconsolidated: true
+                }));
+                this.operations = adminOps;
+                console.log(`📊 ${adminOps.length} opérations chargées depuis getAdminData`);
+            }
             
             // Réinitialiser le compteur d'erreurs en cas de succès
             this.consecutiveErrors = 0;
@@ -326,7 +355,7 @@ class AdminPage {
             console.log('🔄 APPEL updateStats()');
             this.updateStats();
             
-            console.log('🔄 APPEL updateOperationsTable()');
+            console.log('🔄 APPEL updateOperationsTable() - OPERATIONS FINALES:', this.operations.length);
             this.updateOperationsTable();
             
             console.log('🔄 APPEL updatePaginationInfo()');
