@@ -952,8 +952,8 @@ class AdminPage {
                 // Statut de l'opération (Terminé, En cours, En pause)
                 statutCode = operation.StatusCode.toUpperCase().replace(/[^A-Z0-9_]/g, '_');
                 statutLabel = operation.Status;
-            } else if (operation.HeureFin && operation.HeureFin.trim() !== '') {
-                // Si l'opération a une heure de fin, elle est terminée
+            } else if (formattedEndTime && formattedEndTime !== '-' && formattedEndTime.trim() !== '') {
+                // Si l'opération a une heure de fin formatée valide, elle est terminée
                 statutCode = 'TERMINE';
                 statutLabel = 'Terminé';
             } else {
