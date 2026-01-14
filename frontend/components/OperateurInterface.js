@@ -87,6 +87,10 @@ class OperateurInterface {
         this.fsopFormContainer = document.getElementById('fsopFormContainer');
         this.fsopFormSaveBtn = document.getElementById('fsopFormSaveBtn');
         
+        // Debug des éléments FSOP
+        console.log('🔍 [INIT] fsopSerialNumberInput trouvé:', !!this.fsopSerialNumberInput);
+        console.log('🔍 [INIT] fsopModal trouvé:', !!this.fsopModal);
+        
         // Instance du formulaire FSOP
         this.fsopForm = null;
         this.currentFsopData = null;
@@ -228,7 +232,9 @@ class OperateurInterface {
         }
 
         // Validation automatique du numéro de série
+        console.log('🔍 [SETUP] Vérification fsopSerialNumberInput:', !!this.fsopSerialNumberInput);
         if (this.fsopSerialNumberInput) {
+            console.log('✅ [SETUP] Ajout des event listeners pour la validation du numéro de série');
             // Debounce pour éviter trop de requêtes
             let validationTimeout = null;
             this.fsopSerialNumberInput.addEventListener('input', () => {
@@ -246,6 +252,31 @@ class OperateurInterface {
                 clearTimeout(validationTimeout);
                 this.validateSerialNumber();
             });
+            console.log('✅ [SETUP] Event listeners ajoutés avec succès');
+        } else {
+            console.error('❌ [SETUP] fsopSerialNumberInput introuvable - les listeners de validation ne seront pas ajoutés');
+            // Essayer de trouver l'élément plus tard (si la modal est chargée dynamiquement)
+            setTimeout(() => {
+                const serialInput = document.getElementById('fsopSerialNumber');
+                if (serialInput) {
+                    console.log('✅ [SETUP RETRY] fsopSerialNumberInput trouvé après délai, ajout des listeners');
+                    this.fsopSerialNumberInput = serialInput;
+                    let validationTimeout = null;
+                    serialInput.addEventListener('input', () => {
+                        console.log('🔍 [VALIDATION] Saisie détectée dans le champ numéro de série');
+                        clearTimeout(validationTimeout);
+                        validationTimeout = setTimeout(() => {
+                            console.log('🔍 [VALIDATION] Déclenchement validation automatique (après 800ms de pause)');
+                            this.validateSerialNumber();
+                        }, 800);
+                    });
+                    serialInput.addEventListener('blur', () => {
+                        console.log('🔍 [VALIDATION] Champ numéro de série quitté (blur) - validation immédiate');
+                        clearTimeout(validationTimeout);
+                        this.validateSerialNumber();
+                    });
+                }
+            }, 1000);
         }
 
         // Fermer les modals avec Escape (scanner + FSOP)
@@ -285,6 +316,30 @@ class OperateurInterface {
         }
 
         this.fsopModal.style.display = 'flex';
+        
+        // Réattacher les listeners si l'élément n'était pas trouvé au démarrage
+        if (!this.fsopSerialNumberInput) {
+            console.log('🔍 [MODAL OPEN] fsopSerialNumberInput introuvable, recherche...');
+            this.fsopSerialNumberInput = document.getElementById('fsopSerialNumber');
+            if (this.fsopSerialNumberInput) {
+                console.log('✅ [MODAL OPEN] fsopSerialNumberInput trouvé, ajout des listeners');
+                let validationTimeout = null;
+                this.fsopSerialNumberInput.addEventListener('input', () => {
+                    console.log('🔍 [VALIDATION] Saisie détectée dans le champ numéro de série');
+                    clearTimeout(validationTimeout);
+                    validationTimeout = setTimeout(() => {
+                        console.log('🔍 [VALIDATION] Déclenchement validation automatique (après 800ms de pause)');
+                        this.validateSerialNumber();
+                    }, 800);
+                });
+                this.fsopSerialNumberInput.addEventListener('blur', () => {
+                    console.log('🔍 [VALIDATION] Champ numéro de série quitté (blur) - validation immédiate');
+                    clearTimeout(validationTimeout);
+                    this.validateSerialNumber();
+                });
+            }
+        }
+        
         if (this.fsopTemplateCodeInput) {
             this.fsopTemplateCodeInput.value = this.fsopTemplateCodeInput.value?.trim() || '';
             setTimeout(() => this.fsopTemplateCodeInput.focus(), 50);
@@ -1318,6 +1373,9 @@ class OperateurInterface {
                 }
             }
             
+            // Normaliser le statusCode pour les classes CSS (en majuscules, remplacer les caractères spéciaux)
+            const normalizedStatusCode = (operation.statusCode || 'EN_COURS').toUpperCase().replace(/[^A-Z0-9_]/g, '_');
+            
             row.innerHTML = `
                 <td>${operation.lancementCode || '-'} ${operation.type === 'pause' ? '<i class="fas fa-pause-circle pause-icon"></i>' : ''}</td>
                 <td>${operation.article || '-'}</td>
@@ -1325,7 +1383,7 @@ class OperateurInterface {
                 <td>${operation.startTime || '-'}</td>
                 <td>${operation.endTime || '-'}</td>
                 <td>
-                    <span class="status-badge status-${operation.statusCode}">${operation.status}</span>
+                    <span class="status-badge status-${normalizedStatusCode}">${operation.status || 'En cours'}</span>
                 </td>
             `;
             this.operatorHistoryTableBody.appendChild(row);

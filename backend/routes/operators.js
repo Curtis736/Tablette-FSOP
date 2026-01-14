@@ -991,19 +991,70 @@ router.get('/:operatorCode/operations',
         
         // Utiliser la fonction qui garde les pauses séparées
         const { processLancementEventsWithPauses } = require('./admin');
-        const allFormattedOperations = processLancementEventsWithPauses(events).map(operation => ({
-            id: operation.id,
-            operatorCode: operation.operatorCode,
-            lancementCode: operation.lancementCode,
-            article: operation.article,
-            startTime: operation.startTime,
-            endTime: operation.endTime,
-            status: operation.status,
-            statusCode: operation.statusCode || (operation.status === 'Terminé' ? 'TERMINE' : 
-                       operation.status === 'En pause' ? 'PAUSE' : 'EN_COURS'),
-            phase: operation.phase,
-            type: operation.type // Ajouter le type pour distinguer les pauses
-        }));
+        const allFormattedOperations = processLancementEventsWithPauses(events).map(operation => {
+            // Normaliser les heures pour s'assurer qu'elles sont au format HH:mm uniquement
+            let startTime = operation.startTime;
+            let endTime = operation.endTime;
+            
+            // Si startTime contient une date, extraire uniquement l'heure
+            if (startTime && typeof startTime === 'string') {
+                // Si format "YYYY-MM-DD HH:mm:ss" ou similaire, extraire l'heure
+                const timeMatch = startTime.match(/(\d{2}:\d{2})(?::\d{2})?/);
+                if (timeMatch) {
+                    startTime = timeMatch[1]; // Garder uniquement HH:mm
+                }
+            }
+            
+            // Si endTime contient une date, extraire uniquement l'heure
+            if (endTime && typeof endTime === 'string') {
+                const timeMatch = endTime.match(/(\d{2}:\d{2})(?::\d{2})?/);
+                if (timeMatch) {
+                    endTime = timeMatch[1]; // Garder uniquement HH:mm
+                }
+            }
+            
+            // Normaliser le statusCode
+            let statusCode = operation.statusCode || operation.generalStatus;
+            if (!statusCode && operation.status) {
+                // Mapper le statut texte vers le code
+                const statusLower = operation.status.toLowerCase();
+                if (statusLower.includes('terminé') || statusLower.includes('termine')) {
+                    statusCode = 'TERMINE';
+                } else if (statusLower.includes('pause')) {
+                    statusCode = 'EN_PAUSE';
+                } else {
+                    statusCode = 'EN_COURS';
+                }
+            }
+            
+            // Normaliser le statut texte
+            let status = operation.status || operation.statusLabel;
+            if (!status && statusCode) {
+                const statusMap = {
+                    'TERMINE': 'Terminé',
+                    'TERMINÉ': 'Terminé',
+                    'EN_PAUSE': 'En pause',
+                    'PAUSE': 'En pause',
+                    'EN_COURS': 'En cours',
+                    'PAUSE_TERMINEE': 'Pause terminée',
+                    'PAUSE_TERMINÉE': 'Pause terminée'
+                };
+                status = statusMap[statusCode] || statusCode;
+            }
+            
+            return {
+                id: operation.id,
+                operatorCode: operation.operatorId || operation.operatorCode,
+                lancementCode: operation.lancementCode,
+                article: operation.article || 'N/A',
+                startTime: startTime || '-',
+                endTime: endTime || '-',
+                status: status || 'En cours',
+                statusCode: statusCode || 'EN_COURS',
+                phase: operation.phase || 'PRODUCTION',
+                type: operation.type || 'lancement'
+            };
+        });
         
         // ⚡ OPTIMISATION : Pagination côté serveur
         const totalCount = allFormattedOperations.length;

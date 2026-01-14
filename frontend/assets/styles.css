@@ -161,12 +161,25 @@ body {
     font-size: 0.9rem;
 }
 
-.status-badge.status-PAUSE {
+.status-badge.status-PAUSE,
+.status-badge.status-EN_PAUSE {
     background-color: #ffc107;
     color: #212529;
 }
 
-.status-badge.status-PAUSE_TERMINEE {
+.status-badge.status-PAUSE_TERMINEE,
+.status-badge.status-PAUSE_TERMINÉE {
+    background-color: #28a745;
+    color: white;
+}
+
+.status-badge.status-EN_COURS {
+    background-color: #17a2b8;
+    color: white;
+}
+
+.status-badge.status-TERMINE,
+.status-badge.status-TERMINÉ {
     background-color: #28a745;
     color: white;
 }

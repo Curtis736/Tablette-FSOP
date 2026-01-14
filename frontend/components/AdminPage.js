@@ -404,12 +404,63 @@ class AdminPage {
             if (operatorCode) filters.operatorCode = operatorCode;
             if (lancementCode) filters.lancementCode = lancementCode;
 
+            // Charger les enregistrements consolidés depuis ABTEMPS_OPERATEURS
             const result = await this.apiService.getMonitoringTemps(filters);
+            let consolidatedOps = [];
             if (result && result.success) {
-                this.operations = result.data || [];
-            } else {
-                this.operations = [];
+                consolidatedOps = result.data || [];
             }
+            
+            // Si aucun enregistrement consolidé et pas de filtre de statut, charger aussi depuis ABHISTORIQUE_OPERATEURS
+            // (les opérations non consolidées)
+            if (consolidatedOps.length === 0 && !statutTraitement) {
+                console.log('📊 Aucun enregistrement consolidé trouvé, chargement depuis ABHISTORIQUE_OPERATEURS...');
+                try {
+                    const adminData = await this.apiService.getAdminData(date);
+                    if (adminData && adminData.operations && adminData.operations.length > 0) {
+                        // Convertir les opérations admin au format monitoring
+                        const unconsolidatedOps = adminData.operations.map(op => ({
+                            TempsId: op.id, // Utiliser l'ID de l'événement comme TempsId temporaire
+                            OperatorCode: op.operatorId,
+                            OperatorName: op.operatorName,
+                            LancementCode: op.lancementCode,
+                            LancementName: op.article,
+                            StartTime: op.startTime,
+                            EndTime: op.endTime,
+                            TotalDuration: op.duration ? parseInt(op.duration.replace(/[^0-9]/g, '')) : null,
+                            PauseDuration: op.pauseDuration ? parseInt(op.pauseDuration.replace(/[^0-9]/g, '')) : 0,
+                            ProductiveDuration: null,
+                            EventsCount: op.events || 0,
+                            Phase: op.phase || 'PRODUCTION',
+                            CodeRubrique: op.operatorId,
+                            StatutTraitement: null, // Non consolidé = non traité
+                            DateCreation: new Date().toISOString().split('T')[0],
+                            CalculatedAt: null,
+                            CalculationMethod: null,
+                            _isUnconsolidated: true // Marqueur pour indiquer que c'est une opération non consolidée
+                        }));
+                        
+                        // Appliquer les filtres sur les opérations non consolidées
+                        let filteredUnconsolidated = unconsolidatedOps;
+                        if (operatorCode) {
+                            filteredUnconsolidated = filteredUnconsolidated.filter(op => op.OperatorCode === operatorCode);
+                        }
+                        if (lancementCode) {
+                            filteredUnconsolidated = filteredUnconsolidated.filter(op => 
+                                op.LancementCode.toLowerCase().includes(lancementCode.toLowerCase())
+                            );
+                        }
+                        
+                        consolidatedOps = filteredUnconsolidated;
+                        console.log(`📊 ${filteredUnconsolidated.length} opérations non consolidées chargées depuis ABHISTORIQUE_OPERATEURS`);
+                    }
+                } catch (error) {
+                    console.error('❌ Erreur lors du chargement des opérations non consolidées:', error);
+                }
+            }
+            
+            this.operations = consolidatedOps;
+            console.log(`📊 Total opérations chargées: ${this.operations.length}`);
         } catch (error) {
             console.error('❌ Erreur loadMonitoringRecords:', error);
             this.operations = [];
