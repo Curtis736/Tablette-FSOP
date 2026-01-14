@@ -952,16 +952,18 @@ class AdminPage {
                 // Statut de l'opération (Terminé, En cours, En pause)
                 statutCode = operation.StatusCode.toUpperCase().replace(/[^A-Z0-9_]/g, '_');
                 statutLabel = operation.Status;
-            } else if (formattedEndTime && formattedEndTime !== '-' && formattedEndTime.trim() !== '') {
+            } else if (formattedEndTime && formattedEndTime !== '-' && formattedEndTime.trim() !== '' && formattedEndTime !== 'N/A') {
                 // Si l'opération a une heure de fin formatée valide, elle est terminée
                 statutCode = 'TERMINE';
                 statutLabel = 'Terminé';
+                console.log(`✅ Statut TERMINÉ pour ${operation.LancementCode} (heure fin: ${formattedEndTime})`);
             } else {
                 // Statut de traitement/consolidation (NON TRAITÉ, VALIDÉ, etc.)
                 statutCode = (operation.StatutTraitement === null || operation.StatutTraitement === undefined)
                     ? 'NULL'
                     : String(operation.StatutTraitement).toUpperCase();
                 statutLabel = this.getMonitoringStatusText(statutCode);
+                console.log(`⚠️ Statut ${statutLabel} pour ${operation.LancementCode} (formattedEndTime: "${formattedEndTime}", StatusCode: ${operation.StatusCode}, Status: ${operation.Status})`);
             }
             
             row.innerHTML = `
