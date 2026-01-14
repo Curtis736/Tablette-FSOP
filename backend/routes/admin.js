@@ -297,13 +297,13 @@ async function consolidateLancementTimes(operatorCode, lancementCode) {
 
         const events = await executeQuery(eventsQuery, { operatorCode, lancementCode });
 
-        if (events.length === 0) return;
+        if (events.length === 0) return null;
 
         // Trouver les événements clés
         const debutEvent = events.find(e => e.Ident === 'DEBUT');
         const finEvent = events.find(e => e.Ident === 'FIN');
 
-        if (!debutEvent || !finEvent) return; // Lancement pas encore terminé
+        if (!debutEvent || !finEvent) return null; // Lancement pas encore terminé
         
         // Extraire Phase et CodeRubrique depuis les événements
         // Phase et CodeRubrique sont généralement dans l'événement DEBUT
@@ -364,17 +364,24 @@ async function consolidateLancementTimes(operatorCode, lancementCode) {
 
         if (existing[0].count > 0) {
             console.log(`⚠️ Temps déjà consolidés pour ${operatorCode}/${lancementCode}`);
-            return;
+            // Retourner le TempsId existant
+            const existingQuery = `
+                SELECT TempsId FROM [SEDI_APP_INDEPENDANTE].[dbo].[ABTEMPS_OPERATEURS]
+                WHERE OperatorCode = @operatorCode AND LancementCode = @lancementCode
+            `;
+            const existingRecord = await executeQuery(existingQuery, { operatorCode, lancementCode });
+            return existingRecord[0]?.TempsId || null;
         }
 
         // Insérer dans ABTEMPS_OPERATEURS avec Phase et CodeRubrique
         const insertQuery = `
             INSERT INTO [SEDI_APP_INDEPENDANTE].[dbo].[ABTEMPS_OPERATEURS]
-            (OperatorCode, LancementCode, StartTime, EndTime, TotalDuration, PauseDuration, ProductiveDuration, EventsCount, Phase, CodeRubrique)
-            VALUES (@operatorCode, @lancementCode, @startTime, @endTime, @totalDuration, @pauseDuration, @productiveDuration, @eventsCount, @phase, @codeRubrique)
+            (OperatorCode, LancementCode, StartTime, EndTime, TotalDuration, PauseDuration, ProductiveDuration, EventsCount, Phase, CodeRubrique, DateCreation)
+            OUTPUT INSERTED.TempsId
+            VALUES (@operatorCode, @lancementCode, @startTime, @endTime, @totalDuration, @pauseDuration, @productiveDuration, @eventsCount, @phase, @codeRubrique, CAST(GETDATE() AS DATE))
         `;
 
-        await executeQuery(insertQuery, {
+        const insertResult = await executeQuery(insertQuery, {
             operatorCode,
             lancementCode,
             startTime: debutEvent.DateCreation,
@@ -387,10 +394,14 @@ async function consolidateLancementTimes(operatorCode, lancementCode) {
             codeRubrique
         });
 
-        console.log(` Temps consolidés pour ${operatorCode}/${lancementCode}: ${totalDuration}min (${productiveDuration}min productif)`);
+        const tempsId = insertResult && insertResult[0] ? insertResult[0].TempsId : null;
+        console.log(` Temps consolidés pour ${operatorCode}/${lancementCode}: ${totalDuration}min (${productiveDuration}min productif), TempsId: ${tempsId}`);
+        
+        return tempsId;
 
     } catch (error) {
         console.error(' Erreur consolidation temps:', error);
+        return null;
     }
 }
 
@@ -3365,6 +3376,102 @@ router.post('/monitoring/:tempsId/transmit', async (req, res) => {
         res.status(500).json({
             success: false,
             error: 'Erreur serveur lors du marquage comme transmis'
+        });
+    }
+});
+
+// POST /api/admin/monitoring/consolidate-batch - Consolider un lot d'opérations terminées
+router.post('/monitoring/consolidate-batch', async (req, res) => {
+    try {
+        const { operations } = req.body; // Array of { OperatorCode, LancementCode }
+        
+        if (!Array.isArray(operations) || operations.length === 0) {
+            return res.status(400).json({
+                success: false,
+                error: 'Liste d\'opérations requise'
+            });
+        }
+        
+        const results = {
+            success: [],
+            skipped: [],
+            errors: []
+        };
+        
+        for (const op of operations) {
+            const { OperatorCode, LancementCode } = op;
+            
+            if (!OperatorCode || !LancementCode) {
+                results.errors.push({
+                    operation: op,
+                    error: 'OperatorCode et LancementCode requis'
+                });
+                continue;
+            }
+            
+            try {
+                // Vérifier si déjà consolidé
+                const existingQuery = `
+                    SELECT COUNT(*) as count FROM [SEDI_APP_INDEPENDANTE].[dbo].[ABTEMPS_OPERATEURS]
+                    WHERE OperatorCode = @operatorCode AND LancementCode = @lancementCode
+                `;
+                const existing = await executeQuery(existingQuery, { operatorCode: OperatorCode, lancementCode: LancementCode });
+                
+                if (existing[0].count > 0) {
+                    results.skipped.push({ OperatorCode, LancementCode, reason: 'Déjà consolidé' });
+                    continue;
+                }
+                
+                // Consolider
+                const tempsId = await consolidateLancementTimes(OperatorCode, LancementCode);
+                
+                if (tempsId) {
+                    results.success.push({
+                        OperatorCode,
+                        LancementCode,
+                        TempsId: tempsId
+                    });
+                } else {
+                    // Vérifier si déjà consolidé (peut-être consolidé entre temps)
+                    const verifyQuery = `
+                        SELECT TempsId FROM [SEDI_APP_INDEPENDANTE].[dbo].[ABTEMPS_OPERATEURS]
+                        WHERE OperatorCode = @operatorCode AND LancementCode = @lancementCode
+                    `;
+                    const verified = await executeQuery(verifyQuery, { operatorCode: OperatorCode, lancementCode: LancementCode });
+                    
+                    if (verified.length > 0) {
+                        results.success.push({
+                            OperatorCode,
+                            LancementCode,
+                            TempsId: verified[0].TempsId
+                        });
+                    } else {
+                        results.errors.push({
+                            operation: op,
+                            error: 'Consolidation échouée (pas d\'événements DEBUT/FIN trouvés)'
+                        });
+                    }
+                }
+            } catch (error) {
+                console.error(`❌ Erreur consolidation ${OperatorCode}/${LancementCode}:`, error);
+                results.errors.push({
+                    operation: op,
+                    error: error.message
+                });
+            }
+        }
+        
+        res.json({
+            success: true,
+            message: `${results.success.length} opération(s) consolidée(s), ${results.skipped.length} ignorée(s), ${results.errors.length} erreur(s)`,
+            results: results
+        });
+        
+    } catch (error) {
+        console.error('❌ Erreur lors de la consolidation par lot:', error);
+        res.status(500).json({
+            success: false,
+            error: 'Erreur serveur lors de la consolidation par lot'
         });
     }
 });

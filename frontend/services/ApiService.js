@@ -392,6 +392,10 @@ class ApiService {
         return this.post(`/admin/monitoring/${tempsId}/transmit`, { triggerEdiJob, codeTache });
     }
 
+    async consolidateMonitoringBatch(operations) {
+        return this.post('/admin/monitoring/consolidate-batch', { operations });
+    }
+
     async validateAndTransmitMonitoringBatch(tempsIds, { triggerEdiJob = true, codeTache = null } = {}) {
         return this.post('/admin/monitoring/validate-and-transmit-batch', { tempsIds, triggerEdiJob, codeTache });
     }

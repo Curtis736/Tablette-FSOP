@@ -1020,28 +1020,64 @@ class AdminPage {
     // ===== Transfert: logique simplifiée - si Terminé → éligible =====
     async handleTransfer() {
         try {
-            const today = new Date().toISOString().split('T')[0];
+            // Utiliser les opérations déjà chargées dans le tableau au lieu de refaire un appel API
+            const allRecordsData = this.operations || [];
             
-            // Récupérer toutes les opérations du jour
-            const allRecords = await this.apiService.getMonitoringTemps({ date: today });
-            const allRecordsData = allRecords?.data || [];
+            console.log(`📊 Total opérations dans le tableau: ${allRecordsData.length}`);
             
-            console.log(`📊 Total opérations récupérées: ${allRecordsData.length}`);
+            // Séparer les opérations terminées en deux groupes : consolidées et non consolidées
+            const terminatedOps = allRecordsData.filter(op => this.isOperationTerminated(op) && op.StatutTraitement !== 'T');
+            const unconsolidatedOps = terminatedOps.filter(op => op._isUnconsolidated);
+            const consolidatedOps = terminatedOps.filter(op => !op._isUnconsolidated && op.TempsId);
             
-            // Filtrer uniquement les opérations TERMINÉES qui ne sont pas déjà transférées
-            // Logique simple : utiliser la même méthode que pour afficher le statut dans le tableau
-            const terminatedRecords = allRecordsData.filter(op => {
-                const isTerminated = this.isOperationTerminated(op);
-                const notTransferred = op.StatutTraitement !== 'T';
-                return isTerminated && notTransferred;
-            });
+            console.log(`📊 Opérations terminées: ${terminatedOps.length} (${unconsolidatedOps.length} non consolidées, ${consolidatedOps.length} consolidées)`);
+            
+            // Si des opérations non consolidées existent, les consolider automatiquement
+            if (unconsolidatedOps.length > 0) {
+                this.notificationManager.info(`Consolidation de ${unconsolidatedOps.length} opération(s) terminée(s)...`);
+                
+                const operationsToConsolidate = unconsolidatedOps.map(op => ({
+                    OperatorCode: op.OperatorCode,
+                    LancementCode: op.LancementCode
+                }));
+                
+                const consolidateResult = await this.apiService.consolidateMonitoringBatch(operationsToConsolidate);
+                
+                if (consolidateResult?.success) {
+                    const consolidated = consolidateResult.results?.success || [];
+                    const skipped = consolidateResult.results?.skipped || [];
+                    const errors = consolidateResult.results?.errors || [];
+                    
+                    console.log(`✅ Consolidation: ${consolidated.length} réussie(s), ${skipped.length} ignorée(s), ${errors.length} erreur(s)`);
+                    
+                    if (consolidated.length > 0) {
+                        this.notificationManager.success(`${consolidated.length} opération(s) consolidée(s) avec succès`);
+                    }
+                    if (errors.length > 0) {
+                        this.notificationManager.warning(`${errors.length} opération(s) n'ont pas pu être consolidée(s)`);
+                    }
+                    
+                    // Recharger les données pour obtenir les nouveaux TempsId
+                    await this.loadData();
+                    
+                    // Relancer la fonction pour récupérer les opérations maintenant consolidées
+                    return this.handleTransfer();
+                } else {
+                    this.notificationManager.error(consolidateResult?.error || 'Erreur lors de la consolidation');
+                    return;
+                }
+            }
+            
+            // Filtrer uniquement les opérations TERMINÉES consolidées qui ne sont pas déjà transférées
+            const terminatedRecords = consolidatedOps;
 
             console.log(`✅ Opérations éligibles au transfert: ${terminatedRecords.length} sur ${allRecordsData.length}`);
 
             if (terminatedRecords.length === 0) {
                 const alreadyTransferred = allRecordsData.filter(op => op.StatutTraitement === 'T').length;
                 const terminated = allRecordsData.filter(op => this.isOperationTerminated(op)).length;
-                this.notificationManager.warning(`Aucune opération TERMINÉE à transférer (${terminated} terminées, ${alreadyTransferred} déjà transférées)`);
+                const withoutTempsId = allRecordsData.filter(op => !op.TempsId).length;
+                this.notificationManager.warning(`Aucune opération TERMINÉE à transférer (${terminated} terminées, ${alreadyTransferred} déjà transférées, ${withoutTempsId} sans TempsId)`);
                 return;
             }
             
@@ -1148,6 +1184,13 @@ class AdminPage {
 
     async deleteMonitoringRecord(id) {
         if (!confirm('Supprimer cet enregistrement de temps ?')) return;
+        
+        // Vérifier que l'ID est valide
+        if (!id || (typeof id === 'string' && id.trim() === '')) {
+            this.notificationManager.error('ID invalide pour la suppression');
+            return;
+        }
+        
         try {
             const result = await this.apiService.deleteMonitoringTemps(id);
             if (result && result.success) {
@@ -1155,11 +1198,23 @@ class AdminPage {
                 this.selectedTempsIds.delete(String(id));
                 await this.loadData();
             } else {
-                this.notificationManager.error(result?.error || 'Erreur suppression');
+                // Si l'enregistrement n'existe pas, rafraîchir les données (peut-être déjà supprimé)
+                if (result?.error && result.error.includes('non trouvé')) {
+                    this.notificationManager.warning('Cet enregistrement n\'existe plus (peut-être déjà supprimé). Actualisation...');
+                    await this.loadData();
+                } else {
+                    this.notificationManager.error(result?.error || 'Erreur lors de la suppression');
+                }
             }
         } catch (error) {
             console.error('❌ Erreur suppression monitoring:', error);
-            this.notificationManager.error('Erreur suppression');
+            // Si c'est une erreur 404, l'enregistrement n'existe probablement plus
+            if (error.message && error.message.includes('non trouvé')) {
+                this.notificationManager.warning('Cet enregistrement n\'existe plus. Actualisation...');
+                await this.loadData();
+            } else {
+                this.notificationManager.error('Erreur lors de la suppression');
+            }
         }
     }
 
