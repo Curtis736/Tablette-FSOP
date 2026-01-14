@@ -178,23 +178,31 @@ class AdminPage {
                 // Tableau des opérations
                 const tableBody = document.getElementById('operationsTableBody');
                 if (tableBody) {
-                    tableBody.addEventListener('click', (e) => {
+                    tableBody.addEventListener('click', async (e) => {
                         if (e.target.closest('.btn-delete')) {
                             const btn = e.target.closest('.btn-delete');
-                            const id = btn.dataset.id;
+                            // Ignorer si le bouton est désactivé (enregistrement non consolidé)
+                            if (btn.disabled) {
+                                return;
+                            }
+                            const id = btn.dataset.id || btn.dataset.operationId;
                             console.log('🗑️ Clic sur bouton supprimer, ID:', id);
-                            this.deleteMonitoringRecord(id);
+                            await this.deleteMonitoringRecord(id);
                         } else if (e.target.closest('.btn-edit')) {
                             e.preventDefault();
                             e.stopPropagation();
                             const btn = e.target.closest('.btn-edit');
-                            const id = btn.dataset.id;
+                            // Ignorer si le bouton est désactivé (enregistrement non consolidé)
+                            if (btn.disabled) {
+                                return;
+                            }
+                            const id = btn.dataset.id || btn.dataset.operationId;
                             console.log('✏️ Clic sur bouton modifier détecté');
                             console.log('🔍 ID récupéré:', id, 'Type:', typeof id);
                             console.log('🔍 Bouton:', btn);
                             console.log('🔍 Dataset complet:', btn.dataset);
                             console.log('🔍 Opérations disponibles:', this.operations.length);
-                            console.log('🔍 IDs disponibles:', this.operations.map(op => ({ id: op.id, type: typeof op.id })));
+                            console.log('🔍 IDs disponibles:', this.operations.map(op => ({ TempsId: op.TempsId, type: typeof op.TempsId })));
                             
                             if (!id) {
                                 console.error('❌ ID manquant sur le bouton!');
@@ -203,7 +211,7 @@ class AdminPage {
                             }
                             
                             try {
-                                this.editMonitoringRecord(id);
+                                await this.editMonitoringRecord(id);
                             } catch (error) {
                                 console.error('❌ Erreur lors de l\'édition:', error);
                                 this.notificationManager.error(`Erreur lors de l'édition: ${error.message}`);
@@ -974,14 +982,23 @@ class AdminPage {
                 <td>${formattedEndTime}${timeWarning}</td>
                 <td>
                     <span class="status-badge status-${statutCode}">${statutLabel}</span>
+                    ${operation._isUnconsolidated ? '<span class="badge badge-warning" style="margin-left: 5px; font-size: 0.8em;">Non consolidé</span>' : ''}
                 </td>
                 <td class="actions-cell">
-                    <button class="btn-edit" data-id="${tempsId}" data-operation-id="${tempsId}" title="Corriger" type="button">
-                        <i class="fas fa-edit"></i>
-                    </button>
-                    <button class="btn-delete" data-id="${tempsId}" data-operation-id="${tempsId}" title="Supprimer" type="button">
-                        <i class="fas fa-trash"></i>
-                    </button>
+                    ${operation._isUnconsolidated 
+                        ? `<button class="btn-edit" data-id="${tempsId}" data-operation-id="${tempsId}" title="Non consolidé - Modification impossible" type="button" disabled style="opacity: 0.5; cursor: not-allowed;">
+                            <i class="fas fa-lock"></i>
+                        </button>
+                        <button class="btn-delete" data-id="${tempsId}" data-operation-id="${tempsId}" title="Non consolidé - Suppression impossible" type="button" disabled style="opacity: 0.5; cursor: not-allowed;">
+                            <i class="fas fa-lock"></i>
+                        </button>`
+                        : `<button class="btn-edit" data-id="${tempsId}" data-operation-id="${tempsId}" title="Corriger" type="button">
+                            <i class="fas fa-edit"></i>
+                        </button>
+                        <button class="btn-delete" data-id="${tempsId}" data-operation-id="${tempsId}" title="Supprimer" type="button">
+                            <i class="fas fa-trash"></i>
+                        </button>`
+                    }
                 </td>
             `;
             this.operationsTableBody.appendChild(row);
@@ -1183,16 +1200,30 @@ class AdminPage {
     }
 
     async deleteMonitoringRecord(id) {
-        if (!confirm('Supprimer cet enregistrement de temps ?')) return;
-        
-        // Vérifier que l'ID est valide
-        if (!id || (typeof id === 'string' && id.trim() === '')) {
-            this.notificationManager.error('ID invalide pour la suppression');
+        // Convertir l'ID en nombre pour éviter les problèmes de type
+        const tempsId = parseInt(id, 10);
+        if (isNaN(tempsId)) {
+            console.error('❌ ID invalide:', id);
+            this.notificationManager.error('ID d\'enregistrement invalide');
             return;
         }
+
+        // Trouver l'enregistrement pour vérifier s'il est consolidé
+        const record = this.operations.find(op => op.TempsId == tempsId);
+        
+        if (record && record._isUnconsolidated) {
+            this.notificationManager.warning(
+                'Cet enregistrement n\'est pas encore consolidé dans ABTEMPS_OPERATEURS. ' +
+                'Il ne peut pas être supprimé directement. Veuillez attendre la consolidation.'
+            );
+            console.warn('⚠️ Tentative de suppression d\'un enregistrement non consolidé:', record);
+            return;
+        }
+
+        if (!confirm('Supprimer cet enregistrement de temps ?')) return;
         
         try {
-            const result = await this.apiService.deleteMonitoringTemps(id);
+            const result = await this.apiService.deleteMonitoringTemps(tempsId);
             if (result && result.success) {
                 this.notificationManager.success('Enregistrement supprimé');
                 this.selectedTempsIds.delete(String(id));
@@ -1219,8 +1250,34 @@ class AdminPage {
     }
 
     async editMonitoringRecord(id) {
+        // Convertir l'ID en nombre pour éviter les problèmes de type
+        const tempsId = parseInt(id, 10);
+        if (isNaN(tempsId)) {
+            console.error('❌ ID invalide:', id);
+            this.notificationManager.error('ID d\'enregistrement invalide');
+            return;
+        }
+
         // Trouver l'enregistrement actuel pour pré-remplir les prompts
-        const record = this.operations.find(op => op.TempsId == id);
+        const record = this.operations.find(op => op.TempsId == tempsId);
+        
+        if (!record) {
+            console.warn(`⚠️ Enregistrement avec TempsId ${tempsId} non trouvé dans les données locales. Actualisation...`);
+            this.notificationManager.warning('Enregistrement non trouvé. Actualisation des données...');
+            await this.loadData();
+            return;
+        }
+
+        // Vérifier si l'enregistrement est consolidé (existe dans ABTEMPS_OPERATEURS)
+        if (record._isUnconsolidated) {
+            this.notificationManager.warning(
+                'Cet enregistrement n\'est pas encore consolidé dans ABTEMPS_OPERATEURS. ' +
+                'Il ne peut pas être modifié directement. Veuillez attendre la consolidation ou utiliser la fonction de consolidation manuelle.'
+            );
+            console.warn('⚠️ Tentative de modification d\'un enregistrement non consolidé:', record);
+            return;
+        }
+
         const currentPhase = record?.Phase || '';
         const currentCodeRubrique = record?.CodeRubrique || '';
         const currentStartTime = record?.StartTime ? this.formatDateTime(record.StartTime) : '';
@@ -1244,7 +1301,7 @@ class AdminPage {
         }
 
         try {
-            const result = await this.apiService.correctMonitoringTemps(id, corrections);
+            const result = await this.apiService.correctMonitoringTemps(tempsId, corrections);
             if (result && result.success) {
                 this.notificationManager.success('Enregistrement corrigé');
                 
@@ -1256,7 +1313,7 @@ class AdminPage {
                     if (corrections.EndTime !== undefined) record.EndTime = corrections.EndTime;
                     
                     // Mettre à jour la ligne dans le tableau sans tout recharger
-                    this.updateMonitoringRowInTable(id, record);
+                    this.updateMonitoringRowInTable(tempsId, record);
                 }
                 
                 // Recharger les données après un court délai pour s'assurer que tout est synchronisé
@@ -1269,7 +1326,14 @@ class AdminPage {
             }
         } catch (error) {
             console.error('❌ Erreur lors de la correction:', error);
-            this.notificationManager.error('Erreur lors de la correction');
+            
+            // Si c'est une erreur 404 (enregistrement non trouvé), rafraîchir les données
+            if (error.message && error.message.includes('non trouvé')) {
+                this.notificationManager.warning('Cet enregistrement n\'existe plus (peut-être déjà supprimé). Actualisation...');
+                await this.loadData();
+            } else {
+                this.notificationManager.error(`Erreur lors de la correction: ${error.message || 'Erreur inconnue'}`);
+            }
         }
     }
 

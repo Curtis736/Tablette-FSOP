@@ -3176,18 +3176,42 @@ router.put('/monitoring/:tempsId', async (req, res) => {
         const { tempsId } = req.params;
         const corrections = req.body;
         
+        // Convertir tempsId en nombre
+        const tempsIdNum = parseInt(tempsId, 10);
+        if (isNaN(tempsIdNum)) {
+            console.error(`❌ TempsId invalide reçu: ${tempsId}`);
+            return res.status(400).json({
+                success: false,
+                error: 'ID d\'enregistrement invalide'
+            });
+        }
+        
+        console.log(`🔍 Recherche de l'enregistrement TempsId: ${tempsIdNum} (type: ${typeof tempsIdNum})`);
+        
         // 🔒 VÉRIFICATION DE SÉCURITÉ : Vérifier que l'enregistrement existe
         const checkQuery = `
             SELECT OperatorCode, LancementCode, StatutTraitement
             FROM [SEDI_APP_INDEPENDANTE].[dbo].[ABTEMPS_OPERATEURS]
             WHERE TempsId = @tempsId
         `;
-        const existing = await executeQuery(checkQuery, { tempsId: parseInt(tempsId) });
+        const existing = await executeQuery(checkQuery, { tempsId: tempsIdNum });
+        
+        console.log(`📊 Résultat de la recherche: ${existing.length} enregistrement(s) trouvé(s) pour TempsId ${tempsIdNum}`);
         
         if (existing.length === 0) {
+            // Vérifier si l'enregistrement existe avec un autre type de données
+            const debugQuery = `
+                SELECT TOP 5 TempsId, OperatorCode, LancementCode, StatutTraitement
+                FROM [SEDI_APP_INDEPENDANTE].[dbo].[ABTEMPS_OPERATEURS]
+                ORDER BY TempsId DESC
+            `;
+            const recentRecords = await executeQuery(debugQuery, {});
+            console.log(`🔍 Enregistrements récents (pour debug):`, recentRecords.map(r => ({ TempsId: r.TempsId, type: typeof r.TempsId })));
+            
             return res.status(404).json({
                 success: false,
-                error: 'Enregistrement non trouvé'
+                error: 'Enregistrement non trouvé',
+                tempsId: tempsIdNum
             });
         }
         
