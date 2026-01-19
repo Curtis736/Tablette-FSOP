@@ -5,6 +5,8 @@ const router = express.Router();
 const { authenticateAdmin } = require('../middleware/auth');
 const dataValidation = require('../services/DataValidationService');
 const { getConcurrencyStats } = require('../middleware/concurrencyManager');
+const SessionService = require('../services/SessionService');
+const { generateRequestId } = require('../middleware/audit');
 
 // IMPORTANT: toutes les routes /api/admin doivent être protégées
 router.use(authenticateAdmin);
@@ -1255,10 +1257,14 @@ router.post('/operations', async (req, res) => {
         const codeRubrique = phase || operatorId;
         const finalStatus = status === 'DEBUT' ? 'EN_COURS' : status === 'FIN' ? 'TERMINE' : status;
         const finalPhase = phase || 'ADMIN';
+
+        // Corrélation requête/session (peut être NULL côté admin si pas de session active)
+        const requestId = req.audit?.requestId || generateRequestId();
+        const activeSession = operatorId ? await SessionService.getActiveSession(operatorId) : null;
         
         const insertQuery = `
             INSERT INTO [SEDI_APP_INDEPENDANTE].[dbo].[ABHISTORIQUE_OPERATEURS]
-            (OperatorCode, CodeLanctImprod, CodeRubrique, Ident, Phase, Statut, HeureDebut, HeureFin, DateCreation)
+            (OperatorCode, CodeLanctImprod, CodeRubrique, Ident, Phase, Statut, HeureDebut, HeureFin, DateCreation, SessionId, RequestId, CreatedAt)
             OUTPUT INSERTED.NoEnreg
             VALUES (
                 @operatorId,
@@ -1269,7 +1275,10 @@ router.post('/operations', async (req, res) => {
                 @finalStatus,
                 ${status === 'DEBUT' ? 'CAST(GETDATE() AS TIME)' : 'NULL'},
                 ${status === 'FIN' ? 'CAST(GETDATE() AS TIME)' : 'NULL'},
-                CAST(GETDATE() AS DATE)
+                CAST(GETDATE() AS DATE),
+                @sessionId,
+                @requestId,
+                GETDATE()
             )
         `;
         
@@ -1279,7 +1288,9 @@ router.post('/operations', async (req, res) => {
             codeRubrique,
             status,
             phase: finalPhase,
-            finalStatus
+            finalStatus,
+            sessionId: activeSession ? activeSession.SessionId : null,
+            requestId
         };
         
         console.log('Requête SQL à exécuter:', insertQuery);
@@ -2017,9 +2028,10 @@ router.post('/transfer', async (req, res) => {
         // Transférer chaque opération vers SEDI_APP_INDEPENDANTE
         for (const operation of completedOperations) {
             try {
+                const requestId = req.audit?.requestId || generateRequestId();
                 const insertQuery = `
                     INSERT INTO [SEDI_APP_INDEPENDANTE].[dbo].[ABHISTORIQUE_OPERATEURS]
-                    (OperatorCode, CodeLanctImprod, CodeRubrique, Ident, Phase, Statut, HeureDebut, HeureFin, DateCreation)
+                    (OperatorCode, CodeLanctImprod, CodeRubrique, Ident, Phase, Statut, HeureDebut, HeureFin, DateCreation, SessionId, RequestId, CreatedAt)
                     VALUES (
                         '${operation.CodeOperateur}',
                         '${operation.CodeLanctImprod}',
@@ -2029,6 +2041,9 @@ router.post('/transfer', async (req, res) => {
                         '${operation.Statut}',
                         GETDATE(),
                         GETDATE(),
+                        GETDATE(),
+                        NULL,
+                        '${requestId}',
                         GETDATE()
                     )
                 `;
@@ -2316,6 +2331,9 @@ router.post('/recreate-tables', async (req, res) => {
                 HeureDebut TIME NULL, -- Format HH:mm seulement
                 HeureFin TIME NULL, -- Format HH:mm seulement
                 DateCreation DATE NOT NULL DEFAULT CAST(GETDATE() AS DATE), -- Date seulement
+                SessionId INT NULL,
+                RequestId NVARCHAR(100) NULL,
+                CreatedAt DATETIME2 NOT NULL DEFAULT GETDATE(),
                 INDEX IX_Historique_Operator_Lancement (OperatorCode, CodeLanctImprod),
                 INDEX IX_Historique_Date (DateCreation)
             )
@@ -2676,6 +2694,9 @@ router.post('/create-historique-table', async (req, res) => {
                 HeureDebut TIME NULL, -- Format HH:mm seulement
                 HeureFin TIME NULL, -- Format HH:mm seulement
                 DateCreation DATE NOT NULL DEFAULT CAST(GETDATE() AS DATE), -- Date seulement
+                SessionId INT NULL,
+                RequestId NVARCHAR(100) NULL,
+                CreatedAt DATETIME2 NOT NULL DEFAULT GETDATE(),
                 INDEX IX_Historique_Operator_Lancement (OperatorCode, CodeLanctImprod),
                 INDEX IX_Historique_Date (DateCreation)
             )
@@ -2800,11 +2821,12 @@ router.post('/debug/create-test-pause-reprise', async (req, res) => {
         console.log('🧪 Création de données de test pause/reprise...');
         
         const { operatorCode = '929', lancementCode = 'LT2501148' } = req.body;
+        const requestId = req.audit?.requestId || generateRequestId();
         
         // Créer une pause terminée pour tester
         const pauseQuery = `
             INSERT INTO [SEDI_APP_INDEPENDANTE].[dbo].[ABHISTORIQUE_OPERATEURS]
-            (OperatorCode, CodeLanctImprod, CodeRubrique, Ident, Phase, Statut, HeureDebut, HeureFin, DateCreation)
+            (OperatorCode, CodeLanctImprod, CodeRubrique, Ident, Phase, Statut, HeureDebut, HeureFin, DateCreation, SessionId, RequestId, CreatedAt)
             VALUES (
                 '${operatorCode}',
                 '${lancementCode}',
@@ -2814,13 +2836,16 @@ router.post('/debug/create-test-pause-reprise', async (req, res) => {
                 'EN_PAUSE',
                 CAST('14:30:00' AS TIME),
                 NULL,
-                CAST(GETDATE() AS DATE)
+                CAST(GETDATE() AS DATE),
+                NULL,
+                '${requestId}',
+                GETDATE()
             )
         `;
         
         const repriseQuery = `
             INSERT INTO [SEDI_APP_INDEPENDANTE].[dbo].[ABHISTORIQUE_OPERATEURS]
-            (OperatorCode, CodeLanctImprod, CodeRubrique, Ident, Phase, Statut, HeureDebut, HeureFin, DateCreation)
+            (OperatorCode, CodeLanctImprod, CodeRubrique, Ident, Phase, Statut, HeureDebut, HeureFin, DateCreation, SessionId, RequestId, CreatedAt)
             VALUES (
                 '${operatorCode}',
                 '${lancementCode}',
@@ -2830,7 +2855,10 @@ router.post('/debug/create-test-pause-reprise', async (req, res) => {
                 'EN_COURS',
                 CAST('14:45:00' AS TIME),
                 NULL,
-                CAST(GETDATE() AS DATE)
+                CAST(GETDATE() AS DATE),
+                NULL,
+                '${requestId}',
+                GETDATE()
             )
         `;
         

@@ -53,8 +53,9 @@ class MonitoringService {
                     r.Designation1 AS OperatorName,
                     t.LancementCode,
                     l.DesignationLct1 AS LancementName,
-                    t.StartTime,
-                    t.EndTime,
+                    -- IMPORTANT: renvoyer des heures "HH:mm" (pas d'ISO UTC) pour éviter les décalages timezone côté frontend
+                    CONVERT(VARCHAR(5), t.StartTime, 108) AS StartTime,
+                    CONVERT(VARCHAR(5), t.EndTime, 108) AS EndTime,
                     t.TotalDuration,
                     t.PauseDuration,
                     t.ProductiveDuration,

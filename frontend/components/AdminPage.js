@@ -12,6 +12,18 @@ class AdminPage {
         this.currentPage = 1;
         this.transferSelectionIds = new Set(); // sélection dans la modale de transfert (TempsId)
         
+        // Debug (désactivé par défaut pour éviter de spammer la console)
+        // Activer via URL: ?debugTime=1  ou via localStorage: sedi_debug_time=1
+        this.debugTime = false;
+        try {
+            const sp = new URLSearchParams(window.location.search);
+            this.debugTime =
+                sp.get('debugTime') === '1' ||
+                window.localStorage?.getItem('sedi_debug_time') === '1';
+        } catch (e) {
+            // noop
+        }
+        
         // Flags pour éviter les appels simultanés
         this._isTransferring = false;
         this._isConsolidating = false;
@@ -1872,7 +1884,9 @@ class AdminPage {
         // Si c'est null ou undefined, retourner un tiret
         if (!dateString) return '-';
         
-        console.log(`🔧 formatDateTime input: "${dateString}" (type: ${typeof dateString})`);
+        if (this.debugTime) {
+            console.log(`🔧 formatDateTime input: "${dateString}" (type: ${typeof dateString}) and value:`, dateString);
+        }
         
         // Si c'est déjà au format HH:mm, le retourner directement
         if (typeof dateString === 'string') {
@@ -1881,7 +1895,7 @@ class AdminPage {
                 const hours = timeMatch[1].padStart(2, '0');
                 const minutes = timeMatch[2];
                 const result = `${hours}:${minutes}`;
-                console.log(`✅ formatDateTime: ${dateString} → ${result}`);
+                if (this.debugTime) console.log(`✅ formatDateTime: ${dateString} → ${result}`);
                 return result;
             }
             
@@ -1891,7 +1905,7 @@ class AdminPage {
                 const hours = timeWithSecondsMatch[1].padStart(2, '0');
                 const minutes = timeWithSecondsMatch[2];
                 const result = `${hours}:${minutes}`;
-                console.log(`✅ formatDateTime: ${dateString} → ${result}`);
+                if (this.debugTime) console.log(`✅ formatDateTime: ${dateString} → ${result}`);
                 return result;
             }
         }
@@ -1904,7 +1918,7 @@ class AdminPage {
                 minute: '2-digit',
                 hour12: false
             });
-            console.log(`✅ formatDateTime: Date → ${result}`);
+            if (this.debugTime) console.log(`✅ formatDateTime: Date → ${result}`);
             return result;
         }
         
@@ -1919,7 +1933,7 @@ class AdminPage {
                     minute: '2-digit',
                     hour12: false
                 });
-                console.log(`✅ formatDateTime: Date string → ${result}`);
+                if (this.debugTime) console.log(`✅ formatDateTime: Date string → ${result}`);
                 return result;
             }
         } catch (error) {
@@ -2189,18 +2203,18 @@ class AdminPage {
     formatTimeForInput(timeString) {
         if (!timeString) return '';
         
-        console.log(`🔧 formatTimeForInput: "${timeString}"`);
+        if (this.debugTime) console.log(`🔧 formatTimeForInput: "${timeString}"`);
         
         // Si c'est déjà au format HH:mm, le retourner directement
         if (typeof timeString === 'string' && /^\d{2}:\d{2}$/.test(timeString)) {
-            console.log(`✅ Format HH:mm direct: ${timeString}`);
+            if (this.debugTime) console.log(`✅ Format HH:mm direct: ${timeString}`);
             return timeString;
         }
         
         // Si c'est au format HH:mm:ss, enlever les secondes
         if (typeof timeString === 'string' && /^\d{2}:\d{2}:\d{2}$/.test(timeString)) {
             const result = timeString.substring(0, 5);
-            console.log(`✅ Format HH:mm:ss → HH:mm: ${timeString} → ${result}`);
+            if (this.debugTime) console.log(`✅ Format HH:mm:ss → HH:mm: ${timeString} → ${result}`);
             return result;
         }
         
@@ -2216,7 +2230,7 @@ class AdminPage {
                         minute: '2-digit',
                         hour12: false
                     });
-                    console.log(`✅ Date complète → HH:mm: ${timeString} → ${formattedTime}`);
+                    if (this.debugTime) console.log(`✅ Date complète → HH:mm: ${timeString} → ${formattedTime}`);
                     return formattedTime;
                 }
             } catch (error) {
@@ -2232,7 +2246,7 @@ class AdminPage {
                 minute: '2-digit',
                 hour12: false
             });
-            console.log(`✅ Date object → HH:mm: ${timeString} → ${formattedTime}`);
+            if (this.debugTime) console.log(`✅ Date object → HH:mm: ${timeString} → ${formattedTime}`);
             return formattedTime;
         }
         
