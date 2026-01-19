@@ -486,6 +486,40 @@ class AdminPage {
         }
     }
     
+    // Consolidation automatique en arrière-plan pour les opérations terminées
+    async autoConsolidateTerminatedOps(operations) {
+        try {
+            console.log(`🔄 Consolidation automatique en arrière-plan de ${operations.length} opération(s) terminée(s)...`);
+            
+            const operationsToConsolidate = operations.map(op => ({
+                OperatorCode: op.OperatorCode,
+                LancementCode: op.LancementCode
+            }));
+            
+            const consolidateResult = await this.apiService.consolidateMonitoringBatch(operationsToConsolidate);
+            
+            if (consolidateResult?.success) {
+                const consolidated = consolidateResult.results?.success || [];
+                const errors = consolidateResult.results?.errors || [];
+                
+                if (consolidated.length > 0) {
+                    console.log(`✅ ${consolidated.length} opération(s) consolidée(s) automatiquement`);
+                    // Recharger les données après un court délai pour obtenir les TempsId
+                    setTimeout(async () => {
+                        await this.loadData();
+                    }, 2000);
+                }
+                
+                if (errors.length > 0) {
+                    console.warn(`⚠️ ${errors.length} opération(s) n'ont pas pu être consolidée(s) automatiquement`);
+                }
+            }
+        } catch (error) {
+            console.error('❌ Erreur lors de la consolidation automatique en arrière-plan:', error);
+            // Ne pas bloquer l'affichage en cas d'erreur
+        }
+    }
+    
     // Méthode pour réactiver le refresh automatique
     resetConsecutiveErrors() {
         this.consecutiveErrors = 0;
