@@ -387,29 +387,63 @@ class AdminPage {
         } catch (error) {
             console.error('❌ ERREUR loadData():', error);
             
-            // Incrémenter le compteur d'erreurs
-            this.consecutiveErrors++;
+            // Vérifier si c'est une erreur 429 (Too Many Requests)
+            const isRateLimitError = error.message && (
+                error.message.includes('429') || 
+                error.message.includes('Too Many Requests') ||
+                error.message.includes('Trop de requêtes')
+            );
             
-            // Afficher un message d'erreur plus informatif
-            let errorMessage = 'Erreur de connexion au serveur';
-            if (error.message.includes('Timeout')) {
-                errorMessage = 'Le serveur met trop de temps à répondre. Vérifiez votre connexion.';
-            } else if (error.message.includes('HTTP')) {
-                errorMessage = `Erreur serveur: ${error.message}`;
-            } else if (error.message.includes('fetch')) {
-                errorMessage = 'Impossible de contacter le serveur';
-            }
-            
-            // Ne pas spammer les notifications si trop d'erreurs
-            if (this.consecutiveErrors <= 2) {
-                this.notificationManager.error(errorMessage);
-            } else if (this.consecutiveErrors === this.maxConsecutiveErrors) {
-                this.notificationManager.warning('Chargement automatique désactivé après plusieurs erreurs. Cliquez sur "Actualiser" pour réessayer.');
+            if (isRateLimitError) {
+                // Pour les erreurs 429, augmenter significativement le compteur d'erreurs
+                // pour désactiver le refresh automatique plus rapidement
+                this.consecutiveErrors += 3; // Équivalent à 3 erreurs normales
+                
+                // Augmenter l'intervalle de refresh temporairement
+                if (this.refreshInterval) {
+                    clearInterval(this.refreshInterval);
+                    // Augmenter l'intervalle à 60 secondes au lieu de 15
+                    this.refreshInterval = setInterval(() => {
+                        if (this.consecutiveErrors >= this.maxConsecutiveErrors) {
+                            console.log(`⏸️ Refresh automatique désactivé (${this.consecutiveErrors} erreurs consécutives)`);
+                            return;
+                        }
+                        const timeSinceLastEdit = Date.now() - this.lastEditTime;
+                        if (!this.isLoading && timeSinceLastEdit > 5000) {
+                            this.loadDataWithRetry();
+                        }
+                    }, 60000); // 60 secondes au lieu de 15
+                }
+                
+                // Afficher un message spécifique pour le rate limiting
+                if (this.consecutiveErrors <= 3) {
+                    this.notificationManager.warning('Trop de requêtes. Le rafraîchissement automatique est ralenti. Veuillez patienter...');
+                }
+            } else {
+                // Pour les autres erreurs, incrémenter normalement
+                this.consecutiveErrors++;
+                
+                // Afficher un message d'erreur plus informatif
+                let errorMessage = 'Erreur de connexion au serveur';
+                if (error.message.includes('Timeout')) {
+                    errorMessage = 'Le serveur met trop de temps à répondre. Vérifiez votre connexion.';
+                } else if (error.message.includes('HTTP')) {
+                    errorMessage = `Erreur serveur: ${error.message}`;
+                } else if (error.message.includes('fetch')) {
+                    errorMessage = 'Impossible de contacter le serveur';
+                }
+                
+                // Ne pas spammer les notifications si trop d'erreurs
+                if (this.consecutiveErrors <= 2) {
+                    this.notificationManager.error(errorMessage);
+                } else if (this.consecutiveErrors === this.maxConsecutiveErrors) {
+                    this.notificationManager.warning('Chargement automatique désactivé après plusieurs erreurs. Cliquez sur "Actualiser" pour réessayer.');
+                }
             }
             
             // Afficher les données en cache si disponibles
             if (this.operations.length > 0) {
-                if (this.consecutiveErrors <= 2) {
+                if (this.consecutiveErrors <= 2 && !isRateLimitError) {
                     this.notificationManager.info('Affichage des données en cache');
                 }
                 this.updateOperationsTable();
@@ -440,6 +474,22 @@ class AdminPage {
     // Méthode pour réactiver le refresh automatique
     resetConsecutiveErrors() {
         this.consecutiveErrors = 0;
+        
+        // Réinitialiser l'intervalle de refresh à 15 secondes
+        if (this.refreshInterval) {
+            clearInterval(this.refreshInterval);
+            this.refreshInterval = setInterval(() => {
+                if (this.consecutiveErrors >= this.maxConsecutiveErrors) {
+                    console.log(`⏸️ Refresh automatique désactivé (${this.consecutiveErrors} erreurs consécutives)`);
+                    return;
+                }
+                const timeSinceLastEdit = Date.now() - this.lastEditTime;
+                if (!this.isLoading && timeSinceLastEdit > 5000) {
+                    this.loadDataWithRetry();
+                }
+            }, 15000); // Retour à 15 secondes
+        }
+        
         console.log('✅ Compteur d\'erreurs réinitialisé, refresh automatique réactivé');
     }
 
