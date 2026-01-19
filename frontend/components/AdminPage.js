@@ -1645,8 +1645,8 @@ class AdminPage {
     }
     
     cancelEdit(id) {
-        // Recharger le tableau pour annuler l'édition
-        this.updateOperationsTable();
+        // Recharger les données pour annuler l'édition et restaurer l'état normal
+        this.loadData();
     }
 
     updateMonitoringRowInTable(tempsId, record) {
@@ -2226,11 +2226,12 @@ class AdminPage {
                 }
             });
             
-            // Si aucune valeur n'a changé, ne pas envoyer de requête
+            // Si aucune valeur n'a changé, ne pas envoyer de requête mais restaurer l'état normal
             if (!startTimeChanged && !endTimeChanged && !statusChanged) {
                 console.log(`ℹ️ Aucune modification détectée pour l'opération ${id}`);
                 this.notificationManager.info('Aucune modification détectée');
-                this.loadData(); // Recharger pour revenir à l'état normal
+                // Recharger les données pour restaurer l'état normal (sortir du mode édition)
+                await this.loadData();
                 return;
             }
             
@@ -2324,19 +2325,8 @@ class AdminPage {
                 const updatedOperation = this.operations.find(op => (op.TempsId == id || op.id == id));
                 console.log('🔍 Opération après mise à jour en mémoire:', updatedOperation);
                 
-                // Mettre à jour l'affichage
-                if (isMonitoringRecord) {
-                    this.updateMonitoringRowInTable(record.TempsId, record);
-                } else {
-                    this.updateSingleRowInTable(id);
-                }
-                
-                // Recharger les données après un court délai pour s'assurer de la synchronisation
-                setTimeout(async () => {
-                    const today = new Date().toISOString().split('T')[0];
-                    await this.loadMonitoringRecords(today);
-                    this.updateOperationsTable();
-                }, 500);
+                // Recharger complètement les données pour restaurer l'état normal (sortir du mode édition)
+                await this.loadData();
             } else {
                 const errorMessage = response.error || 'Erreur lors de la mise à jour';
                 this.notificationManager.error(`Erreur: ${errorMessage}`);
