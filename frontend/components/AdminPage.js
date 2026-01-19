@@ -237,7 +237,7 @@ class AdminPage {
         }, 15000); // Toutes les 15 secondes (au lieu de 5) pour réduire le rate limiting
     }
 
-    async loadData() {
+    async loadData(enableAutoConsolidate = true) {
         if (this.isLoading) {
             console.log('Chargement déjà en cours, ignorer...');
             return;
@@ -1107,7 +1107,14 @@ class AdminPage {
 
     // ===== Transfert: une seule consolidation puis transfert, sans boucle =====
     async handleTransfer() {
+        // Empêcher les appels simultanés
+        if (this._isTransferring) {
+            console.log('⏸️ Transfert déjà en cours, ignoré');
+            return;
+        }
+
         try {
+            this._isTransferring = true;
             const allRecordsData = this.operations || [];
             console.log(`📊 Total opérations dans le tableau: ${allRecordsData.length}`);
 
@@ -1136,28 +1143,35 @@ class AdminPage {
                     LancementCode: op.LancementCode
                 }));
                 
-                const consolidateResult = await this.apiService.consolidateMonitoringBatch(operationsToConsolidate);
-                const ok = consolidateResult?.results?.success || [];
-                const errors = consolidateResult?.results?.errors || [];
+                // Marquer la consolidation en cours pour éviter les appels récursifs
+                this._isConsolidating = true;
+                try {
+                    const consolidateResult = await this.apiService.consolidateMonitoringBatch(operationsToConsolidate);
+                    const ok = consolidateResult?.results?.success || [];
+                    const errors = consolidateResult?.results?.errors || [];
 
-                console.log(
-                    `✅ Consolidation pré-transfert: ${ok.length} réussie(s), ` +
-                    `${(consolidateResult?.results?.skipped || []).length} ignorée(s), ` +
-                    `${errors.length} erreur(s)`
-                );
-
-                if (errors.length > 0) {
-                    this.notificationManager.warning(
-                        `${errors.length} opération(s) n'ont pas pu être consolidée(s) automatiquement. ` +
-                        `Seules les opérations correctement consolidées seront transférées.`
+                    console.log(
+                        `✅ Consolidation pré-transfert: ${ok.length} réussie(s), ` +
+                        `${(consolidateResult?.results?.skipped || []).length} ignorée(s), ` +
+                        `${errors.length} erreur(s)`
                     );
-                }
 
-                // Recharger une seule fois les données pour récupérer les nouveaux TempsId
-                await this.loadData();
-                terminatedOps = (this.operations || []).filter(
-                    op => this.isOperationTerminated(op) && op.StatutTraitement !== 'T'
-                );
+                    if (errors.length > 0) {
+                        this.notificationManager.warning(
+                            `${errors.length} opération(s) n'ont pas pu être consolidée(s) automatiquement. ` +
+                            `Seules les opérations correctement consolidées seront transférées.`
+                        );
+                    }
+
+                    // Recharger une seule fois les données pour récupérer les nouveaux TempsId
+                    // Désactiver la consolidation automatique pendant le rechargement
+                    await this.loadData(false); // Passer false pour désactiver autoConsolidate
+                    terminatedOps = (this.operations || []).filter(
+                        op => this.isOperationTerminated(op) && op.StatutTraitement !== 'T'
+                    );
+                } finally {
+                    this._isConsolidating = false;
+                }
             }
 
             // 3) Ne garder pour le transfert que les opérations qui ont maintenant un TempsId
@@ -1195,7 +1209,7 @@ class AdminPage {
                 const result = await this.apiService.validateAndTransmitMonitoringBatch(ids, { triggerEdiJob });
                 if (result?.success) {
                     this.notificationManager.success(`Transfert terminé: ${result.count || ids.length} opération(s) transférée(s)`);
-                    await this.loadData();
+                    await this.loadData(false); // Désactiver autoConsolidate après transfert
                 } else {
                     this.notificationManager.error(result?.error || 'Erreur lors du transfert');
                 }
@@ -1206,6 +1220,8 @@ class AdminPage {
         } catch (error) {
             console.error('Erreur lors du transfert:', error);
             this.notificationManager.error('Erreur de connexion lors du transfert');
+        } finally {
+            this._isTransferring = false;
         }
     }
 
