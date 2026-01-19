@@ -1031,7 +1031,61 @@ class AdminPage {
             
             // Filtrer uniquement les opérations TERMINÉES qui ne sont pas déjà transférées
             const terminatedOps = allRecordsData.filter(op => this.isOperationTerminated(op) && op.StatutTraitement !== 'T');
-            const terminatedRecords = terminatedOps;
+            
+            // Séparer les opérations terminées en deux groupes : consolidées et non consolidées
+            const unconsolidatedOps = terminatedOps.filter(op => op._isUnconsolidated || !op.TempsId);
+            const consolidatedOps = terminatedOps.filter(op => !op._isUnconsolidated && op.TempsId);
+            
+            console.log(`📊 Opérations terminées: ${terminatedOps.length} (${unconsolidatedOps.length} non consolidées, ${consolidatedOps.length} consolidées)`);
+            
+            // Si des opérations non consolidées existent, les consolider automatiquement en arrière-plan
+            if (unconsolidatedOps.length > 0) {
+                // Vérifier si on est déjà en train de consolider (éviter la boucle infinie)
+                if (this._isConsolidating) {
+                    console.warn('⚠️ Consolidation déjà en cours, évitement de la boucle infinie');
+                    // Ne pas bloquer, continuer avec les opérations déjà consolidées
+                } else {
+                    this._isConsolidating = true;
+                    
+                    try {
+                        console.log(`🔄 Consolidation automatique de ${unconsolidatedOps.length} opération(s) terminée(s)...`);
+                        
+                        const operationsToConsolidate = unconsolidatedOps.map(op => ({
+                            OperatorCode: op.OperatorCode,
+                            LancementCode: op.LancementCode
+                        }));
+                        
+                        const consolidateResult = await this.apiService.consolidateMonitoringBatch(operationsToConsolidate);
+                        
+                        if (consolidateResult?.success) {
+                            const consolidated = consolidateResult.results?.success || [];
+                            const skipped = consolidateResult.results?.skipped || [];
+                            const errors = consolidateResult.results?.errors || [];
+                            
+                            console.log(`✅ Consolidation: ${consolidated.length} réussie(s), ${skipped.length} ignorée(s), ${errors.length} erreur(s)`);
+                            
+                            if (consolidated.length > 0) {
+                                // Recharger les données pour obtenir les nouveaux TempsId
+                                await this.loadData();
+                                // Relancer la fonction pour récupérer les opérations maintenant consolidées
+                                this._isConsolidating = false;
+                                return this.handleTransfer();
+                            } else if (errors.length > 0) {
+                                // Si toutes les opérations ont échoué, continuer quand même avec celles qui sont déjà consolidées
+                                console.warn(`⚠️ ${errors.length} opération(s) n'ont pas pu être consolidée(s), continuation avec les opérations déjà consolidées`);
+                            }
+                        }
+                    } catch (error) {
+                        console.error('❌ Erreur lors de la consolidation automatique:', error);
+                        // Continuer quand même avec les opérations déjà consolidées
+                    } finally {
+                        this._isConsolidating = false;
+                    }
+                }
+            }
+            
+            // Utiliser les opérations consolidées pour le transfert
+            const terminatedRecords = consolidatedOps.length > 0 ? consolidatedOps : terminatedOps;
 
             console.log(`✅ Opérations éligibles au transfert: ${terminatedRecords.length} sur ${allRecordsData.length}`);
 
