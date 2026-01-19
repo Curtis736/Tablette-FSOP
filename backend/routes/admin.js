@@ -3240,6 +3240,14 @@ router.put('/monitoring/:tempsId', async (req, res) => {
 router.delete('/monitoring/:tempsId', async (req, res) => {
     try {
         const { tempsId } = req.params;
+        const tempsIdNum = parseInt(tempsId, 10);
+
+        if (!Number.isFinite(tempsIdNum)) {
+            return res.status(400).json({
+                success: false,
+                error: 'TempsId invalide'
+            });
+        }
         
         // 🔒 VÉRIFICATION DE SÉCURITÉ : Vérifier que l'enregistrement existe
         const checkQuery = `
@@ -3247,7 +3255,7 @@ router.delete('/monitoring/:tempsId', async (req, res) => {
             FROM [SEDI_APP_INDEPENDANTE].[dbo].[ABTEMPS_OPERATEURS]
             WHERE TempsId = @tempsId
         `;
-        const existing = await executeQuery(checkQuery, { tempsId: parseInt(tempsId) });
+        const existing = await executeQuery(checkQuery, { tempsId: tempsIdNum });
         
         if (existing.length === 0) {
             return res.status(404).json({
@@ -3257,7 +3265,7 @@ router.delete('/monitoring/:tempsId', async (req, res) => {
         }
         
         // Si un operatorCode est fourni dans le body, vérifier qu'il correspond
-        if (req.body.operatorCode && req.body.operatorCode !== existing[0].OperatorCode) {
+        if (req.body?.operatorCode && req.body.operatorCode !== existing[0].OperatorCode) {
             return res.status(403).json({
                 success: false,
                 error: 'Vous ne pouvez supprimer que vos propres enregistrements',
@@ -3265,7 +3273,7 @@ router.delete('/monitoring/:tempsId', async (req, res) => {
             });
         }
         
-        const result = await MonitoringService.deleteRecord(parseInt(tempsId));
+        const result = await MonitoringService.deleteRecord(tempsIdNum);
         
         if (result.success) {
             res.json({
@@ -3284,7 +3292,8 @@ router.delete('/monitoring/:tempsId', async (req, res) => {
         console.error('❌ Erreur lors de la suppression:', error);
         res.status(500).json({
             success: false,
-            error: 'Erreur serveur lors de la suppression'
+            error: 'Erreur serveur lors de la suppression',
+            details: error?.message
         });
     }
 });
