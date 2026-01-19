@@ -989,38 +989,61 @@ class AdminPage {
             
             // Si des opérations non consolidées existent, les consolider automatiquement
             if (unconsolidatedOps.length > 0) {
-                this.notificationManager.info(`Consolidation de ${unconsolidatedOps.length} opération(s) terminée(s)...`);
-                
-                const operationsToConsolidate = unconsolidatedOps.map(op => ({
-                    OperatorCode: op.OperatorCode,
-                    LancementCode: op.LancementCode
-                }));
-                
-                const consolidateResult = await this.apiService.consolidateMonitoringBatch(operationsToConsolidate);
-                
-                if (consolidateResult?.success) {
-                    const consolidated = consolidateResult.results?.success || [];
-                    const skipped = consolidateResult.results?.skipped || [];
-                    const errors = consolidateResult.results?.errors || [];
-                    
-                    console.log(`✅ Consolidation: ${consolidated.length} réussie(s), ${skipped.length} ignorée(s), ${errors.length} erreur(s)`);
-                    
-                    if (consolidated.length > 0) {
-                        this.notificationManager.success(`${consolidated.length} opération(s) consolidée(s) avec succès`);
-                    }
-                    if (errors.length > 0) {
-                        this.notificationManager.warning(`${errors.length} opération(s) n'ont pas pu être consolidée(s)`);
-                    }
-                    
-                    // Recharger les données pour obtenir les nouveaux TempsId
-                    await this.loadData();
-                    
-                    // Relancer la fonction pour récupérer les opérations maintenant consolidées
-                    return this.handleTransfer();
-                } else {
-                    this.notificationManager.error(consolidateResult?.error || 'Erreur lors de la consolidation');
+                // Vérifier si on est déjà en train de consolider (éviter la boucle infinie)
+                if (this._isConsolidating) {
+                    console.warn('⚠️ Consolidation déjà en cours, évitement de la boucle infinie');
+                    this.notificationManager.warning('Consolidation déjà en cours, veuillez patienter...');
                     return;
                 }
+                
+                this._isConsolidating = true;
+                
+                try {
+                    this.notificationManager.info(`Consolidation de ${unconsolidatedOps.length} opération(s) terminée(s)...`);
+                    
+                    const operationsToConsolidate = unconsolidatedOps.map(op => ({
+                        OperatorCode: op.OperatorCode,
+                        LancementCode: op.LancementCode
+                    }));
+                    
+                    const consolidateResult = await this.apiService.consolidateMonitoringBatch(operationsToConsolidate);
+                    
+                    if (consolidateResult?.success) {
+                        const consolidated = consolidateResult.results?.success || [];
+                        const skipped = consolidateResult.results?.skipped || [];
+                        const errors = consolidateResult.results?.errors || [];
+                        
+                        console.log(`✅ Consolidation: ${consolidated.length} réussie(s), ${skipped.length} ignorée(s), ${errors.length} erreur(s)`);
+                        
+                        if (consolidated.length > 0) {
+                            this.notificationManager.success(`${consolidated.length} opération(s) consolidée(s) avec succès`);
+                        }
+                        if (errors.length > 0) {
+                            this.notificationManager.warning(`${errors.length} opération(s) n'ont pas pu être consolidée(s)`);
+                        }
+                        
+                        // Recharger les données pour obtenir les nouveaux TempsId
+                        await this.loadData();
+                        
+                        // Relancer la fonction UNIQUEMENT si au moins une opération a été consolidée avec succès
+                        // Cela évite la boucle infinie si toutes les opérations échouent
+                        if (consolidated.length > 0) {
+                            this._isConsolidating = false; // Réinitialiser avant l'appel récursif
+                            return this.handleTransfer();
+                        } else {
+                            // Aucune opération consolidée, arrêter ici pour éviter la boucle
+                            console.warn('⚠️ Aucune opération consolidée, arrêt de la consolidation automatique');
+                            this.notificationManager.warning('Aucune opération n\'a pu être consolidée. Vérifiez les erreurs ci-dessus.');
+                        }
+                    } else {
+                        this.notificationManager.error(consolidateResult?.error || 'Erreur lors de la consolidation');
+                    }
+                } finally {
+                    this._isConsolidating = false;
+                }
+                
+                // Si on arrive ici, on ne relance pas handleTransfer() pour éviter la boucle
+                return;
             }
             
             // Filtrer uniquement les opérations TERMINÉES consolidées qui ne sont pas déjà transférées
