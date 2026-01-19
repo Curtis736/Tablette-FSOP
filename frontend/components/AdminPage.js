@@ -258,10 +258,11 @@ class AdminPage {
             // Charger les données en parallèle avec timeout
             const dataPromises = Promise.all([
                 this.apiService.getAdminData(today),
-                this.apiService.getConnectedOperators()
+                this.apiService.getConnectedOperators(),
+                this.apiService.getAllOperators() // Charger aussi la liste globale
             ]);
             
-            const [adminData, operatorsData] = await Promise.race([
+            const [adminData, operatorsData, allOperatorsData] = await Promise.race([
                 dataPromises,
                 timeoutPromise
             ]);
@@ -370,14 +371,18 @@ class AdminPage {
                 };
             }
             
-            // Mettre à jour le menu déroulant des opérateurs
-            if (operatorsData && operatorsData.success && operatorsData.operators) {
-                this.updateOperatorSelect(operatorsData.operators);
+            // Mettre à jour le menu déroulant des opérateurs avec les deux listes
+            const connectedOps = operatorsData && (operatorsData.success ? operatorsData.operators : operatorsData.operators) || [];
+            const allOps = allOperatorsData && (allOperatorsData.success ? allOperatorsData.operators : allOperatorsData.operators) || [];
+            
+            if (connectedOps.length > 0 || allOps.length > 0) {
+                this.updateOperatorSelect(connectedOps, allOps);
                 this.lastOperatorsUpdate = Date.now(); // Mettre à jour le timestamp
-            } else if (operatorsData && operatorsData.operators) {
-                // Fallback si success n'est pas défini
-                this.updateOperatorSelect(operatorsData.operators);
-                this.lastOperatorsUpdate = Date.now(); // Mettre à jour le timestamp
+            }
+            
+            // Mettre à jour l'affichage des opérateurs connectés
+            if (connectedOps.length > 0) {
+                this.updateActiveOperatorsDisplay(connectedOps);
             }
             
             this.updateStats();
@@ -647,39 +652,80 @@ class AdminPage {
         }, 10000);
     }
 
-    updateOperatorSelect(operators) {
-        console.log('🔄 Mise à jour du menu déroulant des opérateurs:', operators.length);
-        
-        // Vider le select et ajouter l'option par défaut
-        this.operatorSelect.innerHTML = '<option value="">Tous les opérateurs connectés</option>';
-        
-        // Ajouter chaque opérateur avec validation
-        operators.forEach(operator => {
-            const option = document.createElement('option');
-            option.value = operator.code;
-            
-            // Indicateur visuel pour les opérateurs mal associés et actifs
-            let statusIcon = '';
-            if (operator.isProperlyLinked === false) {
-                statusIcon = ' ⚠️';
-            } else if (operator.isProperlyLinked === true) {
-                statusIcon = ' ✅';
-            }
-            
-            // Indicateur d'activité
-            if (operator.isActive) {
-                statusIcon = ' 🟢' + statusIcon;
-                option.style.fontWeight = 'bold';
-                option.style.color = '#28a745';
-            }
-            
-            option.textContent = `${operator.name} (${operator.code})${statusIcon}`;
-            option.title = `Code: ${operator.code} | Ressource: ${operator.resourceCode || 'N/A'} | Statut: ${operator.currentStatus || 'N/A'}`;
-            
-            this.operatorSelect.appendChild(option);
+    updateOperatorSelect(connectedOperators = [], allOperators = []) {
+        console.log('🔄 Mise à jour du menu déroulant des opérateurs:', {
+            connectés: connectedOperators.length,
+            globaux: allOperators.length
         });
         
-        console.log('✅ Menu déroulant mis à jour avec', operators.length, 'opérateurs');
+        // Vider le select et ajouter l'option par défaut
+        this.operatorSelect.innerHTML = '<option value="">Tous les opérateurs</option>';
+        
+        // Créer un Set des codes d'opérateurs connectés pour vérification rapide
+        const connectedCodes = new Set(connectedOperators.map(op => op.code));
+        
+        // Section 1: Opérateurs connectés (en opération)
+        if (connectedOperators.length > 0) {
+            const optgroupConnected = document.createElement('optgroup');
+            optgroupConnected.label = `🟢 Opérateurs connectés (${connectedOperators.length})`;
+            
+            connectedOperators.forEach(operator => {
+                const option = document.createElement('option');
+                option.value = operator.code;
+                
+                // Indicateur visuel pour les opérateurs mal associés et actifs
+                let statusIcon = '';
+                if (operator.isProperlyLinked === false) {
+                    statusIcon = ' ⚠️';
+                } else if (operator.isProperlyLinked === true) {
+                    statusIcon = ' ✅';
+                }
+                
+                // Indicateur d'activité
+                if (operator.isActive) {
+                    statusIcon = ' 🔴' + statusIcon;
+                    option.style.fontWeight = 'bold';
+                    option.style.color = '#dc3545';
+                } else {
+                    statusIcon = ' 🟢' + statusIcon;
+                }
+                
+                option.textContent = `${operator.name} (${operator.code})${statusIcon}`;
+                option.title = `Code: ${operator.code} | Ressource: ${operator.resourceCode || 'N/A'} | Statut: ${operator.currentStatus || 'N/A'}`;
+                
+                optgroupConnected.appendChild(option);
+            });
+            
+            this.operatorSelect.appendChild(optgroupConnected);
+        }
+        
+        // Section 2: Tous les opérateurs (globale)
+        if (allOperators.length > 0) {
+            const optgroupAll = document.createElement('optgroup');
+            optgroupAll.label = `📋 Tous les opérateurs (${allOperators.length})`;
+            
+            allOperators.forEach(operator => {
+                // Ne pas dupliquer les opérateurs déjà dans la liste connectés
+                if (connectedCodes.has(operator.code)) {
+                    return;
+                }
+                
+                const option = document.createElement('option');
+                option.value = operator.code;
+                
+                // Indicateur de connexion
+                let statusIcon = operator.isConnected ? ' 🟢' : ' ⚪';
+                
+                option.textContent = `${operator.name} (${operator.code})${statusIcon}`;
+                option.title = `Code: ${operator.code} | Type: ${operator.type || 'N/A'} | ${operator.isConnected ? 'Connecté' : 'Non connecté'}`;
+                
+                optgroupAll.appendChild(option);
+            });
+            
+            this.operatorSelect.appendChild(optgroupAll);
+        }
+        
+        console.log('✅ Menu déroulant mis à jour avec', connectedOperators.length, 'connectés et', allOperators.length, 'globaux');
     }
 
     // Nouvelle méthode pour mettre à jour le statut des opérateurs
@@ -692,13 +738,22 @@ class AdminPage {
         }
         
         try {
-            const response = await this.apiService.getConnectedOperators();
-            if (response.success && response.operators) {
-                this.updateOperatorSelect(response.operators);
+            const [connectedResponse, allOperatorsResponse] = await Promise.all([
+                this.apiService.getConnectedOperators(),
+                this.apiService.getAllOperators()
+            ]);
+            
+            const connectedOps = connectedResponse && (connectedResponse.success ? connectedResponse.operators : connectedResponse.operators) || [];
+            const allOps = allOperatorsResponse && (allOperatorsResponse.success ? allOperatorsResponse.operators : allOperatorsResponse.operators) || [];
+            
+            if (connectedOps.length > 0 || allOps.length > 0) {
+                this.updateOperatorSelect(connectedOps, allOps);
                 this.lastOperatorsUpdate = Date.now(); // Mettre à jour le timestamp
                 
                 // Mettre à jour l'affichage des opérateurs actifs
-                this.updateActiveOperatorsDisplay(response.operators);
+                if (connectedOps.length > 0) {
+                    this.updateActiveOperatorsDisplay(connectedOps);
+                }
             }
         } catch (error) {
             console.error('Erreur lors de la mise à jour du statut des opérateurs:', error);

@@ -358,6 +358,29 @@ class ApiService {
         return data;
     }
 
+    // Récupérer tous les opérateurs (liste globale depuis RESSOURC)
+    async getAllOperators(forceRefresh = false) {
+        const cacheKey = '/admin/operators/all';
+        const cached = this.cache.get(cacheKey);
+        
+        // Utiliser le cache si disponible et récent (< 60 secondes) car cette liste change rarement
+        if (!forceRefresh && cached && (Date.now() - cached.timestamp) < 60000) {
+            console.log('📦 Utilisation du cache pour /admin/operators/all');
+            return cached.data;
+        }
+        
+        // Faire la requête
+        const data = await this.get('/admin/operators/all');
+        
+        // Mettre en cache
+        this.cache.set(cacheKey, {
+            data: data,
+            timestamp: Date.now()
+        });
+        
+        return data;
+    }
+
     // Récupérer les lancements d'un opérateur spécifique
     async getOperatorOperations(operatorCode) {
         return this.get(`/admin/operators/${operatorCode}/operations`);

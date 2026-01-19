@@ -1471,6 +1471,61 @@ router.get('/operators', async (req, res) => {
     }
 });
 
+// Route pour récupérer tous les opérateurs (liste globale depuis RESSOURC)
+router.get('/operators/all', async (req, res) => {
+    try {
+        // Éviter le cache
+        res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+        res.setHeader('Pragma', 'no-cache');
+        res.setHeader('Expires', '0');
+
+        console.log('🔍 Récupération de tous les opérateurs depuis RESSOURC...');
+
+        const allOperatorsQuery = `
+            SELECT TOP 500
+                r.Coderessource as OperatorCode,
+                r.Designation1 as NomOperateur,
+                r.Typeressource,
+                CASE 
+                    WHEN s.OperatorCode IS NOT NULL THEN 'CONNECTE'
+                    ELSE 'INACTIVE'
+                END as ConnectionStatus,
+                s.LoginTime,
+                s.SessionStatus
+            FROM [SEDI_ERP].[dbo].[RESSOURC] r
+            LEFT JOIN [SEDI_APP_INDEPENDANTE].[dbo].[ABSESSIONS_OPERATEURS] s 
+                ON r.Coderessource = s.OperatorCode 
+                AND s.SessionStatus = 'ACTIVE'
+            WHERE r.Typeressource IN ('OP', 'OPERATEUR', 'O')
+            ORDER BY r.Coderessource
+        `;
+
+        const allOperators = await executeQuery(allOperatorsQuery);
+        
+        console.log(`✅ ${allOperators.length} opérateurs globaux récupérés`);
+
+        res.json({
+            success: true,
+            operators: allOperators.map(op => ({
+                code: op.OperatorCode,
+                name: op.NomOperateur || `Opérateur ${op.OperatorCode}`,
+                type: op.Typeressource,
+                isConnected: op.ConnectionStatus === 'CONNECTE',
+                loginTime: op.LoginTime,
+                sessionStatus: op.SessionStatus
+            }))
+        });
+
+    } catch (error) {
+        console.error('❌ Erreur lors de la récupération de tous les opérateurs:', error);
+        res.status(500).json({
+            success: false,
+            error: 'Erreur lors de la récupération de tous les opérateurs',
+            details: error.message
+        });
+    }
+});
+
 // Route pour résoudre les conflits de lancements
 router.post('/resolve-conflict', async (req, res) => {
     try {
