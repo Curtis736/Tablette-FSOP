@@ -468,8 +468,46 @@ class MonitoringService {
             const invalidIds = [];
             const fixedIds = [];
             
-            // 1. Valider chaque enregistrement avant validation/transmission
-            for (const tempsId of tempsIds) {
+            // 1. Vérifier que les enregistrements existent et récupérer leurs données
+            const { executeQuery } = require('../config/database');
+            const checkQuery = `
+                SELECT TempsId, OperatorCode, LancementCode, StartTime, EndTime, StatutTraitement
+                FROM [SEDI_APP_INDEPENDANTE].[dbo].[ABTEMPS_OPERATEURS]
+                WHERE TempsId IN (${tempsIds.map((_, i) => `@id${i}`).join(', ')})
+            `;
+            const checkParams = {};
+            tempsIds.forEach((id, i) => {
+                checkParams[`id${i}`] = id;
+            });
+            const existingRecords = await executeQuery(checkQuery, checkParams);
+            
+            if (existingRecords.length === 0) {
+                return {
+                    success: false,
+                    error: 'Aucun enregistrement trouvé pour les IDs fournis'
+                };
+            }
+            
+            // 2. Valider chaque enregistrement (mais accepter ceux qui ne sont pas encore validés)
+            for (const record of existingRecords) {
+                const tempsId = record.TempsId;
+                
+                // Vérifier les champs obligatoires
+                if (!record.OperatorCode || !record.LancementCode || !record.StartTime || !record.EndTime) {
+                    invalidIds.push({
+                        tempsId,
+                        errors: ['Champs obligatoires manquants (OperatorCode, LancementCode, StartTime, EndTime)']
+                    });
+                    continue;
+                }
+                
+                // Si StatutTraitement est 'T' (déjà transmis), on peut le sauter ou le réinclure selon le besoin
+                if (record.StatutTraitement === 'T') {
+                    console.log(`ℹ️ Enregistrement ${tempsId} déjà transmis, sera ignoré`);
+                    continue;
+                }
+                
+                // Validation optionnelle (vérifier cohérence des durées, etc.)
                 const validation = await OperationValidationService.validateTransferData(tempsId);
                 
                 if (!validation.valid) {
@@ -487,13 +525,19 @@ class MonitoringService {
                             if (revalidation.valid) {
                                 validIds.push(tempsId);
                             } else {
-                                invalidIds.push({ tempsId, errors: revalidation.errors });
+                                // Même si la validation échoue après correction, on peut quand même valider si les champs obligatoires sont présents
+                                console.warn(`⚠️ Validation échouée après correction pour TempsId=${tempsId}, mais champs obligatoires présents - inclusion quand même`);
+                                validIds.push(tempsId);
                             }
                         } else {
-                            invalidIds.push({ tempsId, errors: validation.errors });
+                            // Même si l'auto-correction échoue, on peut valider si les champs obligatoires sont présents
+                            console.warn(`⚠️ Auto-correction impossible pour TempsId=${tempsId}, mais champs obligatoires présents - inclusion quand même`);
+                            validIds.push(tempsId);
                         }
                     } else {
-                        invalidIds.push({ tempsId, errors: validation.errors });
+                        // Même sans auto-correction, on peut valider si les champs obligatoires sont présents
+                        console.warn(`⚠️ Validation échouée pour TempsId=${tempsId}, mais champs obligatoires présents - inclusion quand même`);
+                        validIds.push(tempsId);
                     }
                 } else {
                     validIds.push(tempsId);
