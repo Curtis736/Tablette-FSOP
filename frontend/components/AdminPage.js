@@ -18,9 +18,7 @@ class AdminPage {
         this.pendingChanges = new Map(); // Map des modifications en attente
         this.autoSaveTimer = null;
         
-        console.log('AdminPage constructor - Initialisation');
-        console.log('ApiService:', this.apiService);
-        console.log('NotificationManager:', this.notificationManager);
+        // Initialisation silencieuse
         
         // Initialisation immédiate (le DOM devrait être prêt maintenant)
         this.initializeElements();
@@ -29,9 +27,7 @@ class AdminPage {
     }
 
     initializeElements() {
-        console.log('AdminPage.initializeElements() - Recherche des éléments DOM');
-        
-        // Attendre que le DOM soit complètement chargé
+        // Recherche des éléments DOM
         const elements = {
             refreshDataBtn: 'refreshDataBtn',
             totalOperators: 'totalOperators',
@@ -61,15 +57,8 @@ class AdminPage {
                     this[key] = document.createElement('tbody');
                     this[key].id = elementId;
                 }
-            } else {
-                console.log(`✅ Élément trouvé: ${elementId}`);
             }
         });
-        
-        console.log('Éléments initialisés:', Object.keys(elements).map(key => ({
-            name: key,
-            found: !!this[key]
-        })));
     }
 
     addEventListenerSafe(elementId, eventType, handler) {
@@ -87,8 +76,6 @@ class AdminPage {
     }
 
     setupEventListeners() {
-        console.log('setupEventListeners - Début');
-        
         // Attendre un peu que le DOM soit complètement prêt
         setTimeout(() => {
             try {
@@ -96,57 +83,47 @@ class AdminPage {
                 const refreshBtn = document.getElementById('refreshDataBtn');
                 if (refreshBtn) {
                     refreshBtn.addEventListener('click', () => {
-                        // Réinitialiser le compteur d'erreurs pour permettre un nouveau chargement
                         this.resetConsecutiveErrors();
                         this.loadData();
                     });
-                    console.log('Listener ajouté: refreshDataBtn');
                 }
 
                 // Modale transfert
                 const closeTransferModalBtn = document.getElementById('closeTransferModalBtn');
                 if (closeTransferModalBtn) {
                     closeTransferModalBtn.addEventListener('click', () => this.hideTransferModal());
-                    console.log('Listener ajouté: closeTransferModalBtn');
                 }
 
                 const transferSelectedConfirmBtn = document.getElementById('transferSelectedConfirmBtn');
                 if (transferSelectedConfirmBtn) {
                     transferSelectedConfirmBtn.addEventListener('click', () => this.confirmTransferFromModal());
-                    console.log('Listener ajouté: transferSelectedConfirmBtn');
                 }
 
                 const transferSelectAll = document.getElementById('transferSelectAll');
                 if (transferSelectAll) {
                     transferSelectAll.addEventListener('change', () => this.toggleTransferSelectAll(transferSelectAll.checked));
-                    console.log('Listener ajouté: transferSelectAll');
                 }
                 
                 // Menu déroulant opérateurs
                 const operatorSelect = document.getElementById('operatorFilter');
                 if (operatorSelect) {
                     operatorSelect.addEventListener('change', () => this.handleOperatorChange());
-                    console.log('Listener ajouté: operatorSelect');
                 }
                 
                 // Filtre de statut
                 const statusFilter = document.getElementById('statusFilter');
                 if (statusFilter) {
                     statusFilter.addEventListener('change', () => {
-                        console.log('🔄 Filtre de statut changé:', statusFilter.value);
                         this.updateOperationsTable();
                     });
-                    console.log('Listener ajouté: statusFilter');
                 }
                 
                 // Filtre de recherche
                 const searchFilter = document.getElementById('searchFilter');
                 if (searchFilter) {
                     searchFilter.addEventListener('input', () => {
-                        console.log('🔄 Filtre de recherche changé:', searchFilter.value);
                         this.updateOperationsTable();
                     });
-                    console.log('Listener ajouté: searchFilter');
                 }
                 
                 // Bouton effacer filtres
@@ -158,22 +135,19 @@ class AdminPage {
                         if (searchFilter) searchFilter.value = '';
                         this.loadData();
                     });
-                    console.log('Listener ajouté: clearFiltersBtn');
                 }
                 
-                   // Bouton Transfert
-                   const transferBtn = document.getElementById('transferBtn');
-                   if (transferBtn) {
-                       transferBtn.addEventListener('click', () => this.handleTransfer());
-                       console.log('Listener ajouté: transferBtn');
-                   }
-                   
-                   // Bouton Ajouter une ligne
-                   const addOperationBtn = document.getElementById('addOperationBtn');
-                   if (addOperationBtn) {
-                       addOperationBtn.addEventListener('click', () => this.handleAddOperation());
-                       console.log('Listener ajouté: addOperationBtn');
-                   }
+                // Bouton Transfert
+                const transferBtn = document.getElementById('transferBtn');
+                if (transferBtn) {
+                    transferBtn.addEventListener('click', () => this.handleTransfer());
+                }
+                
+                // Bouton Ajouter une ligne
+                const addOperationBtn = document.getElementById('addOperationBtn');
+                if (addOperationBtn) {
+                    addOperationBtn.addEventListener('click', () => this.handleAddOperation());
+                }
                 
                 // Tableau des opérations
                 const tableBody = document.getElementById('operationsTableBody');
@@ -181,22 +155,24 @@ class AdminPage {
                     tableBody.addEventListener('click', async (e) => {
                         if (e.target.closest('.btn-delete')) {
                             const btn = e.target.closest('.btn-delete');
+                            const tempsId = btn.dataset.tempsId ? parseInt(btn.dataset.tempsId, 10) : null;
+                            const eventId = btn.dataset.eventId ? btn.dataset.eventId : null;
                             const id = btn.dataset.id || btn.dataset.operationId;
-                            const isUnconsolidated = btn.dataset.unconsolidated === 'true';
-                            console.log('🗑️ Clic sur bouton supprimer, ID:', id, 'Non consolidé:', isUnconsolidated);
+                            const isUnconsolidated = (btn.dataset.unconsolidated === 'true') || !tempsId;
+
                             if (isUnconsolidated) {
-                                await this.deleteOperation(id);
+                                await this.deleteOperation(eventId || id);
                             } else {
-                                await this.deleteMonitoringRecord(id);
+                                await this.deleteMonitoringRecord(tempsId || id);
                             }
                         } else if (e.target.closest('.btn-edit')) {
                             e.preventDefault();
                             e.stopPropagation();
                             const btn = e.target.closest('.btn-edit');
+                            const tempsId = btn.dataset.tempsId ? parseInt(btn.dataset.tempsId, 10) : null;
+                            const eventId = btn.dataset.eventId ? btn.dataset.eventId : null;
                             const id = btn.dataset.id || btn.dataset.operationId;
-                            const isUnconsolidated = btn.dataset.unconsolidated === 'true';
-                            console.log('✏️ Clic sur bouton modifier détecté');
-                            console.log('🔍 ID récupéré:', id, 'Type:', typeof id, 'Non consolidé:', isUnconsolidated);
+                            const isUnconsolidated = (btn.dataset.unconsolidated === 'true') || !tempsId;
                             
                             if (!id) {
                                 console.error('❌ ID manquant sur le bouton!');
@@ -206,9 +182,9 @@ class AdminPage {
                             
                             try {
                                 if (isUnconsolidated) {
-                                    await this.editOperation(id);
+                                    await this.editOperation(eventId || id);
                                 } else {
-                                    await this.editMonitoringRecord(id);
+                                    await this.editMonitoringRecord(tempsId || id);
                                 }
                             } catch (error) {
                                 console.error('❌ Erreur lors de l\'édition:', error);
@@ -216,10 +192,7 @@ class AdminPage {
                             }
                         }
                     });
-                    console.log('Listener ajouté: operationsTableBody');
                 }
-                
-                console.log('Tous les listeners ajoutés avec succès');
                 
             } catch (error) {
                 console.error('Erreur lors de l\'ajout des listeners:', error);
@@ -271,7 +244,6 @@ class AdminPage {
         }
         
         try {
-            console.log('DEBUT loadData()');
             this.isLoading = true;
             
             // Charger les opérateurs connectés et les données admin en parallèle avec timeout
@@ -283,72 +255,97 @@ class AdminPage {
                 setTimeout(() => reject(new Error('Timeout: La requête a pris trop de temps')), 30000)
             );
             
-            // Charger les données en parallèle
+            // Charger les données en parallèle avec timeout
+            const dataPromises = Promise.all([
+                this.apiService.getAdminData(today),
+                this.apiService.getConnectedOperators()
+            ]);
+            
             const [adminData, operatorsData] = await Promise.race([
-                Promise.all([
-                    this.apiService.getAdminData(today),
-                    this.apiService.getConnectedOperators()
-                ]),
+                dataPromises,
                 timeoutPromise
             ]);
             
             // Les données sont déjà parsées par ApiService
             const data = adminData;
             
-            console.log('DONNEES BRUTES:', data);
-            console.log('OPERATEURS CONNECTES:', operatorsData);
+            // Charger les opérations consolidées depuis ABTEMPS_OPERATEURS
+            const statutTraitement = document.getElementById('statusFilter')?.value || undefined;
+            const operatorCode = document.getElementById('operatorFilter')?.value || undefined;
+            const lancementCode = document.getElementById('searchFilter')?.value?.trim() || undefined;
+
+            const filters = { date: today };
+            if (statutTraitement) filters.statutTraitement = statutTraitement;
+            if (operatorCode) filters.operatorCode = operatorCode;
+            if (lancementCode) filters.lancementCode = lancementCode;
+
+            // Charger les enregistrements consolidés depuis ABTEMPS_OPERATEURS
+            const monitoringResult = await this.apiService.getMonitoringTemps(filters);
+            let consolidatedOps = [];
+            if (monitoringResult && monitoringResult.success) {
+                consolidatedOps = monitoringResult.data || [];
+            }
             
-            // Convertir d'abord les opérations de getAdminData au format monitoring
+            // Convertir les opérations de getAdminData au format monitoring (non consolidées)
             let adminOps = [];
             if (data && data.operations && data.operations.length > 0) {
-                console.log('📊 Conversion des opérations de getAdminData au format monitoring');
                 adminOps = data.operations.map(op => ({
-                    TempsId: op.id,
-                    id: op.id, // Ajouter aussi id pour compatibilité
+                    // IMPORTANT:
+                    // - TempsId = identifiant de ABTEMPS_OPERATEURS (consolidé)
+                    // - EventId / id = identifiant de ABHISTORIQUE_OPERATEURS (non consolidé)
+                    // Ne JAMAIS surcharger TempsId avec un NoEnreg, sinon les routes /admin/monitoring/:tempsId feront 404.
+                    TempsId: null,
+                    EventId: op.id,
+                    id: op.id,
                     OperatorCode: op.operatorId,
                     OperatorName: op.operatorName,
                     LancementCode: op.lancementCode,
                     LancementName: op.article,
                     StartTime: op.startTime,
                     EndTime: op.endTime,
-                    startTime: op.startTime, // Ajouter aussi startTime pour compatibilité
-                    endTime: op.endTime, // Ajouter aussi endTime pour compatibilité
+                    startTime: op.startTime,
+                    endTime: op.endTime,
                     TotalDuration: op.duration ? parseInt(op.duration.replace(/[^0-9]/g, '')) : null,
                     PauseDuration: op.pauseDuration ? parseInt(op.pauseDuration.replace(/[^0-9]/g, '')) : 0,
                     ProductiveDuration: null,
                     EventsCount: op.events || 0,
                     Phase: op.phase || 'PRODUCTION',
                     CodeRubrique: op.operatorId,
-                    StatutTraitement: null, // Statut de consolidation/transfert (null = non traité)
-                    Status: op.status || 'En cours', // Statut de l'opération (Terminé, En cours, En pause)
-                    StatusCode: op.statusCode || 'EN_COURS', // Code du statut de l'opération
-                    status: op.status || 'En cours', // Ajouter aussi status pour compatibilité
-                    statusCode: op.statusCode || 'EN_COURS', // Ajouter aussi statusCode pour compatibilité
+                    StatutTraitement: null,
+                    Status: op.status || 'En cours',
+                    StatusCode: op.statusCode || 'EN_COURS',
+                    status: op.status || 'En cours',
+                    statusCode: op.statusCode || 'EN_COURS',
                     DateCreation: today,
                     CalculatedAt: null,
                     CalculationMethod: null,
                     _isUnconsolidated: true
                 }));
-                console.log(`📊 ${adminOps.length} opérations converties depuis getAdminData`);
             }
             
-            // Charger les opérations de monitoring (peut être vide)
-            await this.loadMonitoringRecords(today);
-            const monitoringOps = this.operations || [];
-            console.log('OPERATIONS APRES loadMonitoringRecords:', monitoringOps.length);
+            // Appliquer les filtres sur les opérations non consolidées
+            let filteredAdminOps = adminOps;
+            if (operatorCode) {
+                filteredAdminOps = filteredAdminOps.filter(op => op.OperatorCode === operatorCode);
+            }
+            if (lancementCode) {
+                filteredAdminOps = filteredAdminOps.filter(op => 
+                    op.LancementCode.toLowerCase().includes(lancementCode.toLowerCase())
+                );
+            }
             
             // Fusionner les opérations : monitoring en priorité (consolidées), puis admin (non consolidées)
             // En évitant les doublons basés sur OperatorCode_LancementCode
             const mergedOpsMap = new Map();
             
             // D'abord ajouter les opérations de monitoring (consolidées)
-            monitoringOps.forEach(op => {
+            consolidatedOps.forEach(op => {
                 const key = `${op.OperatorCode}_${op.LancementCode}`;
                 mergedOpsMap.set(key, op);
             });
             
             // Ensuite ajouter les opérations admin qui n'existent pas déjà
-            adminOps.forEach(op => {
+            filteredAdminOps.forEach(op => {
                 const key = `${op.OperatorCode}_${op.LancementCode}`;
                 if (!mergedOpsMap.has(key)) {
                     mergedOpsMap.set(key, op);
@@ -356,7 +353,6 @@ class AdminPage {
             });
             
             this.operations = Array.from(mergedOpsMap.values());
-            console.log(`📊 Total opérations fusionnées: ${this.operations.length} (monitoring: ${monitoringOps.length}, admin: ${adminOps.length})`);
             
             // Réinitialiser le compteur d'erreurs en cas de succès
             this.consecutiveErrors = 0;
@@ -366,9 +362,7 @@ class AdminPage {
             
             if (data && data.stats) {
                 this.stats = data.stats;
-                console.log('STATS ASSIGNEES:', this.stats);
             } else {
-                console.log('PAS DE STATS DANS LA REPONSE - Utilisation des valeurs par défaut');
                 this.stats = {
                     totalOperators: 0,
                     activeLancements: 0,
@@ -387,16 +381,9 @@ class AdminPage {
                 this.lastOperatorsUpdate = Date.now(); // Mettre à jour le timestamp
             }
             
-            console.log('🔄 APPEL updateStats()');
             this.updateStats();
-            
-            console.log('🔄 APPEL updateOperationsTable() - OPERATIONS FINALES:', this.operations.length);
             this.updateOperationsTable();
-            
-            console.log('🔄 APPEL updatePaginationInfo()');
             this.updatePaginationInfo();
-            
-            console.log('✅ FIN loadData()');
         } catch (error) {
             console.error('❌ ERREUR loadData():', error);
             
@@ -457,6 +444,8 @@ class AdminPage {
     }
 
     // ===== Monitoring (ABTEMPS_OPERATEURS) =====
+    // NOTE: Cette fonction est maintenant principalement utilisée pour le rechargement après modifications
+    // Le chargement principal est fait dans loadData() pour éviter les doubles appels API
     async loadMonitoringRecords(date) {
         try {
             const statutTraitement = document.getElementById('statusFilter')?.value || undefined;
@@ -468,70 +457,13 @@ class AdminPage {
             if (operatorCode) filters.operatorCode = operatorCode;
             if (lancementCode) filters.lancementCode = lancementCode;
 
-            // Charger les enregistrements consolidés depuis ABTEMPS_OPERATEURS
+            // Charger uniquement les enregistrements consolidés depuis ABTEMPS_OPERATEURS
             const result = await this.apiService.getMonitoringTemps(filters);
-            let consolidatedOps = [];
             if (result && result.success) {
-                consolidatedOps = result.data || [];
+                this.operations = result.data || [];
+            } else {
+                this.operations = [];
             }
-            
-            // Toujours charger aussi depuis ABHISTORIQUE_OPERATEURS pour avoir toutes les opérations
-            // (même celles non consolidées ou terminées)
-            if (!statutTraitement) {
-                console.log('📊 Chargement complémentaire depuis ABHISTORIQUE_OPERATEURS...');
-                try {
-                    const adminData = await this.apiService.getAdminData(date);
-                    if (adminData && adminData.operations && adminData.operations.length > 0) {
-                        // Convertir les opérations admin au format monitoring
-                        const unconsolidatedOps = adminData.operations.map(op => ({
-                            TempsId: op.id, // Utiliser l'ID de l'événement comme TempsId temporaire
-                            OperatorCode: op.operatorId,
-                            OperatorName: op.operatorName,
-                            LancementCode: op.lancementCode,
-                            LancementName: op.article,
-                            StartTime: op.startTime,
-                            EndTime: op.endTime,
-                            TotalDuration: op.duration ? parseInt(op.duration.replace(/[^0-9]/g, '')) : null,
-                            PauseDuration: op.pauseDuration ? parseInt(op.pauseDuration.replace(/[^0-9]/g, '')) : 0,
-                            ProductiveDuration: null,
-                            EventsCount: op.events || 0,
-                            Phase: op.phase || 'PRODUCTION',
-                            CodeRubrique: op.operatorId,
-                            StatutTraitement: null, // Non consolidé = non traité
-                            DateCreation: new Date().toISOString().split('T')[0],
-                            CalculatedAt: null,
-                            CalculationMethod: null,
-                            _isUnconsolidated: true // Marqueur pour indiquer que c'est une opération non consolidée
-                        }));
-                        
-                        // Appliquer les filtres sur les opérations non consolidées
-                        let filteredUnconsolidated = unconsolidatedOps;
-                        if (operatorCode) {
-                            filteredUnconsolidated = filteredUnconsolidated.filter(op => op.OperatorCode === operatorCode);
-                        }
-                        if (lancementCode) {
-                            filteredUnconsolidated = filteredUnconsolidated.filter(op => 
-                                op.LancementCode.toLowerCase().includes(lancementCode.toLowerCase())
-                            );
-                        }
-                        
-                        // Fusionner avec les opérations consolidées, en évitant les doublons
-                        // (si une opération existe déjà dans consolidatedOps, ne pas l'ajouter)
-                        const existingLancementCodes = new Set(consolidatedOps.map(op => `${op.OperatorCode}_${op.LancementCode}`));
-                        const newOps = filteredUnconsolidated.filter(op => 
-                            !existingLancementCodes.has(`${op.OperatorCode}_${op.LancementCode}`)
-                        );
-                        
-                        consolidatedOps = [...consolidatedOps, ...newOps];
-                        console.log(`📊 ${newOps.length} opérations supplémentaires chargées depuis ABHISTORIQUE_OPERATEURS (total: ${consolidatedOps.length})`);
-                    }
-                } catch (error) {
-                    console.error('❌ Erreur lors du chargement des opérations non consolidées:', error);
-                }
-            }
-            
-            this.operations = consolidatedOps;
-            console.log(`📊 Total opérations chargées: ${this.operations.length}`);
         } catch (error) {
             console.error('❌ Erreur loadMonitoringRecords:', error);
             this.operations = [];
@@ -634,24 +566,6 @@ class AdminPage {
                 errorDiv.remove();
             }
         }, 10000);
-    }
-
-    updateOperatorSelect(operators) {
-        console.log('🔄 Mise à jour du menu déroulant des opérateurs:', operators.length);
-        if (!this.operatorSelect) {
-            console.error('ERREUR: operatorSelect non trouvé !');
-            return;
-        }
-        // Vider le select et ajouter l'option par défaut
-        this.operatorSelect.innerHTML = '<option value="">Tous les opérateurs connectés</option>';
-        // Ajouter chaque opérateur
-        operators.forEach(operator => {
-            const option = document.createElement('option');
-            option.value = operator.code;
-            option.textContent = `${operator.name} (${operator.code})`;
-            this.operatorSelect.appendChild(option);
-        });
-        console.log('✅ Menu déroulant mis à jour avec', operators.length, 'opérateurs');
     }
 
     updateOperatorSelect(operators) {
@@ -952,29 +866,41 @@ class AdminPage {
             
             const row = document.createElement('tr');
             
-            // Ajouter l'ID de l'opération pour pouvoir la retrouver
-            const tempsId = operation.TempsId;
-            row.setAttribute('data-operation-id', tempsId);
+            // Identifiants (ne pas confondre):
+            // - TempsId: ABTEMPS_OPERATEURS (consolidé)
+            // - EventId/id: ABHISTORIQUE_OPERATEURS (non consolidé)
+            const tempsId = operation.TempsId ?? null;
+            const eventId = operation.EventId ?? operation.id ?? null;
+            const isUnconsolidated = operation._isUnconsolidated === true || !tempsId;
 
-            // Utiliser le statut de l'opération (Status/StatusCode) si disponible
-            // Si une opération a une heure de fin, elle est considérée comme TERMINÉ
+            // data-operation-id sert aux recherches DOM (édition inline / update row)
+            const rowId = tempsId || eventId;
+            row.setAttribute('data-operation-id', rowId);
+            row.dataset.tempsId = tempsId ? String(tempsId) : '';
+            row.dataset.eventId = eventId ? String(eventId) : '';
+            row.dataset.unconsolidated = isUnconsolidated ? 'true' : 'false';
+
+            // Déterminer le statut à afficher :
+            // 1. Priorité au statut de l'opération (Status/StatusCode) - indique si l'opération est Terminé, En cours, En pause
+            // 2. Sinon, utiliser le statut de traitement/consolidation (StatutTraitement) - indique si l'opération est consolidée/transférée
             let statutCode, statutLabel;
+            
+            // Vérifier d'abord le statut de l'opération (Status/StatusCode)
             if (operation.StatusCode && operation.Status) {
-                // Statut de l'opération (Terminé, En cours, En pause)
                 statutCode = operation.StatusCode.toUpperCase().replace(/[^A-Z0-9_]/g, '_');
                 statutLabel = operation.Status;
-            } else if (formattedEndTime && formattedEndTime !== '-' && formattedEndTime.trim() !== '' && formattedEndTime !== 'N/A') {
-                // Si l'opération a une heure de fin formatée valide, elle est terminée
+            } 
+            // Si pas de statut explicite mais une heure de fin valide, l'opération est terminée
+            else if (formattedEndTime && formattedEndTime !== '-' && formattedEndTime.trim() !== '' && formattedEndTime !== 'N/A') {
                 statutCode = 'TERMINE';
                 statutLabel = 'Terminé';
-                console.log(`✅ Statut TERMINÉ pour ${operation.LancementCode} (heure fin: ${formattedEndTime})`);
-            } else {
-                // Statut de traitement/consolidation (NON TRAITÉ, VALIDÉ, etc.)
+            } 
+            // Sinon, utiliser le statut de traitement/consolidation
+            else {
                 statutCode = (operation.StatutTraitement === null || operation.StatutTraitement === undefined)
                     ? 'NULL'
                     : String(operation.StatutTraitement).toUpperCase();
                 statutLabel = this.getMonitoringStatusText(statutCode);
-                console.log(`⚠️ Statut ${statutLabel} pour ${operation.LancementCode} (formattedEndTime: "${formattedEndTime}", StatusCode: ${operation.StatusCode}, Status: ${operation.Status})`);
             }
             
             row.innerHTML = `
@@ -985,18 +911,35 @@ class AdminPage {
                 <td>${formattedEndTime}${timeWarning}</td>
                 <td>
                     <span class="status-badge status-${statutCode}">${statutLabel}</span>
-                    ${operation._isUnconsolidated ? '<span class="badge badge-warning" style="margin-left: 5px; font-size: 0.8em;">Non consolidé</span>' : ''}
+                    ${isUnconsolidated ? '<span class="badge badge-warning" style="margin-left: 5px; font-size: 0.8em;">Non consolidé</span>' : ''}
                 </td>
                 <td class="actions-cell">
-                    <button class="btn-edit" data-id="${tempsId}" data-operation-id="${tempsId}" data-unconsolidated="${operation._isUnconsolidated ? 'true' : 'false'}" title="Corriger" type="button">
+                    <button class="btn-edit"
+                        data-id="${rowId}"
+                        data-operation-id="${rowId}"
+                        data-temps-id="${tempsId || ''}"
+                        data-event-id="${eventId || ''}"
+                        data-unconsolidated="${isUnconsolidated ? 'true' : 'false'}"
+                        title="Corriger"
+                        type="button">
                         <i class="fas fa-edit"></i>
                     </button>
-                    <button class="btn-delete" data-id="${tempsId}" data-operation-id="${tempsId}" data-unconsolidated="${operation._isUnconsolidated ? 'true' : 'false'}" title="Supprimer" type="button">
+                    <button class="btn-delete"
+                        data-id="${rowId}"
+                        data-operation-id="${rowId}"
+                        data-temps-id="${tempsId || ''}"
+                        data-event-id="${eventId || ''}"
+                        data-unconsolidated="${isUnconsolidated ? 'true' : 'false'}"
+                        title="Supprimer"
+                        type="button">
                         <i class="fas fa-trash"></i>
                     </button>
                 </td>
             `;
             this.operationsTableBody.appendChild(row);
+            
+            // Afficher les problèmes détectés pour cette opération
+            this.showOperationIssues(operation, row);
         });
     }
 
@@ -1336,22 +1279,251 @@ class AdminPage {
         }
     }
 
+    /**
+     * Valide une opération avant édition
+     * @param {Object} operation - Opération à valider
+     * @returns {Object} { valid: boolean, errors: Array, warnings: Array }
+     */
+    validateOperationBeforeEdit(operation) {
+        const errors = [];
+        const warnings = [];
+        
+        if (!operation) {
+            return { valid: false, errors: ['Opération non trouvée'], warnings: [] };
+        }
+        
+        // Vérifier les heures
+        const startTime = operation.startTime || operation.StartTime;
+        const endTime = operation.endTime || operation.EndTime;
+        
+        if (startTime && endTime) {
+            const start = this.parseTime(startTime);
+            const end = this.parseTime(endTime);
+            
+            if (start && end && end <= start) {
+                warnings.push('Heure de fin antérieure ou égale à l\'heure de début (peut être valide si traverse minuit)');
+            }
+        }
+        
+        // Vérifier les durées pour les opérations consolidées
+        if (operation.TempsId && !operation._isUnconsolidated) {
+            const totalDuration = operation.TotalDuration || 0;
+            const pauseDuration = operation.PauseDuration || 0;
+            const productiveDuration = operation.ProductiveDuration || 0;
+            const calculatedProductive = totalDuration - pauseDuration;
+            
+            if (Math.abs(productiveDuration - calculatedProductive) > 1) {
+                warnings.push(`Incohérence des durées: TotalDuration (${totalDuration}) - PauseDuration (${pauseDuration}) = ${calculatedProductive}, mais ProductiveDuration = ${productiveDuration}`);
+            }
+            
+            if (totalDuration < 0 || pauseDuration < 0 || productiveDuration < 0) {
+                errors.push('Durées négatives détectées');
+            }
+        }
+        
+        return {
+            valid: errors.length === 0,
+            errors,
+            warnings
+        };
+    }
+    
+    /**
+     * Affiche les problèmes détectés pour une opération
+     * @param {Object} operation - Opération à vérifier
+     * @param {HTMLElement} row - Ligne du tableau
+     */
+    showOperationIssues(operation, row) {
+        // Supprimer les anciens badges d'avertissement
+        const existingBadge = row.querySelector('.operation-issue-badge');
+        if (existingBadge) {
+            existingBadge.remove();
+        }
+        
+        const validation = this.validateOperationBeforeEdit(operation);
+        
+        if (!validation.valid || validation.warnings.length > 0) {
+            // Créer un badge d'avertissement
+            const badge = document.createElement('span');
+            badge.className = 'operation-issue-badge badge badge-warning';
+            badge.style.cssText = 'margin-left: 5px; cursor: pointer;';
+            badge.title = [...validation.errors, ...validation.warnings].join('\n');
+            badge.innerHTML = '<i class="fas fa-exclamation-triangle"></i>';
+            
+            badge.addEventListener('click', () => {
+                const message = [
+                    'Problèmes détectés:',
+                    ...validation.errors.map(e => `❌ ${e}`),
+                    ...validation.warnings.map(w => `⚠️ ${w}`)
+                ].join('\n');
+                alert(message);
+            });
+            
+            // Ajouter le badge dans la cellule statut ou actions
+            const statusCell = row.querySelector('td:nth-child(6)'); // Colonne statut
+            if (statusCell) {
+                statusCell.appendChild(badge);
+            }
+        }
+    }
+    
+    /**
+     * Parse un format d'heure (HH:mm ou HH:mm:ss)
+     * @param {string} timeString - Chaîne d'heure
+     * @returns {number|null} Minutes depuis minuit ou null si invalide
+     */
+    parseTime(timeString) {
+        if (!timeString) return null;
+        
+        const timeStr = String(timeString).trim();
+        const parts = timeStr.split(':');
+        
+        if (parts.length < 2) return null;
+        
+        const hours = parseInt(parts[0], 10);
+        const minutes = parseInt(parts[1], 10);
+        
+        if (isNaN(hours) || isNaN(minutes) || hours < 0 || hours > 23 || minutes < 0 || minutes > 59) {
+            return null;
+        }
+        
+        return hours * 60 + minutes;
+    }
+
     async editOperation(id) {
         // Éditer une opération non consolidée (depuis ABHISTORIQUE_OPERATEURS)
-        console.log('✏️ Édition opération non consolidée:', id);
+        // id = EventId (NoEnreg) depuis ABHISTORIQUE_OPERATEURS
+        console.log('✏️ Édition opération non consolidée, EventId:', id);
         
-        // Trouver l'enregistrement
-        const record = this.operations.find(op => op.TempsId == id || op.id == id);
+        // Trouver l'enregistrement par EventId (priorité) ou id
+        const record = this.operations.find(op => 
+            (op.EventId && op.EventId == id) || 
+            (op.id && op.id == id) ||
+            (op._isUnconsolidated && (op.EventId == id || op.id == id))
+        );
+        
+        // Validation avant édition
+        if (record) {
+            const validation = this.validateOperationBeforeEdit(record);
+            if (!validation.valid) {
+                this.notificationManager.warning(`Problèmes détectés: ${validation.errors.join(', ')}`);
+            }
+            if (validation.warnings.length > 0) {
+                console.warn('⚠️ Avertissements:', validation.warnings);
+            }
+        }
         
         if (!record) {
-            console.warn(`⚠️ Opération avec ID ${id} non trouvée. Actualisation...`);
+            console.warn(`⚠️ Opération avec EventId ${id} non trouvée. Actualisation...`);
             this.notificationManager.warning('Opération non trouvée. Actualisation des données...');
             await this.loadData();
             return;
         }
 
-        // Utiliser le mode édition inline comme pour les opérations consolidées
-        this.updateSingleRowInTable(id);
+        // Vérifier que c'est bien une opération non consolidée
+        if (!record._isUnconsolidated && record.TempsId) {
+            console.warn(`⚠️ Opération ${id} est consolidée, redirection vers editMonitoringRecord`);
+            await this.editMonitoringRecord(record.TempsId);
+            return;
+        }
+
+        // Utiliser le mode édition inline (appeler la fonction non-async)
+        const eventId = record.EventId || record.id || id;
+        this.editOperationInline(eventId);
+    }
+    
+    // Fonction d'édition inline (non-async car manipulation DOM directe)
+    editOperationInline(id) {
+        console.log('🔧 Édition inline de l\'opération:', id, 'Type:', typeof id);
+        
+        // Convertir l'ID en nombre si nécessaire pour la comparaison
+        const numericId = typeof id === 'string' ? parseInt(id, 10) : id;
+        
+        // Trouver la ligne correspondante - essayer plusieurs méthodes
+        let row = document.querySelector(`tr[data-operation-id="${id}"]`);
+        if (!row) {
+            row = document.querySelector(`tr[data-operation-id="${numericId}"]`);
+        }
+        if (!row) {
+            // Essayer de trouver via le bouton
+            const button = document.querySelector(`button.btn-edit[data-id="${id}"]`) || 
+                          document.querySelector(`button.btn-edit[data-id="${numericId}"]`);
+            if (button) {
+                row = button.closest('tr');
+            }
+        }
+        
+        if (!row) {
+            console.error('❌ Ligne non trouvée pour l\'ID:', id);
+            this.notificationManager.warning(`Ligne non trouvée pour l'opération ${id}. Rechargement du tableau...`);
+            this.loadData();
+            return;
+        }
+        
+        // Trouver l'opération dans les données
+        const operation = this.operations.find(op => {
+            const match = op.id == id || op.id == numericId || 
+                         op.EventId == id || op.EventId == numericId ||
+                         op.TempsId == id || op.TempsId == numericId ||
+                         String(op.id) === String(id) || String(op.id) === String(numericId) ||
+                         String(op.EventId) === String(id) || String(op.EventId) === String(numericId);
+            return match;
+        });
+        
+        if (!operation) {
+            console.error('❌ Opération non trouvée pour l\'ID:', id);
+            this.notificationManager.warning(`Opération ${id} non trouvée dans les données. Rechargement...`);
+            this.loadData();
+            return;
+        }
+        
+        // Sauvegarder les valeurs originales
+        const startTimeValue = operation.startTime || operation.StartTime || '';
+        const endTimeValue = operation.endTime || operation.EndTime || '';
+        const originalStartTime = this.cleanTimeValue(startTimeValue);
+        const originalEndTime = this.cleanTimeValue(endTimeValue);
+        
+        // Remplacer les cellules par des inputs (même logique que dans l'ancienne fonction)
+        const cells = row.querySelectorAll('td');
+        if (cells.length >= 6) {
+            // Cellule heure début (index 3)
+            cells[3].innerHTML = `
+                <input type="time" 
+                       data-field="startTime" 
+                       data-id="${id}"
+                       data-original="${originalStartTime}"
+                       value="${originalStartTime || ''}" 
+                       class="time-input form-control" 
+                       style="width: 100%; padding: 4px;">
+            `;
+            
+            // Cellule heure fin (index 4)
+            cells[4].innerHTML = `
+                <input type="time" 
+                       data-field="endTime" 
+                       data-id="${id}"
+                       data-original="${originalEndTime}"
+                       value="${originalEndTime || ''}" 
+                       class="time-input form-control" 
+                       style="width: 100%; padding: 4px;"
+                       onchange="window.adminPage.validateTimeInput(this.closest('tr'))">
+            `;
+            
+            // Cellule actions (index 6) - remplacer par boutons sauvegarder/annuler
+            cells[6].innerHTML = `
+                <button class="btn btn-sm btn-success" onclick="window.adminPage.saveOperation('${id}')" title="Sauvegarder">
+                    <i class="fas fa-check"></i>
+                </button>
+                <button class="btn btn-sm btn-secondary" onclick="window.adminPage.cancelEdit('${id}')" title="Annuler" style="margin-left: 5px;">
+                    <i class="fas fa-times"></i>
+                </button>
+            `;
+        }
+    }
+    
+    cancelEdit(id) {
+        // Recharger le tableau pour annuler l'édition
+        this.updateOperationsTable();
     }
 
     updateMonitoringRowInTable(tempsId, record) {
@@ -1771,228 +1943,6 @@ class AdminPage {
         return date.toISOString().slice(0, 16); // Format YYYY-MM-DDTHH:mm
     }
 
-    editOperation(id) {
-        console.log('🔧 Édition de l\'opération:', id, 'Type:', typeof id);
-        
-        // Convertir l'ID en nombre si nécessaire pour la comparaison
-        const numericId = typeof id === 'string' ? parseInt(id, 10) : id;
-        
-        // Trouver la ligne correspondante - essayer plusieurs méthodes
-        let row = document.querySelector(`tr[data-operation-id="${id}"]`);
-        if (!row) {
-            row = document.querySelector(`tr[data-operation-id="${numericId}"]`);
-        }
-        if (!row) {
-            // Essayer de trouver via le bouton
-            const button = document.querySelector(`button.btn-edit[data-id="${id}"]`) || 
-                          document.querySelector(`button.btn-edit[data-id="${numericId}"]`);
-            if (button) {
-                row = button.closest('tr');
-            }
-        }
-        
-        if (!row) {
-            console.error('❌ Ligne non trouvée pour l\'ID:', id);
-            console.log('🔍 Opérations disponibles:', this.operations.map(op => ({ id: op.id, type: typeof op.id })));
-            console.log('🔍 Lignes dans le tableau:', Array.from(document.querySelectorAll('tr[data-operation-id]')).map(tr => ({
-                id: tr.getAttribute('data-operation-id'),
-                buttons: Array.from(tr.querySelectorAll('button.btn-edit')).map(btn => btn.getAttribute('data-id'))
-            })));
-            this.notificationManager.warning(`Ligne non trouvée pour l'opération ${id}. Rechargement du tableau...`);
-            this.loadData();
-            return;
-        }
-        
-        // Trouver l'opération dans les données - essayer avec l'ID original et numérique
-        console.log('🔍 Recherche de l\'opération avec ID:', id, 'ou', numericId);
-        console.log('🔍 Opérations dans this.operations:', this.operations.length);
-        console.log('🔍 IDs disponibles:', this.operations.map(op => ({ 
-            id: op.id, 
-            type: typeof op.id,
-            lancementCode: op.lancementCode 
-        })));
-        
-        let operation = this.operations.find(op => {
-            // Chercher par id ou TempsId (pour les opérations non consolidées)
-            const match = op.id == id || op.id == numericId || op.TempsId == id || op.TempsId == numericId || 
-                         String(op.id) === String(id) || String(op.id) === String(numericId) ||
-                         String(op.TempsId) === String(id) || String(op.TempsId) === String(numericId);
-            if (match) {
-                console.log('✅ Opération trouvée avec correspondance:', {
-                    opId: op.id,
-                    opTempsId: op.TempsId,
-                    opIdType: typeof op.id,
-                    searchId: id,
-                    searchIdType: typeof id,
-                    numericId: numericId
-                });
-            }
-            return match;
-        });
-        
-        if (!operation) {
-            console.error('❌ Opération non trouvée pour l\'ID:', id);
-            console.log('🔍 Toutes les opérations:', this.operations);
-            console.log('🔍 Comparaisons testées:', {
-                'op.id == id': this.operations.map(op => ({ id: op.id, match: op.id == id })),
-                'op.id == numericId': this.operations.map(op => ({ id: op.id, match: op.id == numericId })),
-                'String(op.id) === String(id)': this.operations.map(op => ({ id: op.id, match: String(op.id) === String(id) })),
-                'String(op.id) === String(numericId)': this.operations.map(op => ({ id: op.id, match: String(op.id) === String(numericId) }))
-            });
-            this.notificationManager.warning(`Opération ${id} non trouvée dans les données. Rechargement...`);
-            this.loadData();
-            return;
-        }
-        
-        console.log('✅ Opération trouvée:', operation);
-        console.log('✅ Ligne trouvée:', row);
-        console.log('🔍 Structure de la ligne:', {
-            cellCount: row.querySelectorAll('td').length,
-            innerHTML: row.innerHTML.substring(0, 200)
-        });
-        
-        // Sauvegarder et nettoyer les valeurs originales
-        // Pour les opérations non consolidées, utiliser StartTime/EndTime si startTime/endTime n'existent pas
-        const startTimeValue = operation.startTime || operation.StartTime || '';
-        const endTimeValue = operation.endTime || operation.EndTime || '';
-        const originalStartTime = this.cleanTimeValue(startTimeValue);
-        const originalEndTime = this.cleanTimeValue(endTimeValue);
-        
-        console.log(`🔧 Valeurs originales sauvegardées:`, {
-            startTime: `${operation.startTime} → ${originalStartTime}`,
-            endTime: `${operation.endTime} → ${originalEndTime}`
-        });
-        
-        // Remplacer les cellules par des inputs
-        const cells = row.querySelectorAll('td');
-        
-        if (cells.length < 7) {
-            console.error(`❌ Nombre de cellules insuffisant: ${cells.length} (attendu: 7)`);
-            console.log('🔍 Cellules trouvées:', Array.from(cells).map((cell, idx) => ({
-                index: idx,
-                content: cell.textContent.trim().substring(0, 50)
-            })));
-            this.notificationManager.error(`Erreur: La ligne a ${cells.length} cellules au lieu de 7. Rechargement...`);
-            this.loadData();
-            return;
-        }
-        
-        console.log(`✅ ${cells.length} cellules trouvées, structure correcte`);
-        
-        // Heure Début (index 3)
-        const startTimeCell = cells[3];
-        startTimeCell.innerHTML = `
-            <div class="time-input-container">
-                <input type="time" 
-                       value="${originalStartTime}" 
-                       data-id="${id}" 
-                       data-field="startTime"
-                       data-original="${originalStartTime}"
-                       class="time-input"
-                       step="60">
-            </div>
-        `;
-        
-        // Heure Fin (index 4)
-        const endTimeCell = cells[4];
-        endTimeCell.innerHTML = `
-            <div class="time-input-container">
-                <input type="time" 
-                       value="${originalEndTime}" 
-                       data-id="${id}" 
-                       data-field="endTime"
-                       data-original="${originalEndTime}"
-                       class="time-input"
-                       step="60">
-            </div>
-        `;
-        
-        // Statut (index 5)
-        const statusCell = cells[5];
-        const currentStatus = operation.statusCode || 'EN_COURS';
-        const originalStatus = currentStatus;
-        statusCell.innerHTML = `
-            <div class="status-input-container">
-                <select data-id="${id}" 
-                        data-field="status"
-                        data-original="${originalStatus}"
-                        class="status-select">
-                    <option value="EN_COURS" ${currentStatus === 'EN_COURS' ? 'selected' : ''}>En cours</option>
-                    <option value="EN_PAUSE" ${currentStatus === 'EN_PAUSE' ? 'selected' : ''}>En pause</option>
-                    <option value="TERMINE" ${currentStatus === 'TERMINE' ? 'selected' : ''}>Terminé</option>
-                    <option value="PAUSE_TERMINEE" ${currentStatus === 'PAUSE_TERMINEE' ? 'selected' : ''}>Pause terminée</option>
-                    <option value="FORCE_STOP" ${currentStatus === 'FORCE_STOP' ? 'selected' : ''}>Arrêt forcé</option>
-                </select>
-            </div>
-        `;
-        
-        // Actions (index 6)
-        const actionsCell = cells[6];
-        actionsCell.innerHTML = `
-            <button class="btn-save" data-id="${id}" title="Sauvegarder">
-                <i class="fas fa-save"></i>
-            </button>
-            <button class="btn-cancel" data-id="${id}" title="Annuler">
-                <i class="fas fa-times"></i>
-            </button>
-        `;
-        
-        // Ajouter les event listeners pour les nouveaux boutons
-        const saveBtn = actionsCell.querySelector('.btn-save');
-        const cancelBtn = actionsCell.querySelector('.btn-cancel');
-        
-        saveBtn.addEventListener('click', () => this.saveOperation(id));
-        cancelBtn.addEventListener('click', () => this.cancelEdit(id));
-        
-        // Ajouter des event listeners pour détecter les modifications automatiques
-        const timeInputs = row.querySelectorAll('.time-input');
-        timeInputs.forEach(input => {
-            const originalValue = input.getAttribute('data-original');
-            
-            // Détecter les changements automatiques
-            input.addEventListener('change', () => {
-                const currentValue = input.value;
-                console.log(`🔍 Changement détecté sur ${input.dataset.field}:`, {
-                    original: originalValue,
-                    current: currentValue,
-                    changed: currentValue !== originalValue
-                });
-                
-                // Validation en temps réel des heures
-                this.validateTimeInputs(row, id);
-            });
-            
-            // Détecter les modifications par le navigateur
-            input.addEventListener('input', () => {
-                const currentValue = input.value;
-                if (currentValue !== originalValue) {
-                    console.log(`⚠️ Modification automatique détectée sur ${input.dataset.field}: ${originalValue} → ${currentValue}`);
-                }
-            });
-        });
-        
-        // Event listener pour le select de statut
-        const statusSelect = row.querySelector('.status-select');
-        if (statusSelect) {
-            const originalStatus = statusSelect.getAttribute('data-original');
-            
-            statusSelect.addEventListener('change', () => {
-                const currentStatus = statusSelect.value;
-                console.log(`🔍 Changement de statut détecté:`, {
-                    original: originalStatus,
-                    current: currentStatus,
-                    changed: currentStatus !== originalStatus
-                });
-            });
-        }
-    }
-
-    cancelEdit(id) {
-        console.log('❌ Annulation de l\'édition:', id);
-        // Recharger les données pour restaurer l'état original
-        this.loadData();
-    }
-
     validateTimeInputs(row, operationId) {
         const startTimeInput = row.querySelector('input[data-field="startTime"]');
         const endTimeInput = row.querySelector('input[data-field="endTime"]');
@@ -2191,8 +2141,20 @@ class AdminPage {
             console.log(`💾 Sauvegarde opération ${id}:`, updateData);
 
             // Vérifier si c'est un enregistrement de monitoring (ABTEMPS_OPERATEURS) ou historique (ABHISTORIQUE_OPERATEURS)
-            const record = this.operations.find(op => op.TempsId == id || op.id == id);
-            const isMonitoringRecord = record && record.TempsId !== undefined && !record._isUnconsolidated;
+            // Utiliser la ligne déjà trouvée (row déclarée plus haut)
+            const tempsIdFromRow = row?.dataset?.tempsId ? parseInt(row.dataset.tempsId, 10) : null;
+            const eventIdFromRow = row?.dataset?.eventId || null;
+            const isUnconsolidatedFromRow = row?.dataset?.unconsolidated === 'true';
+            
+            // Trouver l'enregistrement dans la liste
+            const record = this.operations.find(op => {
+                if (tempsIdFromRow && op.TempsId == tempsIdFromRow) return true;
+                if (eventIdFromRow && (op.EventId == eventIdFromRow || op.id == eventIdFromRow)) return true;
+                if (op.TempsId == id || op.EventId == id || op.id == id) return true;
+                return false;
+            });
+            
+            const isMonitoringRecord = record && record.TempsId && !record._isUnconsolidated;
             
             let response;
             if (isMonitoringRecord) {
@@ -2458,27 +2420,6 @@ class AdminPage {
         return hours * 60 + minutes;
     }
 
-    async deleteOperation(id) {
-        if (!confirm('Êtes-vous sûr de vouloir supprimer cette opération ?')) {
-            return;
-        }
-
-        try {
-            console.log(` Suppression opération ${id}`);
-
-            const response = await this.apiService.deleteOperation(id);
-            
-            if (response.success) {
-                this.notificationManager.success('Opération supprimée avec succès');
-                this.loadData(); // Recharger les données
-            } else {
-                this.notificationManager.error('Erreur lors de la suppression');
-            }
-        } catch (error) {
-            console.error('Erreur suppression:', error);
-            this.notificationManager.error('Erreur lors de la suppression');
-        }
-    }
 
     // Méthodes pour l'export des données
     exportToCSV() {

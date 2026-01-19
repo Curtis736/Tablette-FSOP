@@ -344,10 +344,52 @@ class MonitoringService {
     /**
      * Marquer un enregistrement comme transmis (StatutTraitement = 'T')
      * @param {number} tempsId - ID de l'enregistrement
+     * @param {Object} options - Options (autoFix: boolean)
      * @returns {Promise<Object>} Résultat de la transmission
      */
-    static async markAsTransmitted(tempsId) {
+    static async markAsTransmitted(tempsId, options = {}) {
         try {
+            const { autoFix = true } = options;
+            
+            // Validation préalable avec le service de validation
+            const OperationValidationService = require('./OperationValidationService');
+            const validation = await OperationValidationService.validateTransferData(tempsId);
+            
+            if (!validation.valid) {
+                // Auto-correction si activée
+                if (autoFix) {
+                    console.log(`🔧 Tentative d'auto-correction pour TempsId=${tempsId}...`);
+                    const fixed = await OperationValidationService.autoFixTransferData(tempsId);
+                    
+                    if (fixed.fixed) {
+                        console.log(`✅ Auto-corrections appliquées:`, fixed.fixes);
+                        // Re-valider après correction
+                        const revalidation = await OperationValidationService.validateTransferData(tempsId);
+                        if (!revalidation.valid) {
+                            return {
+                                success: false,
+                                error: `Opération invalide après auto-correction: ${revalidation.errors.join(', ')}`,
+                                validationErrors: revalidation.errors
+                            };
+                        }
+                    } else {
+                        // Auto-correction impossible
+                        return {
+                            success: false,
+                            error: `Opération invalide: ${validation.errors.join(', ')}`,
+                            validationErrors: validation.errors
+                        };
+                    }
+                } else {
+                    // Auto-correction désactivée
+                    return {
+                        success: false,
+                        error: `Opération invalide: ${validation.errors.join(', ')}`,
+                        validationErrors: validation.errors
+                    };
+                }
+            }
+            
             // Vérifier que l'enregistrement est validé
             const checkQuery = `
                 SELECT TempsId, StatutTraitement
@@ -367,7 +409,8 @@ class MonitoringService {
             if (existing[0].StatutTraitement !== 'O') {
                 return {
                     success: false,
-                    error: 'L\'enregistrement doit être validé (StatutTraitement = \'O\') avant d\'être transmis'
+                    error: 'L\'enregistrement doit être validé (StatutTraitement = \'O\') avant d\'être transmis',
+                    currentStatut: existing[0].StatutTraitement
                 };
             }
             
@@ -406,10 +449,13 @@ class MonitoringService {
     /**
      * Valider et transmettre un lot d'enregistrements
      * @param {Array<number>} tempsIds - Liste des IDs d'enregistrements
+     * @param {Object} options - Options (autoFix: boolean)
      * @returns {Promise<Object>} Résultat de la validation/transmission
      */
-    static async validateAndTransmitBatch(tempsIds) {
+    static async validateAndTransmitBatch(tempsIds, options = {}) {
         try {
+            const { autoFix = true } = options;
+            
             if (!Array.isArray(tempsIds) || tempsIds.length === 0) {
                 return {
                     success: false,
@@ -417,25 +463,74 @@ class MonitoringService {
                 };
             }
             
-            // Valider tous les enregistrements
+            const OperationValidationService = require('./OperationValidationService');
+            const validIds = [];
+            const invalidIds = [];
+            const fixedIds = [];
+            
+            // 1. Valider chaque enregistrement avant validation/transmission
+            for (const tempsId of tempsIds) {
+                const validation = await OperationValidationService.validateTransferData(tempsId);
+                
+                if (!validation.valid) {
+                    // Auto-correction si activée
+                    if (autoFix) {
+                        console.log(`🔧 Tentative d'auto-correction pour TempsId=${tempsId}...`);
+                        const fixed = await OperationValidationService.autoFixTransferData(tempsId);
+                        
+                        if (fixed.fixed) {
+                            console.log(`✅ Auto-corrections appliquées pour TempsId=${tempsId}:`, fixed.fixes);
+                            fixedIds.push(tempsId);
+                            
+                            // Re-valider après correction
+                            const revalidation = await OperationValidationService.validateTransferData(tempsId);
+                            if (revalidation.valid) {
+                                validIds.push(tempsId);
+                            } else {
+                                invalidIds.push({ tempsId, errors: revalidation.errors });
+                            }
+                        } else {
+                            invalidIds.push({ tempsId, errors: validation.errors });
+                        }
+                    } else {
+                        invalidIds.push({ tempsId, errors: validation.errors });
+                    }
+                } else {
+                    validIds.push(tempsId);
+                }
+            }
+            
+            if (validIds.length === 0) {
+                return {
+                    success: false,
+                    error: 'Aucun enregistrement valide à transmettre',
+                    invalidIds: invalidIds
+                };
+            }
+            
+            if (invalidIds.length > 0) {
+                console.warn(`⚠️ ${invalidIds.length} enregistrement(s) invalide(s) ignoré(s)`);
+            }
+            
+            // 2. Valider tous les enregistrements valides (StatutTraitement = 'O')
             const validateQuery = `
                 UPDATE [SEDI_APP_INDEPENDANTE].[dbo].[ABTEMPS_OPERATEURS]
                 SET StatutTraitement = 'O'
-                WHERE TempsId IN (${tempsIds.map((_, i) => `@id${i}`).join(', ')})
+                WHERE TempsId IN (${validIds.map((_, i) => `@id${i}`).join(', ')})
             `;
             
             const validateParams = {};
-            tempsIds.forEach((id, i) => {
+            validIds.forEach((id, i) => {
                 validateParams[`id${i}`] = id;
             });
             
             await executeNonQuery(validateQuery, validateParams);
             
-            // Marquer comme transmis
+            // 3. Marquer comme transmis
             const transmitQuery = `
                 UPDATE [SEDI_APP_INDEPENDANTE].[dbo].[ABTEMPS_OPERATEURS]
                 SET StatutTraitement = 'T'
-                WHERE TempsId IN (${tempsIds.map((_, i) => `@id${i}`).join(', ')})
+                WHERE TempsId IN (${validIds.map((_, i) => `@id${i}`).join(', ')})
             `;
             
             const result = await executeNonQuery(transmitQuery, validateParams);
@@ -445,7 +540,10 @@ class MonitoringService {
             return {
                 success: true,
                 message: `${result.rowsAffected} enregistrements validés et marqués comme transmis`,
-                count: result.rowsAffected
+                count: result.rowsAffected,
+                fixedCount: fixedIds.length,
+                invalidCount: invalidIds.length,
+                invalidIds: invalidIds.length > 0 ? invalidIds : undefined
             };
             
         } catch (error) {

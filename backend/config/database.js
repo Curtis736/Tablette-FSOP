@@ -263,6 +263,71 @@ async function executeNonQuery(query, params = {}, retries = 3) {
     }
 }
 
+// Fonction pour exécuter des opérations en transaction
+async function executeInTransaction(callback) {
+    // En mode test, exécuter sans transaction
+    if (process.env.NODE_ENV === 'test') {
+        console.log('🧪 Mode test - Transaction simulée');
+        return await callback({
+            request: () => ({
+                input: () => {},
+                query: async () => ({ recordset: [] }),
+                execute: async () => ({ recordset: [] })
+            })
+        });
+    }
+    
+    const connection = await getConnection();
+    const transaction = new sql.Transaction(connection);
+    
+    try {
+        await transaction.begin();
+        console.log('🔄 Transaction démarrée');
+        
+        // Créer un objet request lié à la transaction
+        const request = new sql.Request(transaction);
+        
+        // Wrapper pour exécuter des requêtes dans la transaction
+        const transactionContext = {
+            request: () => new sql.Request(transaction),
+            executeQuery: async (query, params = {}) => {
+                const req = new sql.Request(transaction);
+                Object.keys(params).forEach(key => {
+                    req.input(key, params[key]);
+                });
+                const result = await req.query(query);
+                return result.recordset;
+            },
+            executeNonQuery: async (query, params = {}) => {
+                const req = new sql.Request(transaction);
+                Object.keys(params).forEach(key => {
+                    req.input(key, params[key]);
+                });
+                const result = await req.query(query);
+                const affected = Array.isArray(result.rowsAffected) 
+                    ? result.rowsAffected.reduce((a, b) => a + b, 0) 
+                    : (result.rowsAffected || 0);
+                return { rowsAffected: affected };
+            }
+        };
+        
+        const result = await callback(transactionContext);
+        
+        await transaction.commit();
+        console.log('✅ Transaction commitée');
+        return result;
+        
+    } catch (error) {
+        try {
+            await transaction.rollback();
+            console.log('🔄 Transaction rollback effectué');
+        } catch (rollbackError) {
+            console.error('❌ Erreur lors du rollback:', rollbackError);
+        }
+        throw error;
+    }
+}
+
 // Fonction pour fermer la connexion
 async function closeConnection() {
     if (pool) {
@@ -318,6 +383,7 @@ module.exports = {
     executeErpQuery,
     executeProcedure,
     executeNonQuery,
+    executeInTransaction,
     closeConnection,
     sql
 };

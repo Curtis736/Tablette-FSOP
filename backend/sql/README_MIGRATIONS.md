@@ -78,52 +78,110 @@ Liste des opérateurs depuis l'ERP SILOG.
 **Colonnes**:
 - `CodeOperateur` : Code de l'opérateur (depuis `CodeRessource`)
 - `NomOperateur` : Nom de l'opérateur (depuis `Designation1`)
-- `StatutOperateur` : Statut de l'opérateur (⚠️ À implémenter dans SILOG par Franck MAILLARD)
-- `DateConsultation` : Date de consultation (⚠️ À implémenter dans SILOG par Franck MAILLARD)
+- `StatutOperateur` : Statut de l'opérateur (✅ Implémenté dans SILOG par Franck MAILLARD - Janvier 2026)
+- `DateConsultation` : Date de consultation (✅ Implémenté dans SILOG par Franck MAILLARD - Janvier 2026, stocké en VarChar et converti en DateTime2)
 
 **Source**: `[SEDI_ERP].[dbo].[RESSOURC]`
+
+**Note**: Cette vue a été mise à jour pour utiliser directement les champs SILOG (voir migration 7).
 
 #### 4.2 Vue V_LCTC
 Liste des lancements en cours depuis l'ERP SILOG.
 
 **Colonnes**:
 - `CodeLancement` : Code du lancement
+- `CodeArticle`, `DesignationLct1`, `CodeModele`, `DesignationArt1`, `DesignationArt2` : Informations sur l'article
 - `Phase` : Code de phase
 - `CodeRubrique` : Code rubrique
-- `DateConsultation` : Date de consultation (⚠️ À implémenter dans SILOG par Franck MAILLARD)
+- `DateConsultation` : Date de consultation (✅ Implémenté dans SILOG par Franck MAILLARD - Janvier 2026, stocké en VarChar et converti en DateTime2)
 
 **Source**: `[SEDI_ERP].[dbo].[LCTC]` JOIN `[SEDI_ERP].[dbo].[LCTE]` (où `LancementSolde = 'N'`)
 
-**Note importante**: Les colonnes `StatutOperateur` et `DateConsultation` doivent être implémentées dans SILOG par Franck MAILLARD après transmission des instructions adéquates.
+**Note**: Cette vue a été mise à jour pour utiliser directement les champs SILOG (voir migration 7).
 
 ---
 
-### 5. Mapping de DateConsultation pour les lancements (V_LCTC)
+### 5. Mapping de DateConsultation pour les lancements (V_LCTC) - ⚠️ OBSOLÈTE
 **Fichiers**:
 - `migration_create_lancement_mapping.sql`
 - `scripts_lancement_mapping.sql`
 - `migration_update_v_lctc_add_designations.sql`
 
-**But**: Stocker `DateConsultation` côté `SEDI_APP_INDEPENDANTE` (car la donnée n'existe pas dans SILOG et on n'a pas forcément les droits d'écriture dans `SEDI_ERP`).
+**Statut**: ⚠️ **OBSOLÈTE** - Les champs sont maintenant disponibles directement dans SILOG (voir migration 7).
 
-**Objets créés**:
-- Table: `dbo.AB_LANCEMENTS_MAPPING` (PK: `CodeLancement`)
-- Vue mise à jour: `dbo.V_LCTC` (LEFT JOIN sur `AB_LANCEMENTS_MAPPING`)
-- Procédure: `sp_RecordLancementConsultation` (upsert DateConsultation)
+**But** (historique): Stocker `DateConsultation` côté `SEDI_APP_INDEPENDANTE` (car la donnée n'existait pas dans SILOG).
+
+**Objets créés** (maintenant obsolètes):
+- Table: `dbo.AB_LANCEMENTS_MAPPING` (PK: `CodeLancement`) - ⚠️ Plus utilisée
+- Vue mise à jour: `dbo.V_LCTC` (LEFT JOIN sur `AB_LANCEMENTS_MAPPING`) - ⚠️ Mise à jour dans migration 7
+- Procédure: `sp_RecordLancementConsultation` (upsert DateConsultation) - ⚠️ Plus utilisée
   
-**Champs affichage** (optionnel mais recommandé):
+**Champs affichage**:
 - `CodeArticle`, `DesignationLct1`, `CodeModele`, `DesignationArt1`, `DesignationArt2` via `migration_update_v_lctc_add_designations.sql`
+
+---
+
+### 6. Mapping de StatutOperateur et DateConsultation pour les opérateurs (V_RESSOURC) - ⚠️ OBSOLÈTE
+**Fichiers**:
+- `migration_create_operator_mapping.sql`
+- `scripts_operator_mapping.sql`
+
+**Statut**: ⚠️ **OBSOLÈTE** - Les champs sont maintenant disponibles directement dans SILOG (voir migration 7).
+
+**But** (historique): Stocker `StatutOperateur` et `DateConsultation` côté `SEDI_APP_INDEPENDANTE` (car les données n'existaient pas dans SILOG).
+
+**Objets créés** (maintenant obsolètes):
+- Table: `dbo.AB_OPERATEURS_MAPPING` (PK: `CodeOperateur`) - ⚠️ Plus utilisée
+- Vue mise à jour: `dbo.V_RESSOURC` (LEFT JOIN sur `AB_OPERATEURS_MAPPING`) - ⚠️ Mise à jour dans migration 7
+- Procédures: `sp_UpdateOperatorStatus`, `sp_UpdateOperatorConsultationDate`, `sp_RecordOperatorConsultation` - ⚠️ Plus utilisées
+
+---
+
+### 7. Mise à jour des vues SILOG pour utilisation directe des champs SILOG
+**Fichier**: `migration_update_silog_views_from_silog.sql`
+
+**Date**: 2026-01-XX
+
+**Contexte**: Les champs `StatutOperateur` et `DateConsultation` ont été implémentés dans SILOG par Franck MAILLARD.
+
+**Modifications**:
+
+#### 7.1 Vue V_RESSOURC
+- ✅ Utilise maintenant directement `StatutOperateur` depuis `SEDI_ERP.dbo.RESSOURC`
+- ✅ Utilise maintenant directement `DateConsultation` depuis `SEDI_ERP.dbo.RESSOURC` (conversion VarChar → DateTime2)
+- ❌ Suppression des liens vers `dbo.AB_OPERATEURS_MAPPING`
+
+#### 7.2 Vue V_LCTC
+- ✅ Utilise maintenant directement `DateConsultation` depuis SILOG (conversion VarChar → DateTime2)
+- ❌ Suppression des liens vers `dbo.AB_LANCEMENTS_MAPPING`
+
+**Points importants**:
+- ⚠️ `DateConsultation` est stockée en **VarChar** dans SILOG et convertie en **DateTime2** dans la vue
+- ⚠️ **ACTION REQUISE** : Vérifier les noms exacts des colonnes avec Franck MAILLARD avant d'exécuter la migration
+- ⚠️ Les tables de mapping (`AB_OPERATEURS_MAPPING`, `AB_LANCEMENTS_MAPPING`) peuvent être supprimées si souhaité
+
+**Voir aussi**: `MISE_A_JOUR_SILOG_2026.md` pour plus de détails.
 
 ---
 
 ## Ordre d'exécution recommandé
 
+### Pour une nouvelle installation
 1. **migration_extend_comments.sql** : Ajouter les colonnes pour la gestion des PNC
 2. **migration_extend_historique.sql** : Colonnes SessionId, CreatedAt, RequestId
 3. **migration_extend_temps.sql** : Ajouter Phase, CodeRubrique, StatutTraitement aux temps
 4. **migration_create_silog_views.sql** : Créer les vues pour la lecture des données SILOG
-5. **migration_create_operator_mapping.sql** + **scripts_operator_mapping.sql** : Mapping opérateurs (V_RESSOURC)
-6. **migration_create_lancement_mapping.sql** + **scripts_lancement_mapping.sql** : Mapping lancements (V_LCTC)
+5. **migration_update_v_lctc_add_designations.sql** : Ajouter les champs de désignation à V_LCTC
+6. **migration_update_silog_views_from_silog.sql** : ⚠️ **IMPORTANT** - Mettre à jour les vues pour utiliser directement les champs SILOG
+
+### Pour une mise à jour d'installation existante
+Si vous avez déjà exécuté les migrations 1-6 avec les tables de mapping :
+1. **migration_update_silog_views_from_silog.sql** : Mettre à jour les vues pour utiliser directement les champs SILOG
+2. (Optionnel) Supprimer les tables de mapping obsolètes si souhaité
+
+### Migrations obsolètes (ne plus exécuter)
+- ~~migration_create_operator_mapping.sql~~ : Remplacé par migration 7
+- ~~migration_create_lancement_mapping.sql~~ : Remplacé par migration 7
 
 ## Vérification post-migration
 
@@ -171,9 +229,12 @@ Le workflow de traitement des enregistrements de temps suit ces étapes :
 
 ## Notes importantes
 
-- ⚠️ Les colonnes `StatutOperateur` et `DateConsultation` dans les vues doivent être implémentées dans SILOG
+- ✅ Les colonnes `StatutOperateur` et `DateConsultation` sont maintenant implémentées dans SILOG (Janvier 2026)
+- ⚠️ `DateConsultation` est stockée en **VarChar** dans SILOG et convertie en **DateTime2** dans les vues
+- ⚠️ **IMPORTANT** : Vérifier les noms exacts des colonnes avec Franck MAILLARD avant d'exécuter la migration 7
 - ⚠️ L'EDI_JOB doit être configuré avec les bons paramètres (chemin SILOG, profil, utilisateur, mot de passe)
 - ⚠️ Les enregistrements avec `StatutTraitement = 'T'` ne peuvent plus être modifiés ou supprimés
+- ⚠️ Les tables de mapping (`AB_OPERATEURS_MAPPING`, `AB_LANCEMENTS_MAPPING`) sont obsolètes et peuvent être supprimées
 
 ## Support
 
