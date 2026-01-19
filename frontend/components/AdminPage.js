@@ -1484,27 +1484,15 @@ class AdminPage {
     }
 
     async editOperation(id) {
-        // Éditer une opération non consolidée (depuis ABHISTORIQUE_OPERATEURS)
-        // id = EventId (NoEnreg) depuis ABHISTORIQUE_OPERATEURS
-        console.log('✏️ Édition opération non consolidée, EventId:', id);
+        // Éditer une opération non consolidée (ABHISTORIQUE_OPERATEURS) avec des popups (prompts)
+        // id = EventId (NoEnreg)
+        console.log('✏️ Édition (popup) opération non consolidée, EventId:', id);
         
-        // Trouver l'enregistrement par EventId (priorité) ou id
         const record = this.operations.find(op => 
             (op.EventId && op.EventId == id) || 
             (op.id && op.id == id) ||
             (op._isUnconsolidated && (op.EventId == id || op.id == id))
         );
-        
-        // Validation avant édition
-        if (record) {
-            const validation = this.validateOperationBeforeEdit(record);
-            if (!validation.valid) {
-                this.notificationManager.warning(`Problèmes détectés: ${validation.errors.join(', ')}`);
-            }
-            if (validation.warnings.length > 0) {
-                console.warn('⚠️ Avertissements:', validation.warnings);
-            }
-        }
         
         if (!record) {
             console.warn(`⚠️ Opération avec EventId ${id} non trouvée. Actualisation...`);
@@ -1513,16 +1501,58 @@ class AdminPage {
             return;
         }
 
-        // Vérifier que c'est bien une opération non consolidée
+        // Si l'opération est en fait consolidée, rediriger vers l'édition monitoring
         if (!record._isUnconsolidated && record.TempsId) {
             console.warn(`⚠️ Opération ${id} est consolidée, redirection vers editMonitoringRecord`);
             await this.editMonitoringRecord(record.TempsId);
             return;
         }
 
-        // Utiliser le mode édition inline (appeler la fonction non-async)
         const eventId = record.EventId || record.id || id;
-        this.editOperationInline(eventId);
+
+        // Préparer les valeurs actuelles pour les popups
+        const currentStart = this.cleanTimeValue(record.startTime || record.StartTime || '');
+        const currentEnd = this.cleanTimeValue(record.endTime || record.EndTime || '');
+
+        const newStart = prompt(
+            `Heure début (actuel: ${currentStart || 'vide'}) - format HH:mm :`,
+            currentStart
+        );
+        if (newStart === null) {
+            // Annulé par l'utilisateur
+            return;
+        }
+
+        const newEnd = prompt(
+            `Heure fin (actuel: ${currentEnd || 'vide'}) - format HH:mm :`,
+            currentEnd
+        );
+        if (newEnd === null) {
+            // Annulé par l'utilisateur
+            return;
+        }
+
+        const updateData = {};
+        if (newStart && newStart !== currentStart) updateData.startTime = newStart;
+        if (newEnd && newEnd !== currentEnd) updateData.endTime = newEnd;
+
+        if (Object.keys(updateData).length === 0) {
+            this.notificationManager.info('Aucune modification effectuée');
+            return;
+        }
+
+        try {
+            const result = await this.apiService.updateOperation(eventId, updateData);
+            if (result && result.success) {
+                this.notificationManager.success('Opération modifiée avec succès');
+                await this.loadData();
+            } else {
+                this.notificationManager.error(result?.error || 'Erreur lors de la modification');
+            }
+        } catch (error) {
+            console.error('❌ Erreur lors de la modification de l’opération:', error);
+            this.notificationManager.error('Erreur lors de la modification');
+        }
     }
     
     // Fonction d'édition inline (non-async car manipulation DOM directe)
