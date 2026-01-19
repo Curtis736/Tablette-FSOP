@@ -1157,10 +1157,18 @@ class AdminPage {
                     );
 
                     if (errors.length > 0) {
-                        this.notificationManager.warning(
-                            `${errors.length} opération(s) n'ont pas pu être consolidée(s) automatiquement. ` +
-                            `Seules les opérations correctement consolidées seront transférées.`
-                        );
+                        // Construire un message détaillé avec les erreurs
+                        const errorDetails = errors.map(err => {
+                            const op = err.operation || {};
+                            return `• ${op.OperatorCode || '?'}/${op.LancementCode || '?'}: ${err.error || 'Erreur inconnue'}`;
+                        }).join('\n');
+                        
+                        const errorMessage = 
+                            `${errors.length} opération(s) n'ont pas pu être consolidée(s):\n\n${errorDetails}\n\n` +
+                            `Vérifiez que les opérations ont bien des événements DEBUT et FIN dans ABHISTORIQUE_OPERATEURS.`;
+                        
+                        console.error('❌ Erreurs de consolidation:', errors);
+                        this.notificationManager.error(errorMessage, 10000); // Afficher 10 secondes
                     }
 
                     // Recharger une seule fois les données pour récupérer les nouveaux TempsId
@@ -1178,10 +1186,35 @@ class AdminPage {
             const terminatedWithTempsId = terminatedOps.filter(op => op.TempsId);
 
             if (terminatedWithTempsId.length === 0) {
-                this.notificationManager.error(
-                    'Aucune opération terminée n’a un TempsId valide après consolidation. ' +
-                    'Corrigez les opérations en erreur puis réessayez.'
-                );
+                // Afficher les détails des opérations qui ont échoué
+                const failedOps = terminatedOps.filter(op => !op.TempsId);
+                let errorDetails = 'Aucune opération terminée n’a un TempsId valide après consolidation.\n\n';
+                
+                if (failedOps.length > 0) {
+                    errorDetails += `Opérations en échec (${failedOps.length}):\n`;
+                    failedOps.forEach(op => {
+                        errorDetails += `• ${op.OperatorCode || '?'}/${op.LancementCode || '?'} - ${op.OperatorName || 'Opérateur inconnu'}\n`;
+                    });
+                    errorDetails += '\n';
+                }
+                
+                errorDetails += 'Causes possibles:\n';
+                errorDetails += '• Événements DEBUT ou FIN manquants dans ABHISTORIQUE_OPERATEURS\n';
+                errorDetails += '• Heures incohérentes (fin < début)\n';
+                errorDetails += '• Données invalides dans la base de données\n\n';
+                errorDetails += 'Vérifiez les logs backend pour plus de détails.';
+                
+                console.error('❌ Aucune opération consolidée:', {
+                    totalTerminated: terminatedOps.length,
+                    failedOps: failedOps.map(op => ({
+                        OperatorCode: op.OperatorCode,
+                        LancementCode: op.LancementCode,
+                        Status: op.Status,
+                        StatusCode: op.StatusCode
+                    }))
+                });
+                
+                this.notificationManager.error(errorDetails, 15000); // Afficher 15 secondes
                 return;
             }
 
