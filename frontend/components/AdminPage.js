@@ -897,16 +897,37 @@ class AdminPage {
         // Appliquer les filtres
         let filteredOperations = [...this.operations];
         
-        // Filtre de statut (Monitoring = StatutTraitement)
+        // Par défaut, exclure les opérations transmises (StatutTraitement = 'T')
+        // Sauf si l'utilisateur a explicitement sélectionné le filtre "Transmis"
         const statusFilter = document.getElementById('statusFilter');
-        if (statusFilter && statusFilter.value) {
-            const selected = statusFilter.value.toUpperCase().trim();
+        const selectedStatus = statusFilter?.value?.toUpperCase().trim();
+        
+        if (selectedStatus === 'T') {
+            // Si l'utilisateur veut voir les transmises, ne filtrer que celles-ci
             filteredOperations = filteredOperations.filter(op => {
                 const st = (op.StatutTraitement === null || op.StatutTraitement === undefined)
                     ? 'NULL'
                     : String(op.StatutTraitement).toUpperCase().trim();
-                return st === selected;
+                return st === 'T';
             });
+        } else {
+            // Par défaut, exclure les opérations transmises
+            filteredOperations = filteredOperations.filter(op => {
+                const st = (op.StatutTraitement === null || op.StatutTraitement === undefined)
+                    ? 'NULL'
+                    : String(op.StatutTraitement).toUpperCase().trim();
+                return st !== 'T'; // Exclure les transmises
+            });
+            
+            // Si un autre filtre de statut est sélectionné, l'appliquer
+            if (selectedStatus && selectedStatus !== '') {
+                filteredOperations = filteredOperations.filter(op => {
+                    const st = (op.StatutTraitement === null || op.StatutTraitement === undefined)
+                        ? 'NULL'
+                        : String(op.StatutTraitement).toUpperCase().trim();
+                    return st === selectedStatus;
+                });
+            }
         }
         
         // Filtre de recherche (code lancement)
@@ -1282,7 +1303,15 @@ class AdminPage {
                 const result = await this.apiService.validateAndTransmitMonitoringBatch(ids, { triggerEdiJob });
                 if (result?.success) {
                     this.notificationManager.success(`Transfert terminé: ${result.count || ids.length} opération(s) transférée(s)`);
+                    // Recharger les données pour mettre à jour l'affichage (les opérations transmises seront masquées)
                     await this.loadData(false); // Désactiver autoConsolidate après transfert
+                    // S'assurer que le filtre de statut n'est pas sur "Transmis" pour masquer les opérations transférées
+                    const statusFilter = document.getElementById('statusFilter');
+                    if (statusFilter && statusFilter.value === 'T') {
+                        statusFilter.value = ''; // Réinitialiser le filtre pour masquer les transmises
+                    }
+                    // Mettre à jour le tableau pour refléter les changements
+                    this.updateOperationsTable();
                 } else {
                     this.notificationManager.error(result?.error || 'Erreur lors du transfert');
                 }
