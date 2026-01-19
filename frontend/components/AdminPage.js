@@ -353,22 +353,6 @@ class AdminPage {
             
             this.operations = mergedOps;
             
-            // Consolidation automatique en arrière-plan pour les opérations terminées non consolidées
-            // Cela garantit que toutes les opérations terminées peuvent être transférées
-            const terminatedUnconsolidated = mergedOps.filter(op => {
-                const isTerminated = this.isOperationTerminated(op);
-                const isUnconsolidated = op._isUnconsolidated || !op.TempsId;
-                return isTerminated && isUnconsolidated;
-            });
-            
-            if (terminatedUnconsolidated.length > 0 && !this._isAutoConsolidating) {
-                // Consolider en arrière-plan sans bloquer l'affichage
-                this._isAutoConsolidating = true;
-                this.autoConsolidateTerminatedOps(terminatedUnconsolidated).finally(() => {
-                    this._isAutoConsolidating = false;
-                });
-            }
-            
             // Réinitialiser le compteur d'erreurs en cas de succès
             this.consecutiveErrors = 0;
             
@@ -486,40 +470,6 @@ class AdminPage {
         }
     }
     
-    // Consolidation automatique en arrière-plan pour les opérations terminées
-    async autoConsolidateTerminatedOps(operations) {
-        try {
-            console.log(`🔄 Consolidation automatique en arrière-plan de ${operations.length} opération(s) terminée(s)...`);
-            
-            const operationsToConsolidate = operations.map(op => ({
-                OperatorCode: op.OperatorCode,
-                LancementCode: op.LancementCode
-            }));
-            
-            const consolidateResult = await this.apiService.consolidateMonitoringBatch(operationsToConsolidate);
-            
-            if (consolidateResult?.success) {
-                const consolidated = consolidateResult.results?.success || [];
-                const errors = consolidateResult.results?.errors || [];
-                
-                if (consolidated.length > 0) {
-                    console.log(`✅ ${consolidated.length} opération(s) consolidée(s) automatiquement`);
-                    // Recharger les données après un court délai pour obtenir les TempsId
-                    setTimeout(async () => {
-                        await this.loadData();
-                    }, 2000);
-                }
-                
-                if (errors.length > 0) {
-                    console.warn(`⚠️ ${errors.length} opération(s) n'ont pas pu être consolidée(s) automatiquement`);
-                }
-            }
-        } catch (error) {
-            console.error('❌ Erreur lors de la consolidation automatique en arrière-plan:', error);
-            // Ne pas bloquer l'affichage en cas d'erreur
-        }
-    }
-    
     // Méthode pour réactiver le refresh automatique
     resetConsecutiveErrors() {
         this.consecutiveErrors = 0;
@@ -570,27 +520,57 @@ class AdminPage {
     }
 
     updateStats() {
-        // Vérifier que les éléments existent avant de les mettre à jour
+        // Calculer les statistiques depuis les opérations affichées dans le tableau
+        // Cela garantit la cohérence entre le tableau et les statistiques
+        const allOps = this.operations || [];
+        
+        // Compter les opérations par statut depuis les données réelles
+        const activeOps = allOps.filter(op => {
+            const status = (op.StatusCode || op.statusCode || '').toUpperCase();
+            const statusLabel = (op.Status || op.status || '').toUpperCase();
+            return status === 'EN_COURS' || statusLabel.includes('EN COURS');
+        });
+        
+        const pausedOps = allOps.filter(op => {
+            const status = (op.StatusCode || op.statusCode || '').toUpperCase();
+            const statusLabel = (op.Status || op.status || '').toUpperCase();
+            return status === 'EN_PAUSE' || status === 'PAUSE' || statusLabel.includes('PAUSE');
+        });
+        
+        const completedOps = allOps.filter(op => {
+            const status = (op.StatusCode || op.statusCode || '').toUpperCase();
+            const statusLabel = (op.Status || op.status || '').toUpperCase();
+            const hasEndTime = op.EndTime && op.EndTime !== '-' && op.EndTime !== 'N/A' && op.EndTime.trim() !== '';
+            return status === 'TERMINE' || statusLabel.includes('TERMIN') || hasEndTime;
+        });
+        
+        // Utiliser les stats du backend pour totalOperators, mais calculer les autres depuis les données locales
+        const stats = {
+            totalOperators: this.stats?.totalOperators || 0,
+            activeLancements: activeOps.length,
+            pausedLancements: pausedOps.length,
+            completedLancements: completedOps.length
+        };
+        
+        // Mettre à jour les éléments DOM
         if (this.totalOperators) {
-            this.totalOperators.textContent = this.stats.totalOperators || 0;
+            this.totalOperators.textContent = stats.totalOperators;
         }
         if (this.activeLancements) {
-            this.activeLancements.textContent = this.stats.activeLancements || 0;
+            this.activeLancements.textContent = stats.activeLancements;
         }
         if (this.pausedLancements) {
-            this.pausedLancements.textContent = this.stats.pausedLancements || 0;
+            this.pausedLancements.textContent = stats.pausedLancements;
         }
         if (this.completedLancements) {
-            this.completedLancements.textContent = this.stats.completedLancements || 0;
+            this.completedLancements.textContent = stats.completedLancements;
         }
         
+        // Mettre à jour this.stats pour la cohérence
+        this.stats = stats;
+        
         // Log pour debug
-        console.log('📊 Statistiques mises à jour:', {
-            totalOperators: this.stats.totalOperators || 0,
-            activeLancements: this.stats.activeLancements || 0,
-            pausedLancements: this.stats.pausedLancements || 0,
-            completedLancements: this.stats.completedLancements || 0
-        });
+        console.log('📊 Statistiques mises à jour depuis les données du tableau:', stats);
     }
 
     showNoDataMessage() {
@@ -1070,137 +1050,87 @@ class AdminPage {
         return false;
     }
 
-    // ===== Transfert: logique simplifiée - si Terminé → éligible =====
+    // ===== Transfert: une seule consolidation puis transfert, sans boucle =====
     async handleTransfer() {
         try {
-            // Utiliser les opérations déjà chargées dans le tableau au lieu de refaire un appel API
             const allRecordsData = this.operations || [];
-            
             console.log(`📊 Total opérations dans le tableau: ${allRecordsData.length}`);
-            
-            // Filtrer uniquement les opérations TERMINÉES qui ne sont pas déjà transférées
-            const terminatedOps = allRecordsData.filter(op => this.isOperationTerminated(op) && op.StatutTraitement !== 'T');
-            
-            // Séparer les opérations terminées en deux groupes : consolidées et non consolidées
-            const unconsolidatedOps = terminatedOps.filter(op => op._isUnconsolidated || !op.TempsId);
-            const consolidatedOps = terminatedOps.filter(op => !op._isUnconsolidated && op.TempsId);
-            
-            console.log(`📊 Opérations terminées: ${terminatedOps.length} (${unconsolidatedOps.length} non consolidées, ${consolidatedOps.length} consolidées)`);
-            
-            // Si des opérations non consolidées existent, les consolider automatiquement en arrière-plan
-            if (unconsolidatedOps.length > 0) {
-                // Vérifier si on est déjà en train de consolider (éviter la boucle infinie)
-                if (this._isConsolidating) {
-                    console.warn('⚠️ Consolidation déjà en cours, évitement de la boucle infinie');
-                    // Ne pas bloquer, continuer avec les opérations déjà consolidées
-                } else {
-                    this._isConsolidating = true;
-                    
-                    try {
-                        console.log(`🔄 Consolidation automatique de ${unconsolidatedOps.length} opération(s) terminée(s)...`);
-                        
-                        const operationsToConsolidate = unconsolidatedOps.map(op => ({
-                            OperatorCode: op.OperatorCode,
-                            LancementCode: op.LancementCode
-                        }));
-                        
-                        const consolidateResult = await this.apiService.consolidateMonitoringBatch(operationsToConsolidate);
-                        
-                        if (consolidateResult?.success) {
-                            const consolidated = consolidateResult.results?.success || [];
-                            const skipped = consolidateResult.results?.skipped || [];
-                            const errors = consolidateResult.results?.errors || [];
-                            
-                            console.log(`✅ Consolidation: ${consolidated.length} réussie(s), ${skipped.length} ignorée(s), ${errors.length} erreur(s)`);
-                            
-                            if (consolidated.length > 0) {
-                                // Recharger les données pour obtenir les nouveaux TempsId
-                                await this.loadData();
-                                // Relancer la fonction pour récupérer les opérations maintenant consolidées
-                                this._isConsolidating = false;
-                                return this.handleTransfer();
-                            } else if (errors.length > 0) {
-                                // Si toutes les opérations ont échoué, continuer quand même avec celles qui sont déjà consolidées
-                                console.warn(`⚠️ ${errors.length} opération(s) n'ont pas pu être consolidée(s), continuation avec les opérations déjà consolidées`);
-                            }
-                        }
-                    } catch (error) {
-                        console.error('❌ Erreur lors de la consolidation automatique:', error);
-                        // Continuer quand même avec les opérations déjà consolidées
-                    } finally {
-                        this._isConsolidating = false;
-                    }
-                }
-            }
-            
-            // Après consolidation automatique, recharger les données pour avoir les TempsId à jour
-            if (unconsolidatedOps.length > 0 && this._isConsolidating === false) {
-                // Recharger pour obtenir les opérations maintenant consolidées
-                await this.loadData();
-                // Relancer handleTransfer avec les nouvelles données
-                return this.handleTransfer();
-            }
-            
-            // Utiliser TOUTES les opérations terminées (consolidées ou non)
-            // Si elles ne sont pas consolidées, elles seront consolidées automatiquement avant le transfert
-            const terminatedRecords = terminatedOps;
 
-            console.log(`✅ Opérations éligibles au transfert: ${terminatedRecords.length} sur ${allRecordsData.length}`);
+            // 1) Prendre uniquement les opérations TERMINÉES non déjà transférées
+            let terminatedOps = allRecordsData.filter(
+                op => this.isOperationTerminated(op) && op.StatutTraitement !== 'T'
+            );
 
-            if (terminatedRecords.length === 0) {
+            console.log(`📊 Opérations TERMINÉES non transférées: ${terminatedOps.length}`);
+
+            if (terminatedOps.length === 0) {
                 const alreadyTransferred = allRecordsData.filter(op => op.StatutTraitement === 'T').length;
                 const terminated = allRecordsData.filter(op => this.isOperationTerminated(op)).length;
-                this.notificationManager.warning(`Aucune opération TERMINÉE à transférer (${terminated} terminées, ${alreadyTransferred} déjà transférées)`);
+                this.notificationManager.warning(
+                    `Aucune opération TERMINÉE à transférer (${terminated} terminées, ${alreadyTransferred} déjà transférées)`
+                );
                 return;
             }
 
-            // S'assurer que toutes les opérations ont un TempsId avant le transfert
-            // Si certaines n'en ont pas, les consolider d'abord
-            const opsWithoutTempsId = terminatedRecords.filter(op => !op.TempsId);
+            // 2) Un seul batch de consolidation pour celles sans TempsId
+            const opsWithoutTempsId = terminatedOps.filter(op => !op.TempsId);
             if (opsWithoutTempsId.length > 0) {
-                console.log(`🔄 Consolidation de ${opsWithoutTempsId.length} opération(s) sans TempsId avant transfert...`);
+                console.log(`🔄 Consolidation de ${opsWithoutTempsId.length} opération(s) terminée(s) sans TempsId avant transfert...`);
                 const operationsToConsolidate = opsWithoutTempsId.map(op => ({
                     OperatorCode: op.OperatorCode,
                     LancementCode: op.LancementCode
                 }));
                 
                 const consolidateResult = await this.apiService.consolidateMonitoringBatch(operationsToConsolidate);
-                if (consolidateResult?.success && consolidateResult.results?.success?.length > 0) {
-                    // Recharger les données pour obtenir les TempsId
-                    await this.loadData();
-                    // Relancer handleTransfer avec les nouvelles données
-                    return this.handleTransfer();
+                const ok = consolidateResult?.results?.success || [];
+                const errors = consolidateResult?.results?.errors || [];
+
+                console.log(
+                    `✅ Consolidation pré-transfert: ${ok.length} réussie(s), ` +
+                    `${(consolidateResult?.results?.skipped || []).length} ignorée(s), ` +
+                    `${errors.length} erreur(s)`
+                );
+
+                if (errors.length > 0) {
+                    this.notificationManager.warning(
+                        `${errors.length} opération(s) n'ont pas pu être consolidée(s) automatiquement. ` +
+                        `Seules les opérations correctement consolidées seront transférées.`
+                    );
                 }
+
+                // Recharger une seule fois les données pour récupérer les nouveaux TempsId
+                await this.loadData();
+                terminatedOps = (this.operations || []).filter(
+                    op => this.isOperationTerminated(op) && op.StatutTraitement !== 'T'
+                );
             }
 
-            // Proposer de transférer tous ou sélectionner des lancements
-            const message = `Transférer ${terminatedRecords.length} opération(s) TERMINÉE(S) ?\n\nOK = tout transférer\nAnnuler = choisir les lancements`;
+            // 3) Ne garder pour le transfert que les opérations qui ont maintenant un TempsId
+            const terminatedWithTempsId = terminatedOps.filter(op => op.TempsId);
+
+            if (terminatedWithTempsId.length === 0) {
+                this.notificationManager.error(
+                    'Aucune opération terminée n’a un TempsId valide après consolidation. ' +
+                    'Corrigez les opérations en erreur puis réessayez.'
+                );
+                return;
+            }
+
+            console.log(
+                `✅ Opérations éligibles au transfert (avec TempsId): ${terminatedWithTempsId.length} ` +
+                `sur ${terminatedOps.length} opérations terminées`
+            );
+
+            // 4) Demander si on transfère tout ou si on passe par la sélection
+            const message = `Transférer ${terminatedWithTempsId.length} opération(s) TERMINÉE(S) ?\n\nOK = tout transférer\nAnnuler = choisir les lancements`;
             const transferAll = confirm(message);
             
             if (transferAll) {
-                // Transférer toutes les opérations terminées
-                // Récupérer les TempsId (consolidées) ou consolider d'abord (non consolidées)
-                const ids = [];
-                for (const op of terminatedRecords) {
-                    if (op.TempsId) {
-                        ids.push(op.TempsId);
-                    } else {
-                        // Consolider cette opération avant de l'ajouter
-                        try {
-                            const consolidateResult = await this.apiService.consolidateMonitoringBatch([{
-                                OperatorCode: op.OperatorCode,
-                                LancementCode: op.LancementCode
-                            }]);
-                            if (consolidateResult?.success && consolidateResult.results?.success?.length > 0) {
-                                const tempsId = consolidateResult.results.success[0].TempsId;
-                                if (tempsId) ids.push(tempsId);
-                            }
-                        } catch (error) {
-                            console.error(`❌ Erreur consolidation ${op.OperatorCode}/${op.LancementCode}:`, error);
-                        }
-                    }
-                }
-                
+                // Transférer toutes les opérations terminées AVEC TempsId
+                const ids = terminatedWithTempsId
+                    .map(op => op.TempsId)
+                    .filter(id => !!id);
+
                 if (ids.length === 0) {
                     this.notificationManager.error('Aucune opération n\'a pu être consolidée pour le transfert');
                     return;
@@ -1216,7 +1146,7 @@ class AdminPage {
                 }
             } else {
                 // Ouvrir la modale pour sélectionner les lancements
-                this.openTransferModal(terminatedRecords);
+                this.openTransferModal(terminatedWithTempsId);
             }
         } catch (error) {
             console.error('Erreur lors du transfert:', error);
