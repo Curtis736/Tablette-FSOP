@@ -3579,6 +3579,44 @@ router.post('/monitoring/validate-and-transmit-batch', async (req, res) => {
     }
 });
 
+// POST /api/admin/monitoring/repair-times-batch - Réparer StartTime/EndTime depuis ABHISTORIQUE_OPERATEURS
+router.post('/monitoring/repair-times-batch', async (req, res) => {
+    try {
+        const { tempsIds } = req.body;
+        if (!Array.isArray(tempsIds) || tempsIds.length === 0) {
+            return res.status(400).json({
+                success: false,
+                error: 'Liste d\'IDs requise'
+            });
+        }
+
+        const results = { success: [], errors: [] };
+        for (const id of tempsIds) {
+            const tempsId = parseInt(id, 10);
+            if (!Number.isFinite(tempsId)) {
+                results.errors.push({ tempsId: id, error: 'TempsId invalide' });
+                continue;
+            }
+            const r = await MonitoringService.repairRecordTimes(tempsId);
+            if (r.success) results.success.push({ tempsId, ...r.data });
+            else results.errors.push({ tempsId, error: r.error });
+        }
+
+        return res.json({
+            success: results.errors.length === 0,
+            message: `${results.success.length} réparé(s), ${results.errors.length} erreur(s)`,
+            results
+        });
+    } catch (error) {
+        console.error('❌ Erreur repair-times-batch:', error);
+        res.status(500).json({
+            success: false,
+            error: 'Erreur serveur lors de la réparation des heures',
+            details: error.message
+        });
+    }
+});
+
 // ============================================
 // ROUTES EDI_JOB - Exécution de l'EDI_JOB de SILOG
 // ============================================

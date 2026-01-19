@@ -7,6 +7,134 @@ const { executeQuery, executeNonQuery } = require('../config/database');
 
 class MonitoringService {
     /**
+     * Réparer StartTime/EndTime/durations depuis ABHISTORIQUE_OPERATEURS (utile si Start/End = 00:00)
+     * @param {number} tempsId
+     * @returns {Promise<{success:boolean,message?:string,error?:string,data?:any}>}
+     */
+    static async repairRecordTimes(tempsId) {
+        try {
+            // 1) Charger l'enregistrement
+            const recQuery = `
+                SELECT TempsId, OperatorCode, LancementCode, StartTime, EndTime, DateCreation, StatutTraitement
+                FROM [SEDI_APP_INDEPENDANTE].[dbo].[ABTEMPS_OPERATEURS]
+                WHERE TempsId = @tempsId
+            `;
+            const recs = await executeQuery(recQuery, { tempsId });
+            if (!recs || recs.length === 0) {
+                return { success: false, error: 'Enregistrement non trouvé' };
+            }
+            const rec = recs[0];
+
+            // 2) Détecter si CreatedAt existe dans ABHISTORIQUE_OPERATEURS
+            const colQuery = `
+                SELECT COUNT(*) as cnt
+                FROM INFORMATION_SCHEMA.COLUMNS
+                WHERE TABLE_SCHEMA = 'dbo'
+                  AND TABLE_NAME = 'ABHISTORIQUE_OPERATEURS'
+                  AND COLUMN_NAME = 'CreatedAt'
+            `;
+            const col = await executeQuery(colQuery);
+            const hasCreatedAt = (col?.[0]?.cnt || 0) > 0;
+
+            // 3) Charger les événements du jour pour ce couple (OperatorCode, LancementCode)
+            const eventsQuery = `
+                SELECT Ident, Statut, DateCreation, HeureDebut, HeureFin${hasCreatedAt ? ', CreatedAt' : ''}
+                FROM [SEDI_APP_INDEPENDANTE].[dbo].[ABHISTORIQUE_OPERATEURS]
+                WHERE OperatorCode = @operatorCode
+                  AND CodeLanctImprod = @lancementCode
+                  AND CAST(DateCreation AS DATE) = @date
+                ORDER BY ${hasCreatedAt ? 'CreatedAt' : 'DateCreation'} ASC
+            `;
+            const dateOnly = rec.DateCreation ? String(rec.DateCreation).substring(0, 10) : null;
+            const events = await executeQuery(eventsQuery, {
+                operatorCode: rec.OperatorCode,
+                lancementCode: rec.LancementCode,
+                date: dateOnly
+            });
+
+            if (!events || events.length === 0) {
+                return { success: false, error: 'Aucun événement trouvé pour recalculer les heures' };
+            }
+
+            const extractTime = (timeValue) => {
+                if (!timeValue) return null;
+                if (typeof timeValue === 'string') {
+                    const m = timeValue.trim().match(/^(\d{1,2}):(\d{2})(?::(\d{2}))?$/);
+                    if (m) return { hour: parseInt(m[1], 10), minute: parseInt(m[2], 10) };
+                }
+                if (timeValue instanceof Date) return { hour: timeValue.getHours(), minute: timeValue.getMinutes() };
+                if (typeof timeValue === 'object' && timeValue.hour !== undefined && timeValue.minute !== undefined) {
+                    return { hour: parseInt(timeValue.hour, 10), minute: parseInt(timeValue.minute, 10) };
+                }
+                return null;
+            };
+
+            const buildDateTime = (event, kind /* 'start'|'end' */) => {
+                const createdAt = event.CreatedAt;
+                if (createdAt) {
+                    const d = new Date(createdAt);
+                    if (!isNaN(d.getTime())) return d;
+                }
+                const base = new Date(event.DateCreation);
+                if (!isNaN(base.getTime())) {
+                    const t = extractTime(kind === 'start' ? event.HeureDebut : event.HeureFin);
+                    if (t) base.setHours(t.hour, t.minute, 0, 0);
+                    return base;
+                }
+                return new Date();
+            };
+
+            const debut = events.find(e => e.Ident === 'DEBUT') || events[0];
+            const fin = [...events].reverse().find(e => e.Ident === 'FIN') || events[events.length - 1];
+
+            const newStart = buildDateTime(debut, 'start');
+            const newEnd = buildDateTime(fin, 'end');
+
+            // 4) Recalculer les durées depuis les événements
+            const DurationCalculationService = require('./DurationCalculationService');
+            const durations = DurationCalculationService.calculateDurations(events);
+
+            // 5) Mettre à jour ABTEMPS_OPERATEURS (même si StatutTraitement = 'T' : correction de données)
+            const updateQuery = `
+                UPDATE [SEDI_APP_INDEPENDANTE].[dbo].[ABTEMPS_OPERATEURS]
+                SET StartTime = @startTime,
+                    EndTime = @endTime,
+                    TotalDuration = @totalDuration,
+                    PauseDuration = @pauseDuration,
+                    ProductiveDuration = @productiveDuration,
+                    EventsCount = @eventsCount,
+                    CalculatedAt = GETDATE(),
+                    CalculationMethod = 'EVENTS_BASED'
+                WHERE TempsId = @tempsId
+            `;
+            await executeNonQuery(updateQuery, {
+                tempsId,
+                startTime: newStart,
+                endTime: newEnd,
+                totalDuration: durations.totalDuration,
+                pauseDuration: durations.pauseDuration,
+                productiveDuration: durations.productiveDuration,
+                eventsCount: durations.eventsCount
+            });
+
+            return {
+                success: true,
+                message: 'Heures réparées depuis les événements',
+                data: {
+                    tempsId,
+                    operatorCode: rec.OperatorCode,
+                    lancementCode: rec.LancementCode,
+                    startTime: newStart,
+                    endTime: newEnd,
+                    durations
+                }
+            };
+        } catch (error) {
+            console.error('❌ Erreur repairRecordTimes:', error);
+            return { success: false, error: error.message };
+        }
+    }
+    /**
      * Récupérer tous les enregistrements de temps avec leurs détails
      * @param {Object} filters - Filtres optionnels (statutTraitement, operatorCode, lancementCode, date)
      * @returns {Promise<Array>} Liste des enregistrements
@@ -489,9 +617,22 @@ class MonitoringService {
                 };
             }
             
-            // 2. Valider chaque enregistrement (mais accepter ceux qui ne sont pas encore validés)
+            // 2. Réparer les heures si elles sont à 00:00 (problème historique) puis valider chaque enregistrement
             for (const record of existingRecords) {
                 const tempsId = record.TempsId;
+
+                // Réparer si StartTime/EndTime tombent à minuit (souvent DateCreation sans heure)
+                try {
+                    const st = new Date(record.StartTime);
+                    const et = new Date(record.EndTime);
+                    const isMidnight = (d) => !isNaN(d.getTime()) && d.getHours() === 0 && d.getMinutes() === 0 && d.getSeconds() === 0;
+                    if (isMidnight(st) && isMidnight(et)) {
+                        console.log(`🛠️ Repair heures (00:00) pour TempsId=${tempsId}...`);
+                        await this.repairRecordTimes(tempsId);
+                    }
+                } catch (e) {
+                    // noop
+                }
                 
                 // Vérifier les champs obligatoires
                 if (!record.OperatorCode || !record.LancementCode || !record.StartTime || !record.EndTime) {
