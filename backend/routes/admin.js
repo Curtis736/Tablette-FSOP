@@ -918,10 +918,25 @@ async function getAdminStats(date) {
         const allEvents = validationResult.events;
         
         // Filtrer les événements par date (par défaut, utiliser aujourd'hui)
-        const filteredEvents = allEvents.filter(event => {
+        let filteredEvents = allEvents.filter(event => {
             const eventDate = moment(event.DateCreation).format('YYYY-MM-DD');
             return eventDate === targetDate;
         });
+
+        // Exclure les opérations déjà transmises (StatutTraitement = 'T') pour ne pas les afficher dans le dashboard
+        try {
+            const transmittedQuery = `
+                SELECT OperatorCode, LancementCode
+                FROM [SEDI_APP_INDEPENDANTE].[dbo].[ABTEMPS_OPERATEURS]
+                WHERE StatutTraitement = 'T'
+                  AND CAST(DateCreation AS DATE) = @date
+            `;
+            const transmitted = await executeQuery(transmittedQuery, { date: targetDate });
+            const transmittedSet = new Set(transmitted.map(t => `${t.OperatorCode}_${t.LancementCode}`));
+            filteredEvents = filteredEvents.filter(e => !transmittedSet.has(`${e.OperatorCode}_${e.CodeLanctImprod}`));
+        } catch (e) {
+            console.warn('⚠️ Impossible de filtrer les opérations transmises pour les stats:', e.message);
+        }
         
         console.log(` Calcul des statistiques pour ${filteredEvents.length} événements (date: ${targetDate})`);
         
@@ -1010,10 +1025,32 @@ async function getAdminOperations(date, page = 1, limit = 25) {
             });
         }
         
+        // Filtrer par date (sinon on mélange les jours et on crée des doublons)
+        const targetDate = date ? moment(date).format('YYYY-MM-DD') : moment().format('YYYY-MM-DD');
+        let filteredEvents = allEvents.filter(event => {
+            const eventDate = moment(event.DateCreation).format('YYYY-MM-DD');
+            return eventDate === targetDate;
+        });
+
+        // Exclure les opérations déjà transmises (StatutTraitement = 'T') pour qu'elles disparaissent du dashboard
+        try {
+            const transmittedQuery = `
+                SELECT OperatorCode, LancementCode
+                FROM [SEDI_APP_INDEPENDANTE].[dbo].[ABTEMPS_OPERATEURS]
+                WHERE StatutTraitement = 'T'
+                  AND CAST(DateCreation AS DATE) = @date
+            `;
+            const transmitted = await executeQuery(transmittedQuery, { date: targetDate });
+            const transmittedSet = new Set(transmitted.map(t => `${t.OperatorCode}_${t.LancementCode}`));
+            filteredEvents = filteredEvents.filter(e => !transmittedSet.has(`${e.OperatorCode}_${e.CodeLanctImprod}`));
+        } catch (e) {
+            console.warn('⚠️ Impossible de filtrer les opérations transmises pour les opérations admin:', e.message);
+        }
+
         // Regrouper les événements par lancement mais garder les pauses séparées
-        console.log('🔍 Événements avant regroupement:', allEvents.length);
+        console.log('🔍 Événements avant regroupement:', filteredEvents.length);
         // Debug des types d'heures (uniquement si problème détecté)
-        const problematicEvents = allEvents.filter(e => 
+        const problematicEvents = filteredEvents.filter(e => 
             e.HeureDebut && typeof e.HeureDebut !== 'string' && !(e.HeureDebut instanceof Date)
         );
         if (problematicEvents.length > 0) {
@@ -1026,7 +1063,7 @@ async function getAdminOperations(date, page = 1, limit = 25) {
         }
         
         // Utiliser la fonction de regroupement avec pauses séparées
-        const processedLancements = processLancementEventsWithPauses(allEvents);
+        const processedLancements = processLancementEventsWithPauses(filteredEvents);
         console.log('🔍 Événements après regroupement:', processedLancements.length);
         console.log('🔍 Détail des événements regroupés:', processedLancements.map(p => ({
             lancement: p.lancementCode,
@@ -1043,7 +1080,7 @@ async function getAdminOperations(date, page = 1, limit = 25) {
         
         const formattedOperations = limitedLancements.map(lancement => {
             // Trouver les informations détaillées depuis les événements
-            const relatedEvents = allEvents.filter(e => 
+            const relatedEvents = filteredEvents.filter(e => 
                 e.CodeLanctImprod === lancement.lancementCode && 
                 e.OperatorCode === lancement.operatorId
             );
@@ -1402,53 +1439,62 @@ router.get('/operators', async (req, res) => {
 
         console.log('🔍 Récupération des opérateurs connectés depuis ABSESSIONS_OPERATEURS...');
 
-            const operatorsQuery = `
-                SELECT DISTINCT 
-                    COALESCE(s.OperatorCode, h.OperatorCode) as OperatorCode,
-                    COALESCE(r.Designation1, 'Opérateur ' + CAST(COALESCE(s.OperatorCode, h.OperatorCode) AS VARCHAR)) as NomOperateur,
-                    s.LoginTime,
-                    COALESCE(s.SessionStatus, 'ACTIVE') as SessionStatus,
-                    CASE 
-                        WHEN h.OperatorCode IS NOT NULL THEN 'EN_OPERATION'
-                        WHEN s.OperatorCode IS NOT NULL THEN 'CONNECTE'
-                        ELSE 'INACTIVE'
-                    END as ActivityStatus,
-                    COALESCE(s.LoginTime, h.DateCreation) as LastActivityTime,
-                    r.Coderessource as RessourceCode,
-                    s.DeviceInfo,
-                    CASE 
-                        WHEN h.OperatorCode IS NOT NULL THEN 'EN_OPERATION'
-                        WHEN s.OperatorCode IS NOT NULL THEN 'CONNECTE'
-                        ELSE 'INACTIVE'
-                    END as CurrentStatus
-                FROM (
-                    -- Opérateurs connectés
-                    SELECT s.OperatorCode, s.LoginTime, s.SessionStatus, s.DeviceInfo
-                    FROM [SEDI_APP_INDEPENDANTE].[dbo].[ABSESSIONS_OPERATEURS] s
-                    WHERE s.SessionStatus = 'ACTIVE'
-                    
-                    UNION
-                    
-                    -- Opérateurs avec lancement en cours ET session active (seulement ceux vraiment actifs)
-                    SELECT DISTINCT h.OperatorCode, h.DateCreation as LoginTime, 'ACTIVE' as SessionStatus, NULL as DeviceInfo
-                    FROM [SEDI_APP_INDEPENDANTE].[dbo].[ABHISTORIQUE_OPERATEURS] h
-                    INNER JOIN [SEDI_APP_INDEPENDANTE].[dbo].[ABSESSIONS_OPERATEURS] s 
-                        ON h.OperatorCode = s.OperatorCode 
-                        AND s.SessionStatus = 'ACTIVE'
-                        AND CAST(s.DateCreation AS DATE) = CAST(GETDATE() AS DATE)
-                    WHERE h.Statut IN ('EN_COURS', 'EN_PAUSE')
-                    AND CAST(h.DateCreation AS DATE) = CAST(GETDATE() AS DATE)
-                    AND h.OperatorCode IS NOT NULL
-                    AND h.OperatorCode != ''
-                    AND h.OperatorCode != '0'
-                ) all_operators
-                LEFT JOIN [SEDI_APP_INDEPENDANTE].[dbo].[ABSESSIONS_OPERATEURS] s ON all_operators.OperatorCode = s.OperatorCode AND s.SessionStatus = 'ACTIVE'
-                LEFT JOIN [SEDI_APP_INDEPENDANTE].[dbo].[ABHISTORIQUE_OPERATEURS] h ON all_operators.OperatorCode = h.OperatorCode 
-                    AND h.Statut IN ('EN_COURS', 'EN_PAUSE')
-                    AND CAST(h.DateCreation AS DATE) = CAST(GETDATE() AS DATE)
-                LEFT JOIN [SEDI_ERP].[dbo].[RESSOURC] r ON all_operators.OperatorCode = r.Coderessource
-                ORDER BY OperatorCode
-            `;
+        // IMPORTANT:
+        // On considère "connecté" un opérateur qui a une session ACTIVE OU qui a un lancement EN_COURS/EN_PAUSE aujourd'hui
+        // (certaines installations ont des opérations en cours sans ligne de session).
+        const operatorsQuery = `
+            WITH all_operators AS (
+                -- Sessions actives du jour
+                SELECT DISTINCT s.OperatorCode
+                FROM [SEDI_APP_INDEPENDANTE].[dbo].[ABSESSIONS_OPERATEURS] s
+                WHERE s.SessionStatus = 'ACTIVE'
+                  AND CAST(s.DateCreation AS DATE) = CAST(GETDATE() AS DATE)
+
+                UNION
+
+                -- Opérateurs en opération aujourd'hui (même sans session)
+                SELECT DISTINCT h.OperatorCode
+                FROM [SEDI_APP_INDEPENDANTE].[dbo].[ABHISTORIQUE_OPERATEURS] h
+                WHERE h.Statut IN ('EN_COURS', 'EN_PAUSE')
+                  AND CAST(h.DateCreation AS DATE) = CAST(GETDATE() AS DATE)
+                  AND h.OperatorCode IS NOT NULL
+                  AND h.OperatorCode != ''
+                  AND h.OperatorCode != '0'
+            )
+            SELECT
+                ao.OperatorCode as OperatorCode,
+                COALESCE(r.Designation1, 'Opérateur ' + CAST(ao.OperatorCode AS VARCHAR)) as NomOperateur,
+                s.LoginTime,
+                COALESCE(s.SessionStatus, 'ACTIVE') as SessionStatus,
+                CASE 
+                    WHEN hLast.OperatorCode IS NOT NULL THEN 'EN_OPERATION'
+                    WHEN s.OperatorCode IS NOT NULL THEN 'CONNECTE'
+                    ELSE 'INACTIVE'
+                END as ActivityStatus,
+                COALESCE(s.LoginTime, hLast.DateCreation) as LastActivityTime,
+                r.Coderessource as RessourceCode,
+                s.DeviceInfo,
+                CASE 
+                    WHEN hLast.OperatorCode IS NOT NULL THEN 'EN_OPERATION'
+                    WHEN s.OperatorCode IS NOT NULL THEN 'CONNECTE'
+                    ELSE 'INACTIVE'
+                END as CurrentStatus
+            FROM all_operators ao
+            LEFT JOIN [SEDI_APP_INDEPENDANTE].[dbo].[ABSESSIONS_OPERATEURS] s
+                ON ao.OperatorCode = s.OperatorCode
+               AND s.SessionStatus = 'ACTIVE'
+               AND CAST(s.DateCreation AS DATE) = CAST(GETDATE() AS DATE)
+            OUTER APPLY (
+                SELECT TOP 1 h.OperatorCode, h.DateCreation
+                FROM [SEDI_APP_INDEPENDANTE].[dbo].[ABHISTORIQUE_OPERATEURS] h
+                WHERE h.OperatorCode = ao.OperatorCode
+                  AND h.Statut IN ('EN_COURS', 'EN_PAUSE')
+                  AND CAST(h.DateCreation AS DATE) = CAST(GETDATE() AS DATE)
+                ORDER BY h.DateCreation DESC, h.NoEnreg DESC
+            ) hLast
+            LEFT JOIN [SEDI_ERP].[dbo].[RESSOURC] r ON ao.OperatorCode = r.Coderessource
+            ORDER BY ao.OperatorCode
+        `;
 
         const operators = await executeQuery(operatorsQuery);
         

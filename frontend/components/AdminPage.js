@@ -351,10 +351,10 @@ class AdminPage {
                 );
             }
             
-            // Fusionner les opérations : monitoring en priorité (consolidées), puis admin (non consolidées)
-            // IMPORTANT: Ne PAS éviter les doublons - une opération peut être à la fois consolidée ET non consolidée
-            // On garde les deux pour permettre l'édition dans les deux cas
-            const mergedOps = [];
+            // Fusionner les opérations SANS doublons:
+            // - Si une opération est consolidée (TempsId), elle remplace la version "non consolidée"
+            // - Une seule ligne par (OperatorCode, LancementCode) pour éviter les doublons visuels
+            const mergedMap = new Map();
             
             // Vérifier si l'utilisateur veut voir les opérations transmises
             const statusFilter = document.getElementById('statusFilter');
@@ -367,18 +367,33 @@ class AdminPage {
                 if (!showTransmitted && op.StatutTraitement === 'T') {
                     return; // Skip cette opération
                 }
-                mergedOps.push(op);
+                const key = `${op.OperatorCode}_${op.LancementCode}`;
+                const existing = mergedMap.get(key);
+                if (!existing) {
+                    mergedMap.set(key, op);
+                    return;
+                }
+                // Si déjà présent, garder celui avec TempsId le plus récent
+                const existingTempsId = existing.TempsId ? parseInt(existing.TempsId, 10) : 0;
+                const currentTempsId = op.TempsId ? parseInt(op.TempsId, 10) : 0;
+                if (currentTempsId >= existingTempsId) {
+                    mergedMap.set(key, op);
+                }
             });
             
             // Ensuite ajouter les opérations admin (non consolidées)
-            // On les ajoute même si une version consolidée existe déjà
-            // Car l'utilisateur doit pouvoir éditer les deux
-            // Note: Les opérations non consolidées n'ont pas de StatutTraitement, donc elles ne sont jamais transmises
             filteredAdminOps.forEach(op => {
-                mergedOps.push(op);
+                const key = `${op.OperatorCode}_${op.LancementCode}`;
+                const existing = mergedMap.get(key);
+                // Si on a déjà une version consolidée, on ignore la non consolidée (évite doublon)
+                if (existing && existing.TempsId) {
+                    return;
+                }
+                // Sinon on garde la non consolidée (une seule ligne)
+                mergedMap.set(key, op);
             });
             
-            this.operations = mergedOps;
+            this.operations = Array.from(mergedMap.values());
             
             // Réinitialiser le compteur d'erreurs en cas de succès
             this.consecutiveErrors = 0;
@@ -800,16 +815,27 @@ class AdminPage {
         const activeIndicator = document.getElementById('activeOperatorsIndicator');
         if (activeIndicator) {
             if (activeOperators.length > 0) {
+                // Afficher les noms (max 3) + compteur
+                const names = activeOperators
+                    .slice(0, 3)
+                    .map(op => `${op.name || op.code} (${op.code})`)
+                    .join(', ');
+                const more = activeOperators.length > 3 ? ` +${activeOperators.length - 3}` : '';
                 activeIndicator.innerHTML = `
                     <span class="badge badge-success">
-                        ${activeOperators.length} opérateur(s) en opération
+                         🟢 ${names}${more}
                     </span>
                 `;
             } else if (operators.length > 0) {
                 // Des opérateurs sont connectés mais aucun n'est actif
+                const names = operators
+                    .slice(0, 3)
+                    .map(op => `${op.name || op.code} (${op.code})`)
+                    .join(', ');
+                const more = operators.length > 3 ? ` +${operators.length - 3}` : '';
                 activeIndicator.innerHTML = `
                     <span class="badge badge-secondary">
-                        ${operators.length} opérateur(s) connecté(s), aucun en opération
+                         🟢 Connecté(s): ${names}${more}
                     </span>
                 `;
             } else {
