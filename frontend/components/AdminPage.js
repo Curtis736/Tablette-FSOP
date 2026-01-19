@@ -137,17 +137,17 @@ class AdminPage {
                     });
                 }
                 
-                // Bouton Transfert
-                const transferBtn = document.getElementById('transferBtn');
-                if (transferBtn) {
-                    transferBtn.addEventListener('click', () => this.handleTransfer());
-                }
-                
-                // Bouton Ajouter une ligne
-                const addOperationBtn = document.getElementById('addOperationBtn');
-                if (addOperationBtn) {
-                    addOperationBtn.addEventListener('click', () => this.handleAddOperation());
-                }
+                   // Bouton Transfert
+                   const transferBtn = document.getElementById('transferBtn');
+                   if (transferBtn) {
+                       transferBtn.addEventListener('click', () => this.handleTransfer());
+                   }
+                   
+                   // Bouton Ajouter une ligne
+                   const addOperationBtn = document.getElementById('addOperationBtn');
+                   if (addOperationBtn) {
+                       addOperationBtn.addEventListener('click', () => this.handleAddOperation());
+                   }
                 
                 // Tableau des opérations
                 const tableBody = document.getElementById('operationsTableBody');
@@ -421,23 +421,23 @@ class AdminPage {
                 }
             } else {
                 // Pour les autres erreurs, incrémenter normalement
-                this.consecutiveErrors++;
-                
-                // Afficher un message d'erreur plus informatif
-                let errorMessage = 'Erreur de connexion au serveur';
-                if (error.message.includes('Timeout')) {
-                    errorMessage = 'Le serveur met trop de temps à répondre. Vérifiez votre connexion.';
-                } else if (error.message.includes('HTTP')) {
-                    errorMessage = `Erreur serveur: ${error.message}`;
-                } else if (error.message.includes('fetch')) {
-                    errorMessage = 'Impossible de contacter le serveur';
-                }
-                
-                // Ne pas spammer les notifications si trop d'erreurs
-                if (this.consecutiveErrors <= 2) {
-                    this.notificationManager.error(errorMessage);
-                } else if (this.consecutiveErrors === this.maxConsecutiveErrors) {
-                    this.notificationManager.warning('Chargement automatique désactivé après plusieurs erreurs. Cliquez sur "Actualiser" pour réessayer.');
+            this.consecutiveErrors++;
+            
+            // Afficher un message d'erreur plus informatif
+            let errorMessage = 'Erreur de connexion au serveur';
+            if (error.message.includes('Timeout')) {
+                errorMessage = 'Le serveur met trop de temps à répondre. Vérifiez votre connexion.';
+            } else if (error.message.includes('HTTP')) {
+                errorMessage = `Erreur serveur: ${error.message}`;
+            } else if (error.message.includes('fetch')) {
+                errorMessage = 'Impossible de contacter le serveur';
+            }
+            
+            // Ne pas spammer les notifications si trop d'erreurs
+            if (this.consecutiveErrors <= 2) {
+                this.notificationManager.error(errorMessage);
+            } else if (this.consecutiveErrors === this.maxConsecutiveErrors) {
+                this.notificationManager.warning('Chargement automatique désactivé après plusieurs erreurs. Cliquez sur "Actualiser" pour réessayer.');
                 }
             }
             
@@ -948,8 +948,8 @@ class AdminPage {
             // Sinon, utiliser le statut de traitement/consolidation
             else {
                 statutCode = (operation.StatutTraitement === null || operation.StatutTraitement === undefined)
-                    ? 'NULL'
-                    : String(operation.StatutTraitement).toUpperCase();
+                ? 'NULL'
+                : String(operation.StatutTraitement).toUpperCase();
                 statutLabel = this.getMonitoringStatusText(statutCode);
             }
             
@@ -961,7 +961,6 @@ class AdminPage {
                 <td>${formattedEndTime}${timeWarning}</td>
                 <td>
                     <span class="status-badge status-${statutCode}">${statutLabel}</span>
-                    ${isUnconsolidated ? '<span class="badge badge-warning" style="margin-left: 5px; font-size: 0.8em;">Non consolidé</span>' : ''}
                 </td>
                 <td class="actions-cell">
                     <button class="btn-edit"
@@ -1030,74 +1029,9 @@ class AdminPage {
             
             console.log(`📊 Total opérations dans le tableau: ${allRecordsData.length}`);
             
-            // Séparer les opérations terminées en deux groupes : consolidées et non consolidées
+            // Filtrer uniquement les opérations TERMINÉES qui ne sont pas déjà transférées
             const terminatedOps = allRecordsData.filter(op => this.isOperationTerminated(op) && op.StatutTraitement !== 'T');
-            const unconsolidatedOps = terminatedOps.filter(op => op._isUnconsolidated);
-            const consolidatedOps = terminatedOps.filter(op => !op._isUnconsolidated && op.TempsId);
-            
-            console.log(`📊 Opérations terminées: ${terminatedOps.length} (${unconsolidatedOps.length} non consolidées, ${consolidatedOps.length} consolidées)`);
-            
-            // Si des opérations non consolidées existent, les consolider automatiquement
-            if (unconsolidatedOps.length > 0) {
-                // Vérifier si on est déjà en train de consolider (éviter la boucle infinie)
-                if (this._isConsolidating) {
-                    console.warn('⚠️ Consolidation déjà en cours, évitement de la boucle infinie');
-                    this.notificationManager.warning('Consolidation déjà en cours, veuillez patienter...');
-                    return;
-                }
-                
-                this._isConsolidating = true;
-                
-                try {
-                    this.notificationManager.info(`Consolidation de ${unconsolidatedOps.length} opération(s) terminée(s)...`);
-                    
-                    const operationsToConsolidate = unconsolidatedOps.map(op => ({
-                        OperatorCode: op.OperatorCode,
-                        LancementCode: op.LancementCode
-                    }));
-                    
-                    const consolidateResult = await this.apiService.consolidateMonitoringBatch(operationsToConsolidate);
-                    
-                    if (consolidateResult?.success) {
-                        const consolidated = consolidateResult.results?.success || [];
-                        const skipped = consolidateResult.results?.skipped || [];
-                        const errors = consolidateResult.results?.errors || [];
-                        
-                        console.log(`✅ Consolidation: ${consolidated.length} réussie(s), ${skipped.length} ignorée(s), ${errors.length} erreur(s)`);
-                        
-                        if (consolidated.length > 0) {
-                            this.notificationManager.success(`${consolidated.length} opération(s) consolidée(s) avec succès`);
-                        }
-                        if (errors.length > 0) {
-                            this.notificationManager.warning(`${errors.length} opération(s) n'ont pas pu être consolidée(s)`);
-                        }
-                        
-                        // Recharger les données pour obtenir les nouveaux TempsId
-                        await this.loadData();
-                        
-                        // Relancer la fonction UNIQUEMENT si au moins une opération a été consolidée avec succès
-                        // Cela évite la boucle infinie si toutes les opérations échouent
-                        if (consolidated.length > 0) {
-                            this._isConsolidating = false; // Réinitialiser avant l'appel récursif
-                            return this.handleTransfer();
-                        } else {
-                            // Aucune opération consolidée, arrêter ici pour éviter la boucle
-                            console.warn('⚠️ Aucune opération consolidée, arrêt de la consolidation automatique');
-                            this.notificationManager.warning('Aucune opération n\'a pu être consolidée. Vérifiez les erreurs ci-dessus.');
-                        }
-                    } else {
-                        this.notificationManager.error(consolidateResult?.error || 'Erreur lors de la consolidation');
-                    }
-                } finally {
-                    this._isConsolidating = false;
-                }
-                
-                // Si on arrive ici, on ne relance pas handleTransfer() pour éviter la boucle
-                return;
-            }
-            
-            // Filtrer uniquement les opérations TERMINÉES consolidées qui ne sont pas déjà transférées
-            const terminatedRecords = consolidatedOps;
+            const terminatedRecords = terminatedOps;
 
             console.log(`✅ Opérations éligibles au transfert: ${terminatedRecords.length} sur ${allRecordsData.length}`);
 
@@ -1108,7 +1042,7 @@ class AdminPage {
                 this.notificationManager.warning(`Aucune opération TERMINÉE à transférer (${terminated} terminées, ${alreadyTransferred} déjà transférées, ${withoutTempsId} sans TempsId)`);
                 return;
             }
-            
+
             // Proposer de transférer tous ou sélectionner des lancements
             const message = `Transférer ${terminatedRecords.length} opération(s) TERMINÉE(S) ?\n\nOK = tout transférer\nAnnuler = choisir les lancements`;
             const transferAll = confirm(message);

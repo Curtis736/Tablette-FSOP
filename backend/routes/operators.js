@@ -976,24 +976,6 @@ router.post('/stop', async (req, res) => {
         
         console.log(`✅ Lancement ${lancementCode} terminé par opérateur ${operatorId}`);
         
-        // Consolidation automatique après l'événement FIN
-        try {
-            const ConsolidationService = require('../services/ConsolidationService');
-            const consolidationResult = await ConsolidationService.consolidateOperation(operatorId, lancementCode, { autoFix: true });
-            
-            if (consolidationResult.success) {
-                console.log(`✅ Consolidation automatique réussie: TempsId=${consolidationResult.tempsId}`);
-            } else {
-                // Ne pas bloquer le FIN si la consolidation échoue, mais logger l'erreur
-                console.error(`⚠️ Consolidation automatique échouée (sera réessayée plus tard): ${consolidationResult.error}`);
-                // L'opération peut être consolidée manuellement plus tard par l'admin
-            }
-        } catch (consolidationError) {
-            // Ne pas bloquer le FIN si la consolidation échoue, mais logger l'erreur
-            console.error(`⚠️ Erreur lors de la consolidation automatique (sera réessayée plus tard):`, consolidationError);
-            // L'opération peut être consolidée manuellement plus tard par l'admin
-        }
-        
         res.json({
             success: true,
             message: 'Lancement terminé avec succès',
