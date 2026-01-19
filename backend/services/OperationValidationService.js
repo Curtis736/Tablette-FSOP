@@ -203,12 +203,19 @@ class OperationValidationService {
                 };
             }
             
+            // Si pas d'événement FIN mais que l'opération est marquée comme terminée (Statut = 'TERMINE'),
+            // on peut quand même consolider (l'événement FIN sera créé automatiquement si nécessaire)
             if (!finEvent) {
-                return {
-                    valid: false,
-                    errors: ['Événement FIN manquant - l\'opération n\'est pas terminée'],
-                    events
-                };
+                const hasTerminatedStatus = events.some(e => e.Statut && e.Statut.toUpperCase().includes('TERMIN'));
+                if (!hasTerminatedStatus) {
+                    return {
+                        valid: false,
+                        errors: ['Événement FIN manquant et aucun statut TERMINE trouvé'],
+                        events
+                    };
+                }
+                // Si on a un statut TERMINE, on peut continuer (l'auto-correction créera le FIN si nécessaire)
+                console.log(`⚠️ Pas d'événement FIN mais statut TERMINE trouvé, consolidation possible avec auto-correction`);
             }
             
             // Valider la cohérence des événements

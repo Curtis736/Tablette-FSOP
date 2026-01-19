@@ -380,10 +380,8 @@ class AdminPage {
                 this.lastOperatorsUpdate = Date.now(); // Mettre à jour le timestamp
             }
             
-            // Mettre à jour l'affichage des opérateurs connectés
-            if (connectedOps.length > 0) {
-                this.updateActiveOperatorsDisplay(connectedOps);
-            }
+            // Mettre à jour l'affichage des opérateurs connectés (toujours, même si vide)
+            this.updateActiveOperatorsDisplay(connectedOps);
             
             this.updateStats();
             this.updateOperationsTable();
@@ -444,6 +442,9 @@ class AdminPage {
                 this.notificationManager.warning('Chargement automatique désactivé après plusieurs erreurs. Cliquez sur "Actualiser" pour réessayer.');
                 }
             }
+            
+            // Mettre à jour l'indicateur des opérateurs même en cas d'erreur
+            this.updateActiveOperatorsDisplay([]);
             
             // Afficher les données en cache si disponibles
             if (this.operations.length > 0) {
@@ -749,14 +750,14 @@ class AdminPage {
             if (connectedOps.length > 0 || allOps.length > 0) {
                 this.updateOperatorSelect(connectedOps, allOps);
                 this.lastOperatorsUpdate = Date.now(); // Mettre à jour le timestamp
-                
-                // Mettre à jour l'affichage des opérateurs actifs
-                if (connectedOps.length > 0) {
-                    this.updateActiveOperatorsDisplay(connectedOps);
-                }
             }
+            
+            // Mettre à jour l'affichage des opérateurs actifs (toujours, même si vide)
+            this.updateActiveOperatorsDisplay(connectedOps);
         } catch (error) {
             console.error('Erreur lors de la mise à jour du statut des opérateurs:', error);
+            // Mettre à jour l'indicateur avec un état d'erreur
+            this.updateActiveOperatorsDisplay([]);
             // En cas d'erreur 429, attendre plus longtemps avant la prochaine tentative
             if (error.message && error.message.includes('Trop de requêtes')) {
                 this.lastOperatorsUpdate = Date.now() - 5000; // Forcer une attente de 15 secondes minimum
@@ -766,17 +767,33 @@ class AdminPage {
     }
 
     // Afficher les opérateurs actifs
-    updateActiveOperatorsDisplay(operators) {
+    updateActiveOperatorsDisplay(operators = []) {
         const activeOperators = operators.filter(op => op.isActive);
         
         // Mettre à jour un indicateur visuel des opérateurs actifs
         const activeIndicator = document.getElementById('activeOperatorsIndicator');
         if (activeIndicator) {
-            activeIndicator.innerHTML = `
-                <span class="badge badge-success">
-                    ${activeOperators.length} opérateur(s) en opération
-                </span>
-            `;
+            if (activeOperators.length > 0) {
+                activeIndicator.innerHTML = `
+                    <span class="badge badge-success">
+                        ${activeOperators.length} opérateur(s) en opération
+                    </span>
+                `;
+            } else if (operators.length > 0) {
+                // Des opérateurs sont connectés mais aucun n'est actif
+                activeIndicator.innerHTML = `
+                    <span class="badge badge-secondary">
+                        ${operators.length} opérateur(s) connecté(s), aucun en opération
+                    </span>
+                `;
+            } else {
+                // Aucun opérateur connecté
+                activeIndicator.innerHTML = `
+                    <span class="badge badge-secondary">
+                        Aucun opérateur connecté
+                    </span>
+                `;
+            }
         }
         
         // Log pour debug
@@ -1168,7 +1185,15 @@ class AdminPage {
                             `Vérifiez que les opérations ont bien des événements DEBUT et FIN dans ABHISTORIQUE_OPERATEURS.`;
                         
                         console.error('❌ Erreurs de consolidation:', errors);
-                        this.notificationManager.error(errorMessage, 10000); // Afficher 10 secondes
+                        
+                        // Utiliser alert() pour afficher le message complet
+                        alert(errorMessage);
+                        
+                        // Aussi afficher une notification courte
+                        this.notificationManager.warning(
+                            `${errors.length} opération(s) n'ont pas pu être consolidée(s). Voir l'alerte pour les détails.`,
+                            8000
+                        );
                     }
 
                     // Recharger une seule fois les données pour récupérer les nouveaux TempsId
@@ -1188,7 +1213,9 @@ class AdminPage {
             if (terminatedWithTempsId.length === 0) {
                 // Afficher les détails des opérations qui ont échoué
                 const failedOps = terminatedOps.filter(op => !op.TempsId);
-                let errorDetails = 'Aucune opération terminée n’a un TempsId valide après consolidation.\n\n';
+                
+                // Construire un message détaillé pour alert() (qui gère mieux les multi-lignes)
+                let errorDetails = 'Aucune opération terminée n\'a un TempsId valide après consolidation.\n\n';
                 
                 if (failedOps.length > 0) {
                     errorDetails += `Opérations en échec (${failedOps.length}):\n`;
@@ -1210,11 +1237,20 @@ class AdminPage {
                         OperatorCode: op.OperatorCode,
                         LancementCode: op.LancementCode,
                         Status: op.Status,
-                        StatusCode: op.StatusCode
+                        StatusCode: op.StatusCode,
+                        TempsId: op.TempsId,
+                        EventId: op.EventId
                     }))
                 });
                 
-                this.notificationManager.error(errorDetails, 15000); // Afficher 15 secondes
+                // Utiliser alert() pour afficher le message complet (meilleur pour les multi-lignes)
+                alert(errorDetails);
+                
+                // Aussi afficher une notification courte
+                this.notificationManager.error(
+                    `${failedOps.length} opération(s) n'ont pas pu être consolidée(s). Voir la console pour les détails.`,
+                    10000
+                );
                 return;
             }
 
