@@ -129,8 +129,50 @@ class ConsolidationService {
             const codeRubrique = debutEvent.CodeRubrique || finEvent.CodeRubrique || operatorCode;
             
             // 7. Préparer les valeurs pour l'insertion
-            const startTime = debutEvent.DateCreation;
-            const endTime = finEvent.DateCreation;
+            // IMPORTANT: DateCreation est souvent une DATE (00:00:00) => utiliser CreatedAt ou HeureDebut/HeureFin
+            const extractTime = (timeValue) => {
+                if (!timeValue) return null;
+                if (typeof timeValue === 'string') {
+                    const match = timeValue.trim().match(/^(\d{1,2}):(\d{2})(?::(\d{2}))?$/);
+                    if (match) {
+                        return { hour: parseInt(match[1], 10), minute: parseInt(match[2], 10) };
+                    }
+                }
+                if (timeValue instanceof Date) {
+                    return { hour: timeValue.getHours(), minute: timeValue.getMinutes() };
+                }
+                if (typeof timeValue === 'object' && timeValue.hour !== undefined && timeValue.minute !== undefined) {
+                    return { hour: parseInt(timeValue.hour, 10), minute: parseInt(timeValue.minute, 10) };
+                }
+                return null;
+            };
+
+            const buildDateTime = (event, kind /* 'start' | 'end' */) => {
+                // 1) Prefer CreatedAt if present (full datetime)
+                const createdAt = event.CreatedAt || event.createdAt;
+                if (createdAt) {
+                    const d = new Date(createdAt);
+                    if (!isNaN(d.getTime())) return d;
+                }
+
+                // 2) Use DateCreation as date + HeureDebut/HeureFin as time
+                const base = new Date(event.DateCreation || event.dateCreation);
+                if (!isNaN(base.getTime())) {
+                    const t = extractTime(kind === 'start' ? event.HeureDebut : event.HeureFin);
+                    if (t) {
+                        base.setHours(t.hour, t.minute, 0, 0);
+                        return base;
+                    }
+                    // If DateCreation already contains time, keep it
+                    return base;
+                }
+
+                // 3) Last resort: now
+                return new Date();
+            };
+
+            const startTime = buildDateTime(debutEvent, 'start');
+            const endTime = buildDateTime(finEvent, 'end');
             
             // 8. Vérifier à nouveau si déjà consolidé (race condition)
             if (!force) {

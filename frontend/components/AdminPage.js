@@ -11,6 +11,7 @@ class AdminPage {
         this.pagination = null;
         this.currentPage = 1;
         this.transferSelectionIds = new Set(); // sélection dans la modale de transfert (TempsId)
+        this.selectedTempsIds = new Set(); // sélection de lignes dans le tableau principal (TempsId)
         
         // Debug (désactivé par défaut pour éviter de spammer la console)
         // Activer via URL: ?debugTime=1  ou via localStorage: sedi_debug_time=1
@@ -373,7 +374,26 @@ class AdminPage {
                     mergedMap.set(key, op);
                     return;
                 }
-                // Si déjà présent, garder celui avec TempsId le plus récent
+                // Si déjà présent, garder le meilleur:
+                // - éviter les enregistrements avec heures 00:00 (souvent DateCreation sans heure)
+                // - sinon garder TempsId le plus récent
+                const toHHmm = (dt) => {
+                    const f = this.formatDateTime(dt);
+                    return (f && f !== '-') ? f : '';
+                };
+                const isMidnight = (dt) => toHHmm(dt) === '00:00';
+
+                const existingMidnight = isMidnight(existing.StartTime) && isMidnight(existing.EndTime);
+                const currentMidnight = isMidnight(op.StartTime) && isMidnight(op.EndTime);
+
+                if (existingMidnight && !currentMidnight) {
+                    mergedMap.set(key, op);
+                    return;
+                }
+                if (!existingMidnight && currentMidnight) {
+                    return;
+                }
+
                 const existingTempsId = existing.TempsId ? parseInt(existing.TempsId, 10) : 0;
                 const currentTempsId = op.TempsId ? parseInt(op.TempsId, 10) : 0;
                 if (currentTempsId >= existingTempsId) {
@@ -712,29 +732,29 @@ class AdminPage {
             optgroupConnected.label = `🟢 Opérateurs connectés (${connectedOperators.length})`;
             
             connectedOperators.forEach(operator => {
-                const option = document.createElement('option');
-                option.value = operator.code;
-                
-                // Indicateur visuel pour les opérateurs mal associés et actifs
-                let statusIcon = '';
-                if (operator.isProperlyLinked === false) {
-                    statusIcon = ' ⚠️';
-                } else if (operator.isProperlyLinked === true) {
-                    statusIcon = ' ✅';
-                }
-                
-                // Indicateur d'activité
-                if (operator.isActive) {
+            const option = document.createElement('option');
+            option.value = operator.code;
+            
+            // Indicateur visuel pour les opérateurs mal associés et actifs
+            let statusIcon = '';
+            if (operator.isProperlyLinked === false) {
+                statusIcon = ' ⚠️';
+            } else if (operator.isProperlyLinked === true) {
+                statusIcon = ' ✅';
+            }
+            
+            // Indicateur d'activité
+            if (operator.isActive) {
                     statusIcon = ' 🔴' + statusIcon;
-                    option.style.fontWeight = 'bold';
+                option.style.fontWeight = 'bold';
                     option.style.color = '#dc3545';
                 } else {
                     statusIcon = ' 🟢' + statusIcon;
-                }
-                
-                option.textContent = `${operator.name} (${operator.code})${statusIcon}`;
-                option.title = `Code: ${operator.code} | Ressource: ${operator.resourceCode || 'N/A'} | Statut: ${operator.currentStatus || 'N/A'}`;
-                
+            }
+            
+            option.textContent = `${operator.name} (${operator.code})${statusIcon}`;
+            option.title = `Code: ${operator.code} | Ressource: ${operator.resourceCode || 'N/A'} | Statut: ${operator.currentStatus || 'N/A'}`;
+            
                 optgroupConnected.appendChild(option);
             });
             
@@ -821,8 +841,8 @@ class AdminPage {
                     .map(op => `${op.name || op.code} (${op.code})`)
                     .join(', ');
                 const more = activeOperators.length > 3 ? ` +${activeOperators.length - 3}` : '';
-                activeIndicator.innerHTML = `
-                    <span class="badge badge-success">
+            activeIndicator.innerHTML = `
+                <span class="badge badge-success">
                          🟢 ${names}${more}
                     </span>
                 `;
@@ -843,8 +863,8 @@ class AdminPage {
                 activeIndicator.innerHTML = `
                     <span class="badge badge-secondary">
                         Aucun opérateur connecté
-                    </span>
-                `;
+                </span>
+            `;
             }
         }
         
@@ -864,10 +884,14 @@ class AdminPage {
         console.log('🔄 Changement d\'opérateur sélectionné:', selectedOperator);
 
         // En mode Monitoring, le filtre opérateur est appliqué via loadMonitoringRecords()
+        if (this.selectedTempsIds && typeof this.selectedTempsIds.clear === 'function') {
         this.selectedTempsIds.clear();
+        } else {
+            this.selectedTempsIds = new Set();
+        }
         const selectAll = document.getElementById('selectAllRows');
         if (selectAll) selectAll.checked = false;
-        this.loadData();
+        await this.loadData();
     }
 
     async handleAddOperation() {
@@ -1448,14 +1472,14 @@ class AdminPage {
         }
         
         try {
-            const triggerEdiJob = confirm('Déclencher EDI_JOB après transfert ?');
-            const result = await this.apiService.validateAndTransmitMonitoringBatch(ids, { triggerEdiJob });
-            if (result?.success) {
+        const triggerEdiJob = confirm('Déclencher EDI_JOB après transfert ?');
+        const result = await this.apiService.validateAndTransmitMonitoringBatch(ids, { triggerEdiJob });
+        if (result?.success) {
                 this.notificationManager.success(`Transfert terminé: ${result.count || ids.length} opération(s) transférée(s)`);
-                this.hideTransferModal();
+            this.hideTransferModal();
                 await this.loadData(false); // Désactiver autoConsolidate après transfert
-            } else {
-                this.notificationManager.error(result?.error || 'Erreur transfert');
+        } else {
+            this.notificationManager.error(result?.error || 'Erreur transfert');
             }
         } catch (error) {
             console.error('❌ Erreur lors du transfert depuis la modale:', error);
@@ -2309,7 +2333,7 @@ class AdminPage {
         const operationId = row.dataset.id || row.dataset.tempsId || row.dataset.eventId;
         this.validateTimeInputs(row, operationId);
     }
-    
+
     validateTimeInputs(row, operationId) {
         const startTimeInput = row.querySelector('input[data-field="startTime"]');
         const endTimeInput = row.querySelector('input[data-field="endTime"]');
