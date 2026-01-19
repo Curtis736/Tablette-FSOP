@@ -12,6 +12,10 @@ class AdminPage {
         this.currentPage = 1;
         this.transferSelectionIds = new Set(); // sélection dans la modale de transfert (TempsId)
         
+        // Flags pour éviter les appels simultanés
+        this._isTransferring = false;
+        this._isConsolidating = false;
+        
         // Système de sauvegarde automatique
         this.autoSaveEnabled = true;
         this.autoSaveInterval = 30000; // 30 secondes
@@ -1339,6 +1343,12 @@ class AdminPage {
         const modal = document.getElementById('transferSelectionModal');
         if (modal) modal.style.display = 'none';
         this.transferSelectionIds.clear();
+        // Réinitialiser le flag de transfert si la modale est fermée sans transférer
+        // (le flag sera réinitialisé dans le finally de handleTransfer si le transfert a été fait)
+        if (this._isTransferring) {
+            console.log('⚠️ Modale fermée sans transfert, réinitialisation du flag');
+            this._isTransferring = false;
+        }
     }
 
     toggleTransferSelectAll(checked) {
@@ -1359,14 +1369,20 @@ class AdminPage {
             this.notificationManager.warning('Aucune ligne sélectionnée');
             return;
         }
-        const triggerEdiJob = confirm('Déclencher EDI_JOB après transfert ?');
-        const result = await this.apiService.validateAndTransmitMonitoringBatch(ids, { triggerEdiJob });
-        if (result?.success) {
-            this.notificationManager.success('Transfert terminé');
-            this.hideTransferModal();
-            await this.loadData();
-        } else {
-            this.notificationManager.error(result?.error || 'Erreur transfert');
+        
+        try {
+            const triggerEdiJob = confirm('Déclencher EDI_JOB après transfert ?');
+            const result = await this.apiService.validateAndTransmitMonitoringBatch(ids, { triggerEdiJob });
+            if (result?.success) {
+                this.notificationManager.success(`Transfert terminé: ${result.count || ids.length} opération(s) transférée(s)`);
+                this.hideTransferModal();
+                await this.loadData(false); // Désactiver autoConsolidate après transfert
+            } else {
+                this.notificationManager.error(result?.error || 'Erreur transfert');
+            }
+        } catch (error) {
+            console.error('❌ Erreur lors du transfert depuis la modale:', error);
+            this.notificationManager.error('Erreur de connexion lors du transfert');
         }
     }
 
