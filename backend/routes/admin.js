@@ -1347,19 +1347,22 @@ router.delete('/operations/:id', async (req, res) => {
             });
         }
         
-        const { CodeLanctImprod, CodeRubrique } = lancementInfo[0];
+        const { CodeLanctImprod, CodeRubrique, OperatorCode } = lancementInfo[0];
         
-        console.log(`🗑️ Suppression de tous les événements pour ${CodeLanctImprod} (${CodeRubrique})`);
+        // Utiliser OperatorCode si disponible, sinon CodeRubrique (pour compatibilité)
+        const operatorCodeToUse = OperatorCode || CodeRubrique;
         
-        // Supprimer TOUS les événements de ce lancement
+        console.log(`🗑️ Suppression de tous les événements pour ${CodeLanctImprod} (opérateur: ${operatorCodeToUse})`);
+        
+        // Supprimer TOUS les événements de ce lancement pour cet opérateur
         const deleteAllQuery = `
             DELETE FROM [SEDI_APP_INDEPENDANTE].[dbo].[ABHISTORIQUE_OPERATEURS]
-            WHERE CodeLanctImprod = @lancementCode AND CodeRubrique = @operatorCode
+            WHERE CodeLanctImprod = @lancementCode AND OperatorCode = @operatorCode
         `;
         
         await executeQuery(deleteAllQuery, { 
             lancementCode: CodeLanctImprod, 
-            operatorCode: CodeRubrique 
+            operatorCode: operatorCodeToUse 
         });
         
         console.log(`✅ Tous les événements du lancement ${CodeLanctImprod} supprimés avec succès`);
