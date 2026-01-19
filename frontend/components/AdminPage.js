@@ -353,9 +353,52 @@ class AdminPage {
             }
             
             // Fusionner les opérations SANS doublons:
-            // - Si une opération est consolidée (TempsId), elle remplace la version "non consolidée"
-            // - Une seule ligne par (OperatorCode, LancementCode) pour éviter les doublons visuels
+            // - Une seule ligne par (OperatorCode, LancementCode)
+            // - On garde automatiquement la "meilleure" version (heures non 00:00, consolidée, etc.)
             const mergedMap = new Map();
+
+            const normalizeKey = (op) => {
+                const operator = (op?.OperatorCode ?? op?.operatorId ?? op?.OperatorId ?? '').toString().trim();
+                const lancement = (op?.LancementCode ?? op?.lancementCode ?? op?.lancementCode ?? '').toString().trim().toUpperCase();
+                return `${operator}_${lancement}`;
+            };
+
+            const toHHmm = (dt) => {
+                const f = this.formatDateTime(dt);
+                return (f && f !== '-') ? f : '';
+            };
+
+            const isMidnight = (dt) => toHHmm(dt) === '00:00';
+
+            const scoreOp = (op) => {
+                // Score plus élevé = on garde cet enregistrement
+                let score = 0;
+                if (op?.TempsId) score += 100; // consolidé
+                if (op?._isUnconsolidated) score -= 1;
+
+                const st = op?.StartTime ?? op?.startTime;
+                const et = op?.EndTime ?? op?.endTime;
+
+                if (st) score += isMidnight(st) ? -20 : 10;
+                if (et) score += isMidnight(et) ? -20 : 10;
+
+                // Bonus si opération réellement terminée
+                if (this.isOperationTerminated(op)) score += 5;
+                return score;
+            };
+
+            const chooseBest = (a, b) => {
+                const sa = scoreOp(a);
+                const sb = scoreOp(b);
+                if (sa !== sb) return sa > sb ? a : b;
+
+                // Tie-break: TempsId le plus récent si présent
+                const ta = a?.TempsId ? parseInt(a.TempsId, 10) : 0;
+                const tb = b?.TempsId ? parseInt(b.TempsId, 10) : 0;
+                if (ta !== tb) return ta > tb ? a : b;
+
+                return a; // stable
+            };
             
             // Vérifier si l'utilisateur veut voir les opérations transmises
             const statusFilter = document.getElementById('statusFilter');
@@ -368,49 +411,16 @@ class AdminPage {
                 if (!showTransmitted && op.StatutTraitement === 'T') {
                     return; // Skip cette opération
                 }
-                const key = `${op.OperatorCode}_${op.LancementCode}`;
+                const key = normalizeKey(op);
                 const existing = mergedMap.get(key);
-                if (!existing) {
-                    mergedMap.set(key, op);
-                    return;
-                }
-                // Si déjà présent, garder le meilleur:
-                // - éviter les enregistrements avec heures 00:00 (souvent DateCreation sans heure)
-                // - sinon garder TempsId le plus récent
-                const toHHmm = (dt) => {
-                    const f = this.formatDateTime(dt);
-                    return (f && f !== '-') ? f : '';
-                };
-                const isMidnight = (dt) => toHHmm(dt) === '00:00';
-
-                const existingMidnight = isMidnight(existing.StartTime) && isMidnight(existing.EndTime);
-                const currentMidnight = isMidnight(op.StartTime) && isMidnight(op.EndTime);
-
-                if (existingMidnight && !currentMidnight) {
-                    mergedMap.set(key, op);
-                    return;
-                }
-                if (!existingMidnight && currentMidnight) {
-                    return;
-                }
-
-                const existingTempsId = existing.TempsId ? parseInt(existing.TempsId, 10) : 0;
-                const currentTempsId = op.TempsId ? parseInt(op.TempsId, 10) : 0;
-                if (currentTempsId >= existingTempsId) {
-                    mergedMap.set(key, op);
-                }
+                mergedMap.set(key, existing ? chooseBest(existing, op) : op);
             });
             
             // Ensuite ajouter les opérations admin (non consolidées)
             filteredAdminOps.forEach(op => {
-                const key = `${op.OperatorCode}_${op.LancementCode}`;
+                const key = normalizeKey(op);
                 const existing = mergedMap.get(key);
-                // Si on a déjà une version consolidée, on ignore la non consolidée (évite doublon)
-                if (existing && existing.TempsId) {
-                    return;
-                }
-                // Sinon on garde la non consolidée (une seule ligne)
-                mergedMap.set(key, op);
+                mergedMap.set(key, existing ? chooseBest(existing, op) : op);
             });
             
             this.operations = Array.from(mergedMap.values());
