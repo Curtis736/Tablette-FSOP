@@ -353,6 +353,22 @@ class AdminPage {
             
             this.operations = mergedOps;
             
+            // Consolidation automatique en arrière-plan pour les opérations terminées non consolidées
+            // Cela garantit que toutes les opérations terminées peuvent être transférées
+            const terminatedUnconsolidated = mergedOps.filter(op => {
+                const isTerminated = this.isOperationTerminated(op);
+                const isUnconsolidated = op._isUnconsolidated || !op.TempsId;
+                return isTerminated && isUnconsolidated;
+            });
+            
+            if (terminatedUnconsolidated.length > 0 && !this._isAutoConsolidating) {
+                // Consolider en arrière-plan sans bloquer l'affichage
+                this._isAutoConsolidating = true;
+                this.autoConsolidateTerminatedOps(terminatedUnconsolidated).finally(() => {
+                    this._isAutoConsolidating = false;
+                });
+            }
+            
             // Réinitialiser le compteur d'erreurs en cas de succès
             this.consecutiveErrors = 0;
             
