@@ -50,23 +50,65 @@ class DurationCalculationService {
             
             // Si les heures sont disponibles, les utiliser pour un calcul plus précis
             if (debutEvent.HeureDebut && finEvent.HeureFin) {
-                const startDate = new Date(startDateTime);
-                const endDate = new Date(endDateTime);
-                
-                // Extraire les heures et minutes
-                const [startHour, startMin] = debutEvent.HeureDebut.split(':').map(Number);
-                const [endHour, endMin] = finEvent.HeureFin.split(':').map(Number);
-                
-                // Créer des dates complètes
-                startDate.setHours(startHour, startMin, 0, 0);
-                endDate.setHours(endHour, endMin, 0, 0);
-                
-                // Si l'heure de fin est antérieure à l'heure de début, ajouter un jour
-                if (endDate < startDate) {
-                    endDate.setDate(endDate.getDate() + 1);
+                try {
+                    const startDate = new Date(startDateTime);
+                    const endDate = new Date(endDateTime);
+                    
+                    // Fonction helper pour extraire l'heure d'une valeur (string, Date, etc.)
+                    const extractTime = (timeValue) => {
+                        if (!timeValue) return null;
+                        
+                        // Si c'est déjà une string au format HH:mm ou HH:mm:ss
+                        if (typeof timeValue === 'string') {
+                            const match = timeValue.match(/^(\d{1,2}):(\d{2})(?::(\d{2}))?$/);
+                            if (match) {
+                                return { hour: parseInt(match[1], 10), minute: parseInt(match[2], 10) };
+                            }
+                        }
+                        
+                        // Si c'est un objet Date
+                        if (timeValue instanceof Date) {
+                            return {
+                                hour: timeValue.getHours(),
+                                minute: timeValue.getMinutes()
+                            };
+                        }
+                        
+                        // Si c'est un objet avec des propriétés hour/minute
+                        if (typeof timeValue === 'object' && timeValue.hour !== undefined && timeValue.minute !== undefined) {
+                            return {
+                                hour: parseInt(timeValue.hour, 10),
+                                minute: parseInt(timeValue.minute, 10)
+                            };
+                        }
+                        
+                        return null;
+                    };
+                    
+                    const startTime = extractTime(debutEvent.HeureDebut);
+                    const endTime = extractTime(finEvent.HeureFin);
+                    
+                    if (startTime && endTime) {
+                        // Créer des dates complètes avec les heures extraites
+                        startDate.setHours(startTime.hour, startTime.minute, 0, 0);
+                        endDate.setHours(endTime.hour, endTime.minute, 0, 0);
+                        
+                        // Si l'heure de fin est antérieure à l'heure de début, ajouter un jour
+                        if (endDate < startDate) {
+                            endDate.setDate(endDate.getDate() + 1);
+                        }
+                        
+                        totalDuration = Math.floor((endDate - startDate) / (1000 * 60)); // en minutes
+                    } else {
+                        // Si l'extraction a échoué, fallback sur CreatedAt/DateCreation
+                        console.warn(`⚠️ Impossible d'extraire les heures de HeureDebut/HeureFin, utilisation de DateCreation`);
+                        totalDuration = Math.floor((endDateTime - startDateTime) / (1000 * 60));
+                    }
+                } catch (error) {
+                    console.error('❌ Erreur lors de l\'extraction des heures:', error);
+                    // Fallback sur CreatedAt/DateCreation en cas d'erreur
+                    totalDuration = Math.floor((endDateTime - startDateTime) / (1000 * 60));
                 }
-                
-                totalDuration = Math.floor((endDate - startDate) / (1000 * 60)); // en minutes
             } else {
                 // Fallback sur CreatedAt/DateCreation
                 totalDuration = Math.floor((endDateTime - startDateTime) / (1000 * 60));
