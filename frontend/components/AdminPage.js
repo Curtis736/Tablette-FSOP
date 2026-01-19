@@ -1669,7 +1669,7 @@ class AdminPage {
                        value="${originalEndTime || ''}" 
                        class="time-input form-control" 
                        style="width: 100%; padding: 4px;"
-                       onchange="window.adminPage.validateTimeInput(this.closest('tr'))">
+                       onchange="window.adminPage.validateTimeInput(this)">
             `;
             
             // Cellule actions (index 6) - remplacer par boutons sauvegarder/annuler
@@ -2106,6 +2106,15 @@ class AdminPage {
         return date.toISOString().slice(0, 16); // Format YYYY-MM-DDTHH:mm
     }
 
+    // Fonction wrapper pour les appels inline (onchange)
+    validateTimeInput(inputElement) {
+        const row = inputElement.closest('tr');
+        if (!row) return;
+        
+        const operationId = row.dataset.id || row.dataset.tempsId || row.dataset.eventId;
+        this.validateTimeInputs(row, operationId);
+    }
+    
     validateTimeInputs(row, operationId) {
         const startTimeInput = row.querySelector('input[data-field="startTime"]');
         const endTimeInput = row.querySelector('input[data-field="endTime"]');
