@@ -3441,6 +3441,23 @@ router.post('/monitoring/validate-and-transmit-batch', async (req, res) => {
         
         const result = await MonitoringService.validateAndTransmitBatch(tempsIds);
         
+        if (!result.success) {
+            // Si des enregistrements invalides sont retournés, les inclure dans l'erreur
+            let errorMessage = result.error || 'Erreur lors de la validation/transmission';
+            if (result.invalidIds && result.invalidIds.length > 0) {
+                const invalidDetails = result.invalidIds.map(inv => {
+                    const errors = Array.isArray(inv.errors) ? inv.errors.join(', ') : inv.errors;
+                    return `TempsId ${inv.tempsId}: ${errors}`;
+                }).join('; ');
+                errorMessage += ` - Détails: ${invalidDetails}`;
+            }
+            return res.status(400).json({
+                success: false,
+                error: errorMessage,
+                invalidIds: result.invalidIds
+            });
+        }
+        
         if (result.success) {
             // Déclencher automatiquement l'EDI_JOB après la transmission (par défaut)
             let ediJobResult = null;
