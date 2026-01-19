@@ -335,24 +335,23 @@ class AdminPage {
             }
             
             // Fusionner les opérations : monitoring en priorité (consolidées), puis admin (non consolidées)
-            // En évitant les doublons basés sur OperatorCode_LancementCode
-            const mergedOpsMap = new Map();
+            // IMPORTANT: Ne PAS éviter les doublons - une opération peut être à la fois consolidée ET non consolidée
+            // On garde les deux pour permettre l'édition dans les deux cas
+            const mergedOps = [];
             
             // D'abord ajouter les opérations de monitoring (consolidées)
             consolidatedOps.forEach(op => {
-                const key = `${op.OperatorCode}_${op.LancementCode}`;
-                mergedOpsMap.set(key, op);
+                mergedOps.push(op);
             });
             
-            // Ensuite ajouter les opérations admin qui n'existent pas déjà
+            // Ensuite ajouter les opérations admin (non consolidées)
+            // On les ajoute même si une version consolidée existe déjà
+            // Car l'utilisateur doit pouvoir éditer les deux
             filteredAdminOps.forEach(op => {
-                const key = `${op.OperatorCode}_${op.LancementCode}`;
-                if (!mergedOpsMap.has(key)) {
-                    mergedOpsMap.set(key, op);
-                }
+                mergedOps.push(op);
             });
             
-            this.operations = Array.from(mergedOpsMap.values());
+            this.operations = mergedOps;
             
             // Réinitialiser le compteur d'erreurs en cas de succès
             this.consecutiveErrors = 0;
@@ -1084,17 +1083,44 @@ class AdminPage {
                 }
             }
             
-            // Utiliser les opérations consolidées pour le transfert
-            const terminatedRecords = consolidatedOps.length > 0 ? consolidatedOps : terminatedOps;
+            // Après consolidation automatique, recharger les données pour avoir les TempsId à jour
+            if (unconsolidatedOps.length > 0 && this._isConsolidating === false) {
+                // Recharger pour obtenir les opérations maintenant consolidées
+                await this.loadData();
+                // Relancer handleTransfer avec les nouvelles données
+                return this.handleTransfer();
+            }
+            
+            // Utiliser TOUTES les opérations terminées (consolidées ou non)
+            // Si elles ne sont pas consolidées, elles seront consolidées automatiquement avant le transfert
+            const terminatedRecords = terminatedOps;
 
             console.log(`✅ Opérations éligibles au transfert: ${terminatedRecords.length} sur ${allRecordsData.length}`);
 
             if (terminatedRecords.length === 0) {
                 const alreadyTransferred = allRecordsData.filter(op => op.StatutTraitement === 'T').length;
                 const terminated = allRecordsData.filter(op => this.isOperationTerminated(op)).length;
-                const withoutTempsId = allRecordsData.filter(op => !op.TempsId).length;
-                this.notificationManager.warning(`Aucune opération TERMINÉE à transférer (${terminated} terminées, ${alreadyTransferred} déjà transférées, ${withoutTempsId} sans TempsId)`);
+                this.notificationManager.warning(`Aucune opération TERMINÉE à transférer (${terminated} terminées, ${alreadyTransferred} déjà transférées)`);
                 return;
+            }
+
+            // S'assurer que toutes les opérations ont un TempsId avant le transfert
+            // Si certaines n'en ont pas, les consolider d'abord
+            const opsWithoutTempsId = terminatedRecords.filter(op => !op.TempsId);
+            if (opsWithoutTempsId.length > 0) {
+                console.log(`🔄 Consolidation de ${opsWithoutTempsId.length} opération(s) sans TempsId avant transfert...`);
+                const operationsToConsolidate = opsWithoutTempsId.map(op => ({
+                    OperatorCode: op.OperatorCode,
+                    LancementCode: op.LancementCode
+                }));
+                
+                const consolidateResult = await this.apiService.consolidateMonitoringBatch(operationsToConsolidate);
+                if (consolidateResult?.success && consolidateResult.results?.success?.length > 0) {
+                    // Recharger les données pour obtenir les TempsId
+                    await this.loadData();
+                    // Relancer handleTransfer avec les nouvelles données
+                    return this.handleTransfer();
+                }
             }
 
             // Proposer de transférer tous ou sélectionner des lancements
@@ -1103,8 +1129,34 @@ class AdminPage {
             
             if (transferAll) {
                 // Transférer toutes les opérations terminées
+                // Récupérer les TempsId (consolidées) ou consolider d'abord (non consolidées)
+                const ids = [];
+                for (const op of terminatedRecords) {
+                    if (op.TempsId) {
+                        ids.push(op.TempsId);
+                    } else {
+                        // Consolider cette opération avant de l'ajouter
+                        try {
+                            const consolidateResult = await this.apiService.consolidateMonitoringBatch([{
+                                OperatorCode: op.OperatorCode,
+                                LancementCode: op.LancementCode
+                            }]);
+                            if (consolidateResult?.success && consolidateResult.results?.success?.length > 0) {
+                                const tempsId = consolidateResult.results.success[0].TempsId;
+                                if (tempsId) ids.push(tempsId);
+                            }
+                        } catch (error) {
+                            console.error(`❌ Erreur consolidation ${op.OperatorCode}/${op.LancementCode}:`, error);
+                        }
+                    }
+                }
+                
+                if (ids.length === 0) {
+                    this.notificationManager.error('Aucune opération n\'a pu être consolidée pour le transfert');
+                    return;
+                }
+                
                 const triggerEdiJob = confirm('Déclencher EDI_JOB après transfert ?');
-                const ids = terminatedRecords.map(r => r.TempsId).filter(Boolean);
                 const result = await this.apiService.validateAndTransmitMonitoringBatch(ids, { triggerEdiJob });
                 if (result?.success) {
                     this.notificationManager.success(`Transfert terminé: ${result.count || ids.length} opération(s) transférée(s)`);
