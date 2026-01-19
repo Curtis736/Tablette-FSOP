@@ -344,14 +344,24 @@ class AdminPage {
             // On garde les deux pour permettre l'édition dans les deux cas
             const mergedOps = [];
             
+            // Vérifier si l'utilisateur veut voir les opérations transmises
+            const statusFilter = document.getElementById('statusFilter');
+            const showTransmitted = statusFilter?.value === 'T';
+            
             // D'abord ajouter les opérations de monitoring (consolidées)
+            // Exclure par défaut les opérations transmises (StatutTraitement = 'T')
             consolidatedOps.forEach(op => {
+                // Si on ne veut pas voir les transmises et que cette opération est transmise, la sauter
+                if (!showTransmitted && op.StatutTraitement === 'T') {
+                    return; // Skip cette opération
+                }
                 mergedOps.push(op);
             });
             
             // Ensuite ajouter les opérations admin (non consolidées)
             // On les ajoute même si une version consolidée existe déjà
             // Car l'utilisateur doit pouvoir éditer les deux
+            // Note: Les opérations non consolidées n'ont pas de StatutTraitement, donc elles ne sont jamais transmises
             filteredAdminOps.forEach(op => {
                 mergedOps.push(op);
             });
