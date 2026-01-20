@@ -504,12 +504,11 @@ function processLancementEventsWithPauses(events) {
             let endTime = null;
             
             if (finEvent) {
-<<<<<<< HEAD
                 // IMPORTANT:
                 // - DateCreation est souvent un champ DATE (sans heure) => si on le convertit en Date, on obtient une "heure" artificielle (01:00/02:00),
-                // Utiliser HeureFin si disponible (déjà converti en VARCHAR(5) par SQL)
-                // Sinon utiliser CreatedAt (DATETIME2) plutôt que DateCreation (DATE) pour éviter les problèmes de timezone
-                // CreatedAt contient la vraie datetime, et colle à ce que voit l'utilisateur sur son poste
+                // - Utiliser HeureFin si disponible (déjà converti en VARCHAR(5) par SQL)
+                // - Sinon utiliser CreatedAt (DATETIME2) plutôt que DateCreation (DATE) pour éviter les problèmes de timezone
+                // - CreatedAt contient la vraie datetime, et colle à ce que voit l'utilisateur sur son poste
                 endTime = finEvent.HeureFin ? formatDateTime(finEvent.HeureFin) : formatDateTime(finEvent.CreatedAt || finEvent.DateCreation);
             }
             
