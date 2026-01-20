@@ -142,6 +142,16 @@ class FsopForm {
                            initialData.placeholders?.[field.placeholder] || 
                            initialData.placeholders?.[fieldKey] || 
                            initialData.launchNumber || '';
+                } else if (field.key === 'REFERENCE_SILOG' || field.key === 'NUMERO_SERIE' || 
+                           (field.label && (field.label.includes('S/N') || field.label.includes('Série') || field.label.includes('SN')))) {
+                    // For Référence SILOG or S/N fields, use serial number instead of LT
+                    value = this.formData.placeholders['{{SN}}'] || 
+                           this.formData.placeholders[field.placeholder] || 
+                           this.formData.placeholders[fieldKey] || 
+                           initialData.placeholders?.['{{SN}}'] ||
+                           initialData.placeholders?.[field.placeholder] || 
+                           initialData.placeholders?.[fieldKey] ||
+                           initialData.serialNumber || '';
                 } else {
                     value = this.formData.placeholders[field.placeholder] || 
                            this.formData.placeholders[fieldKey] || 

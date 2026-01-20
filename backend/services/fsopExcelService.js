@@ -135,15 +135,143 @@ async function findExcelFileByReference(reference, traceRoot) {
 }
 
 /**
- * Update Excel file with tagged measures using named ranges
+ * Normalise un texte d'en-tête de colonne pour le comparer à un tag généré
+ * Cette fonction doit rester cohérente avec generateTagFromColumnHeader côté frontend.
+ */
+function normalizeHeaderToTagLike(text) {
+    if (!text) return '';
+    let tag = String(text).trim();
+
+    // Convertir "1er", "2ème" → "1", "2", etc.
+    tag = tag.replace(/(\d+)(er|eme|ème|e)/gi, '$1');
+
+    // Supprimer le contenu entre parenthèses, mais garder les unités courantes sous forme de suffixe
+    tag = tag.replace(/\(([^)]+)\)/g, (match, content) => {
+        if (/mm|db|°c|°f|°|kg|g|m|cm/i.test(content)) {
+            return '_' + content.toUpperCase().trim();
+        }
+        return '';
+    });
+
+    // Supprimer les accents
+    tag = tag.normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+
+    // Passer en majuscules
+    tag = tag.toUpperCase();
+
+    // Supprimer la ponctuation sauf underscore
+    tag = tag.replace(/[^\w\s]/g, '');
+
+    // Espaces → underscore, compresser les underscores
+    tag = tag.replace(/\s+/g, '_').replace(/_+/g, '_');
+
+    // Trim underscores
+    tag = tag.replace(/^_+|_+$/g, '');
+
+    return tag;
+}
+
+/**
+ * Trouver l'index de colonne (1-based) correspondant à un tag, en utilisant la première ligne comme en-têtes.
+ */
+function findColumnByName(worksheet, tagName) {
+    if (!worksheet || !tagName) return null;
+    const normalizedTag = normalizeHeaderToTagLike(tagName);
+    if (!normalizedTag) return null;
+
+    const headerRow = worksheet.getRow(1);
+    if (!headerRow) return null;
+
+    for (let col = 1; col <= headerRow.cellCount; col++) {
+        const cellValue = headerRow.getCell(col).value;
+        if (!cellValue) continue;
+        const normalizedHeader = normalizeHeaderToTagLike(cellValue);
+        if (!normalizedHeader) continue;
+
+        // Match strict ou partiel (tag contenu dans l'en-tête ou inversement)
+        if (
+            normalizedHeader === normalizedTag ||
+            normalizedHeader.includes(normalizedTag) ||
+            normalizedTag.includes(normalizedHeader)
+        ) {
+            return col;
+        }
+    }
+    return null;
+}
+
+/**
+ * Normaliser un numéro de série pour comparaison (enlever séparateurs)
+ */
+function normalizeSerialNumberForCompare(sn) {
+    if (!sn) return '';
+    return String(sn).replace(/[^0-9]/g, '');
+}
+
+/**
+ * Trouver la ligne correspondant au numéro de série dans un worksheet.
+ * On cherche une colonne \"SN\" (S/N, N° de S/N, Numéro de série, etc.) puis on parcourt les lignes.
+ */
+function findRowBySerialNumber(worksheet, serialNumber) {
+    if (!worksheet || !serialNumber) return null;
+
+    const normalizedTarget = normalizeSerialNumberForCompare(serialNumber);
+    if (!normalizedTarget) return null;
+
+    const headerRow = worksheet.getRow(1);
+    if (!headerRow) return null;
+
+    const candidateCols = [];
+
+    for (let col = 1; col <= headerRow.cellCount; col++) {
+        const headerVal = headerRow.getCell(col).value;
+        if (!headerVal) continue;
+        const headerText = String(headerVal).toLowerCase();
+
+        // Chercher mots-clés typiques pour SN
+        if (
+            /s\/?n/.test(headerText) ||
+            /num.*serie/.test(headerText) ||
+            /no.*serie/.test(headerText) ||
+            /\b(sn|serial)\b/.test(headerText)
+        ) {
+            candidateCols.push(col);
+        }
+    }
+
+    if (candidateCols.length === 0) {
+        return null;
+    }
+
+    for (let rowIdx = 2; rowIdx <= worksheet.rowCount; rowIdx++) {
+        const row = worksheet.getRow(rowIdx);
+        for (const col of candidateCols) {
+            const cellVal = row.getCell(col).value;
+            if (!cellVal) continue;
+            const normalizedCell = normalizeSerialNumberForCompare(cellVal);
+            if (normalizedCell && normalizedCell === normalizedTarget) {
+                return rowIdx;
+            }
+        }
+    }
+
+    return null;
+}
+
+/**
+ * Update Excel file with tagged measures.
+ * Étapes :
+ * - Si un numéro de série est fourni, tenter de trouver (ligne, colonne) automatiquement.
+ * - Sinon (ou en fallback), utiliser les named ranges existants.
  * 
  * @param {string} excelPath - Path to Excel file
  * @param {Object} taggedMeasures - Object with tag names as keys and values as values
- * @param {Object} options - Options (retryAttempts, retryDelayMs, lockRetryMs, lockMaxRetries)
+ * @param {Object} options - Options (serialNumber, retryAttempts, retryDelayMs, lockRetryMs, lockMaxRetries)
  * @returns {Promise<{success: boolean, updated: number, missing: string[]}>}
  */
 async function updateExcelWithTaggedMeasures(excelPath, taggedMeasures, options = {}) {
     const {
+        serialNumber = null,
         retryAttempts = 3,
         retryDelayMs = 2000,
         lockRetryMs = 1000,
@@ -198,49 +326,126 @@ async function updateExcelWithTaggedMeasures(excelPath, taggedMeasures, options 
                 throw new Error('Failed to open workbook');
             }
 
-            // Update named ranges
+            // Si possible, préparer la localisation de la ligne SN une seule fois
+            let snWorksheet = null;
+            let snRowIndex = null;
+
+            if (serialNumber) {
+                for (const ws of workbook.worksheets) {
+                    const rowIdx = findRowBySerialNumber(ws, serialNumber);
+                    if (rowIdx !== null) {
+                        snWorksheet = ws;
+                        snRowIndex = rowIdx;
+                        console.log(`✅ Ligne SN trouvée pour ${serialNumber} dans la feuille "${ws.name}" (ligne ${rowIdx})`);
+                        break;
+                    }
+                }
+
+                if (!snWorksheet) {
+                    console.warn(`⚠️ Aucune ligne trouvée pour le numéro de série ${serialNumber} dans ${excelPath}. Fallback sur les named ranges.`);
+                }
+            }
+
+            // Mise à jour des valeurs (priorité 1: SN+colonne, priorité 2: named ranges)
             let updatedCount = 0;
             let missingRanges = [];
+            const existingValues = {}; // Stocker les valeurs existantes pour confirmation
 
             for (const [tagName, value] of Object.entries(taggedMeasures)) {
                 try {
-                    const namedRange = workbook.definedNames.get(tagName);
-                    
-                    if (!namedRange) {
-                        missingRanges.push(tagName);
-                        continue;
+                    let updatedHere = false;
+                    let existingValue = null;
+                    let cellLocation = null;
+
+                    // Priorité 1 : si on a trouvé une ligne SN, essayer de trouver la colonne correspondante
+                    if (snWorksheet && snRowIndex !== null) {
+                        const colIdx = findColumnByName(snWorksheet, tagName);
+                        if (colIdx !== null) {
+                            const row = snWorksheet.getRow(snRowIndex);
+                            const cell = row.getCell(colIdx);
+                            
+                            // Vérifier si la cellule contient déjà une valeur
+                            if (cell.value !== null && cell.value !== undefined && cell.value !== '') {
+                                existingValue = String(cell.value).trim();
+                                cellLocation = { sheet: snWorksheet.name, row: snRowIndex, col: colIdx };
+                            }
+                            
+                            // Si forceReplace n'est pas activé et qu'il y a une valeur existante, stocker pour confirmation
+                            if (!options.forceReplace && existingValue) {
+                                existingValues[tagName] = {
+                                    existing: existingValue,
+                                    new: value,
+                                    location: cellLocation
+                                };
+                                console.log(`⚠️ Valeur existante détectée pour "${tagName}": "${existingValue}" → "${value}"`);
+                                continue; // Ne pas mettre à jour pour l'instant
+                            }
+                            
+                            // Mettre à jour la cellule
+                            cell.value = value;
+                            updatedCount++;
+                            updatedHere = true;
+                            console.log(`✅ Mis à jour "${tagName}" = "${value}" par SN/colonne dans ${excelPath} (feuille "${snWorksheet.name}", ligne ${snRowIndex}, colonne ${colIdx})`);
+                        }
                     }
 
-                    // Get the range reference
-                    const range = namedRange.ranges[0];
-                    if (!range) {
-                        console.warn(`Named range "${tagName}" has no range reference`);
-                        continue;
+                    // Priorité 2 : fallback sur named range si la mise à jour par colonne n'a pas fonctionné
+                    if (!updatedHere) {
+                        const namedRange = workbook.definedNames.get(tagName);
+                        
+                        if (!namedRange) {
+                            missingRanges.push(tagName);
+                            continue;
+                        }
+
+                        // Get the range reference
+                        const range = namedRange.ranges[0];
+                        if (!range) {
+                            console.warn(`Named range "${tagName}" has no range reference`);
+                            continue;
+                        }
+
+                        // Parse the range (e.g., "Sheet1!$A$1" or "Sheet1!A1:B2")
+                        const rangeMatch = range.match(/^([^!]+)!(\$?[A-Z]+\$?\d+)(?::(\$?[A-Z]+\$?\d+))?$/);
+                        if (!rangeMatch) {
+                            console.warn(`Could not parse range for "${tagName}": ${range}`);
+                            continue;
+                        }
+
+                        const sheetName = rangeMatch[1];
+                        const startCell = rangeMatch[2].replace(/\$/g, ''); // Remove $ signs
+                        const endCell = rangeMatch[3] ? rangeMatch[3].replace(/\$/g, '') : startCell;
+
+                        const worksheet = workbook.getWorksheet(sheetName);
+                        if (!worksheet) {
+                            console.warn(`Worksheet "${sheetName}" not found for range "${tagName}"`);
+                            continue;
+                        }
+
+                        // Vérifier si la cellule contient déjà une valeur
+                        const cell = worksheet.getCell(startCell);
+                        if (cell.value !== null && cell.value !== undefined && cell.value !== '') {
+                            existingValue = String(cell.value).trim();
+                            cellLocation = { sheet: sheetName, cell: startCell };
+                        }
+                        
+                        // Si forceReplace n'est pas activé et qu'il y a une valeur existante, stocker pour confirmation
+                        if (!options.forceReplace && existingValue) {
+                            existingValues[tagName] = {
+                                existing: existingValue,
+                                new: value,
+                                location: cellLocation
+                            };
+                            console.log(`⚠️ Valeur existante détectée pour "${tagName}" (named range): "${existingValue}" → "${value}"`);
+                            continue; // Ne pas mettre à jour pour l'instant
+                        }
+
+                        // Update the cell(s)
+                        cell.value = value;
+                        updatedCount++;
+
+                        console.log(`✅ Mis à jour "${tagName}" = "${value}" via named range dans ${excelPath}`);
                     }
-
-                    // Parse the range (e.g., "Sheet1!$A$1" or "Sheet1!A1:B2")
-                    const rangeMatch = range.match(/^([^!]+)!(\$?[A-Z]+\$?\d+)(?::(\$?[A-Z]+\$?\d+))?$/);
-                    if (!rangeMatch) {
-                        console.warn(`Could not parse range for "${tagName}": ${range}`);
-                        continue;
-                    }
-
-                    const sheetName = rangeMatch[1];
-                    const startCell = rangeMatch[2].replace(/\$/g, ''); // Remove $ signs
-                    const endCell = rangeMatch[3] ? rangeMatch[3].replace(/\$/g, '') : startCell;
-
-                    const worksheet = workbook.getWorksheet(sheetName);
-                    if (!worksheet) {
-                        console.warn(`Worksheet "${sheetName}" not found for range "${tagName}"`);
-                        continue;
-                    }
-
-                    // Update the cell(s)
-                    const cell = worksheet.getCell(startCell);
-                    cell.value = value;
-                    updatedCount++;
-
-                    console.log(`✅ Mis à jour "${tagName}" = "${value}" dans ${excelPath}`);
 
                 } catch (error) {
                     console.error(`❌ Erreur lors de la mise à jour de la plage nommée "${tagName}":`, error.message);
@@ -264,6 +469,18 @@ async function updateExcelWithTaggedMeasures(excelPath, taggedMeasures, options 
                     }
                     throw error;
                 }
+            }
+
+            // Si des valeurs existantes ont été détectées et qu'on n'a pas forcé le remplacement
+            if (Object.keys(existingValues).length > 0 && !options.forceReplace) {
+                return {
+                    success: false,
+                    updated: updatedCount,
+                    missing: missingRanges,
+                    existingValues: existingValues,
+                    needsConfirmation: true,
+                    message: `${Object.keys(existingValues).length} valeur(s) existante(s) détectée(s). Confirmation requise avant remplacement.`
+                };
             }
 
             return {

@@ -847,7 +847,10 @@ router.post('/save', async (req, res) => {
                 
                 if (excelPath) {
                     console.log(`📊 Mise à jour du fichier Excel: ${excelPath}`);
+                    const serialNumber = formData.placeholders?.['{{SN}}'] || formData.serialNumber || req.body?.serialNumber;
                     excelUpdateResult = await updateExcelWithTaggedMeasures(excelPath, taggedMeasures, {
+                        serialNumber: serialNumber,
+                        forceReplace: req.body?.forceReplace === true,
                         retryAttempts: 3,
                         retryDelayMs: 2000,
                         lockRetryMs: 1000,

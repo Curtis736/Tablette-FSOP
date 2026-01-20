@@ -16,6 +16,7 @@ class OperateurInterface {
         this.isPaused = false;
         this.totalPausedTime = 0;
         this.pauseStartTime = null;
+        this.pendingForceReplace = false; // Flag pour forcer le remplacement après confirmation
         
         // Debouncing pour éviter les clics répétés
         this.lastActionTime = 0;
@@ -617,6 +618,7 @@ class OperateurInterface {
                     '{{SN}}': serialNumber
                 },
                 launchNumber: lt, // Also pass as separate field for direct access
+                serialNumber: serialNumber, // Also pass as separate field for direct access
                 tables: {},
                 passFail: {},
                 checkboxes: {}
@@ -639,6 +641,117 @@ class OperateurInterface {
             this.notificationManager.error('Impossible de charger le formulaire FSOP');
             this.closeFsopFormModal();
         }
+    }
+
+    /**
+     * Affiche une modal de confirmation pour remplacer les valeurs existantes dans Excel
+     * @param {Object} existingValues - Objet avec les valeurs existantes { tagName: { existing, new, location } }
+     * @returns {Promise<boolean>} true si l'utilisateur confirme, false sinon
+     */
+    async showExcelReplaceConfirmation(existingValues) {
+        return new Promise((resolve) => {
+            // Créer la modal
+            const modal = document.createElement('div');
+            modal.className = 'fsop-confirm-modal';
+            modal.style.cssText = `
+                position: fixed;
+                top: 0;
+                left: 0;
+                width: 100%;
+                height: 100%;
+                background: rgba(0, 0, 0, 0.5);
+                display: flex;
+                justify-content: center;
+                align-items: center;
+                z-index: 10000;
+            `;
+
+            // Créer le contenu de la modal
+            const modalContent = document.createElement('div');
+            modalContent.style.cssText = `
+                background: white;
+                padding: 2rem;
+                border-radius: 8px;
+                max-width: 600px;
+                max-height: 80vh;
+                overflow-y: auto;
+                box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3);
+            `;
+
+            // Construire la liste des valeurs à remplacer
+            let valuesListHtml = '<table style="width: 100%; border-collapse: collapse; margin: 1rem 0;">';
+            valuesListHtml += '<thead><tr style="background: #f5f5f5;"><th style="padding: 0.5rem; text-align: left; border-bottom: 2px solid #ddd;">Champ</th><th style="padding: 0.5rem; text-align: left; border-bottom: 2px solid #ddd;">Valeur actuelle</th><th style="padding: 0.5rem; text-align: left; border-bottom: 2px solid #ddd;">Nouvelle valeur</th></tr></thead><tbody>';
+            
+            for (const [tagName, data] of Object.entries(existingValues)) {
+                valuesListHtml += `
+                    <tr style="border-bottom: 1px solid #eee;">
+                        <td style="padding: 0.5rem;"><strong>${tagName}</strong></td>
+                        <td style="padding: 0.5rem; color: #d32f2f;">${this.escapeHtml(String(data.existing))}</td>
+                        <td style="padding: 0.5rem; color: #1976d2;">${this.escapeHtml(String(data.new))}</td>
+                    </tr>
+                `;
+            }
+            
+            valuesListHtml += '</tbody></table>';
+
+            modalContent.innerHTML = `
+                <h2 style="margin-top: 0; color: #d32f2f;">
+                    <i class="fas fa-exclamation-triangle"></i> Valeurs existantes détectées
+                </h2>
+                <p style="margin: 1rem 0;">
+                    Certaines cellules Excel contiennent déjà des valeurs. Voulez-vous les remplacer ?
+                </p>
+                ${valuesListHtml}
+                <div style="margin-top: 1.5rem; display: flex; gap: 1rem; justify-content: flex-end;">
+                    <button id="confirmCancelBtn" style="padding: 0.75rem 1.5rem; background: #f5f5f5; border: 1px solid #ddd; border-radius: 4px; cursor: pointer;">
+                        Annuler (conserver les valeurs actuelles)
+                    </button>
+                    <button id="confirmReplaceBtn" style="padding: 0.75rem 1.5rem; background: #d32f2f; color: white; border: none; border-radius: 4px; cursor: pointer;">
+                        Remplacer
+                    </button>
+                </div>
+            `;
+
+            modal.appendChild(modalContent);
+            document.body.appendChild(modal);
+
+            // Gérer les clics
+            const cancelBtn = modalContent.querySelector('#confirmCancelBtn');
+            const replaceBtn = modalContent.querySelector('#confirmReplaceBtn');
+
+            const cleanup = () => {
+                document.body.removeChild(modal);
+            };
+
+            cancelBtn.addEventListener('click', () => {
+                cleanup();
+                resolve(false);
+            });
+
+            replaceBtn.addEventListener('click', () => {
+                cleanup();
+                resolve(true);
+            });
+
+            // Fermer avec Escape
+            const handleEscape = (e) => {
+                if (e.key === 'Escape') {
+                    cleanup();
+                    document.removeEventListener('keydown', handleEscape);
+                    resolve(false);
+                }
+            };
+            document.addEventListener('keydown', handleEscape);
+        });
+    }
+
+    /**
+     * Échapper le HTML pour éviter les injections
+     */
+    escapeHtml(text) {
+        const div = document.createElement('div');
+        div.textContent = text;
+        return div.innerHTML;
     }
 
     closeFsopFormModal() {
@@ -677,8 +790,33 @@ class OperateurInterface {
                 launchNumber: this.currentFsopData.launchNumber,
                 templateCode: this.currentFsopData.templateCode,
                 serialNumber: this.currentFsopData.serialNumber,
-                formData: formData
+                formData: formData,
+                forceReplace: this.pendingForceReplace || false
             });
+
+            // Réinitialiser le flag de remplacement forcé
+            this.pendingForceReplace = false;
+
+            // Vérifier si des valeurs existantes nécessitent une confirmation
+            if (response.excelUpdate && response.excelUpdate.needsConfirmation && response.excelUpdate.existingValues) {
+                // Réactiver le bouton pendant la confirmation
+                if (this.fsopFormSaveBtn) {
+                    this.fsopFormSaveBtn.disabled = false;
+                    this.fsopFormSaveBtn.innerHTML = originalHtml || 'Sauvegarder';
+                }
+                
+                const confirmed = await this.showExcelReplaceConfirmation(response.excelUpdate.existingValues);
+                if (confirmed) {
+                    // Relancer la sauvegarde avec forceReplace
+                    this.pendingForceReplace = true;
+                    return this.handleSaveFsopForm(); // Réessayer avec forceReplace
+                } else {
+                    // L'utilisateur a annulé, sauvegarder quand même le FSOP mais sans mettre à jour Excel
+                    this.notificationManager.warning('FSOP sauvegardé mais Excel non mis à jour (valeurs existantes conservées)');
+                    this.closeFsopFormModal();
+                    return;
+                }
+            }
 
             let successMessage = 'FSOP sauvegardé avec succès';
             if (response.excelUpdate) {
@@ -1128,7 +1266,7 @@ class OperateurInterface {
                 this.controlsSection.style.display = 'none';
                 this.loadOperatorHistory();
             } else {
-                this.notificationManager.error(error.message || 'Erreur de connexion');
+            this.notificationManager.error(error.message || 'Erreur de connexion');
             }
         }
     }
