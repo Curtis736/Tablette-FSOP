@@ -499,7 +499,13 @@ function processLancementEventsWithPauses(events) {
             let endTime = null;
             
             if (finEvent) {
-                endTime = finEvent.HeureFin ? formatDateTime(finEvent.HeureFin) : formatDateTime(finEvent.DateCreation);
+                // IMPORTANT:
+                // - DateCreation est souvent un champ DATE (sans heure) => si on le convertit en Date, on obtient une "heure" artificielle (01:00/02:00),
+                //   ce qui casse l'affichage et déclenche le guard "end < start" => endTime devient null.
+                // - CreatedAt contient la vraie datetime, et colle à ce que voit l'utilisateur sur son poste.
+                endTime = finEvent.HeureFin
+                    ? formatDateTime(finEvent.HeureFin)
+                    : formatDateTime(finEvent.CreatedAt || finEvent.DateCreation);
             }
             
             console.log(`🔍 Ligne principale pour ${key}:`, currentStatus);
@@ -554,8 +560,8 @@ function createLancementItem(startEvent, sequence, status, statusLabel, endTime 
             startTime = formatDateTime(heureDebut);
         }
     } else {
-        // Pas d'heure de début - utiliser DateCreation
-        startTime = formatDateTime(startEvent.DateCreation);
+        // Pas d'heure de début - utiliser CreatedAt (vraie datetime) plutôt que DateCreation (souvent DATE sans heure)
+        startTime = formatDateTime(startEvent.CreatedAt || startEvent.DateCreation);
     }
     
     // Debug uniquement si problème détecté
@@ -593,8 +599,8 @@ function createLancementItem(startEvent, sequence, status, statusLabel, endTime 
                 finalEndTime = formatDateTime(heureFin);
             }
         } else {
-            // Pas d'heure de fin - utiliser DateCreation
-            finalEndTime = formatDateTime(finEvent.DateCreation);
+            // Pas d'heure de fin - utiliser CreatedAt (vraie datetime) plutôt que DateCreation (souvent DATE sans heure)
+            finalEndTime = formatDateTime(finEvent.CreatedAt || finEvent.DateCreation);
         }
     } else if (pauseEvent && status === 'PAUSE') {
         // Pour les pauses en cours, pas d'heure de fin
@@ -640,14 +646,18 @@ function createLancementItem(startEvent, sequence, status, statusLabel, endTime 
         phase: startEvent.Phase,
         startTime: startTime,
         endTime: finalEndTime,
-        pauseTime: pauseEvent ? formatDateTime(pauseEvent.DateCreation) : null,
+        // pauseEvent.DateCreation peut être un DATE => utiliser CreatedAt pour l'heure réelle
+        pauseTime: pauseEvent ? formatDateTime(pauseEvent.CreatedAt || pauseEvent.DateCreation) : null,
         duration: duration,
         pauseDuration: null,
         status: statusLabel,
         statusCode: status,
         generalStatus: status,
         events: sequence.length,
-        lastUpdate: finEvent ? finEvent.DateCreation : (pauseEvent ? pauseEvent.DateCreation : startEvent.DateCreation),
+        // lastUpdate doit être une datetime fiable pour le tri
+        lastUpdate: finEvent
+            ? (finEvent.CreatedAt || finEvent.DateCreation)
+            : (pauseEvent ? (pauseEvent.CreatedAt || pauseEvent.DateCreation) : (startEvent.CreatedAt || startEvent.DateCreation)),
         type: (status === 'PAUSE' || status === 'PAUSE_TERMINEE') ? 'pause' : 'lancement'
     };
 }
