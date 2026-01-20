@@ -108,6 +108,7 @@ class DataValidationService {
             }
 
             // Récupérer UNIQUEMENT les événements de cet opérateur
+            // IMPORTANT: convertir HeureDebut/HeureFin en HH:mm directement dans SQL pour éviter les décalages timezone
             const eventsQuery = `
                 SELECT 
                     h.NoEnreg,
@@ -117,9 +118,10 @@ class DataValidationService {
                     h.OperatorCode,
                     h.CodeRubrique,
                     h.Statut,
-                    h.HeureDebut,
-                    h.HeureFin,
+                    CONVERT(VARCHAR(5), h.HeureDebut, 108) AS HeureDebut,
+                    CONVERT(VARCHAR(5), h.HeureFin, 108) AS HeureFin,
                     h.DateCreation,
+                    h.CreatedAt,
                     l.DesignationLct1 as Article,
                     l.DesignationLct2 as ArticleDetail
                 FROM [SEDI_APP_INDEPENDANTE].[dbo].[ABHISTORIQUE_OPERATEURS] h
@@ -148,6 +150,7 @@ class DataValidationService {
     async getAdminDataSecurely() {
         try {
             // Récupérer TOUS les événements avec validation stricte
+            // IMPORTANT: convertir HeureDebut/HeureFin en HH:mm directement dans SQL pour éviter les décalages timezone
             const eventsQuery = `
                 SELECT 
                     h.NoEnreg,
@@ -157,9 +160,10 @@ class DataValidationService {
                     h.OperatorCode,
                     h.CodeRubrique,
                     h.Statut,
-                    h.HeureDebut,
-                    h.HeureFin,
+                    CONVERT(VARCHAR(5), h.HeureDebut, 108) AS HeureDebut,
+                    CONVERT(VARCHAR(5), h.HeureFin, 108) AS HeureFin,
                     h.DateCreation,
+                    h.CreatedAt,
                     COALESCE(r.Designation1, 'Opérateur ' + CAST(h.OperatorCode AS VARCHAR)) as operatorName,
                     r.Coderessource as resourceCode,
                     l.DesignationLct1 as Article,
