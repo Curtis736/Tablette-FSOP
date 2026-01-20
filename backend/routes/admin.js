@@ -495,6 +495,9 @@ function processLancementEventsWithPauses(events) {
         }
         
         // Créer UNE SEULE ligne par opérateur/lancement (pas de doublons)
+        // On n'affiche que les heures RÉELLES :
+        // - Heure de début = événement DEBUT
+        // - Heure de fin   = événement FIN (s'il existe), sinon vide
         if (debutEvent) {
             let endTime = null;
             
@@ -506,34 +509,6 @@ function processLancementEventsWithPauses(events) {
                 endTime = finEvent.HeureFin
                     ? formatDateTime(finEvent.HeureFin)
                     : formatDateTime(finEvent.CreatedAt || finEvent.DateCreation);
-            } else if (currentStatus === 'TERMINE' || currentStatus === 'TERMINÉ') {
-                // Si le lancement est TERMINÉ mais n'a pas d'événement FIN explicite,
-                // chercher le prochain DEBUT du même opérateur (même OperatorCode) comme heure de fin
-                const currentOperatorCode = debutEvent.OperatorCode;
-                const currentLancementCode = debutEvent.CodeLanctImprod;
-                const currentLastEventTime = lastEvent?.CreatedAt || lastEvent?.DateCreation;
-                
-                // Chercher le prochain DEBUT du même opérateur qui vient après ce lancement
-                const nextDebut = events
-                    .filter(e => 
-                        e.Ident === 'DEBUT' &&
-                        e.OperatorCode === currentOperatorCode &&
-                        e.CodeLanctImprod !== currentLancementCode && // Un autre lancement
-                        (e.CreatedAt || e.DateCreation) > (currentLastEventTime || debutEvent.CreatedAt || debutEvent.DateCreation)
-                    )
-                    .sort((a, b) => {
-                        const timeA = a.CreatedAt || a.DateCreation;
-                        const timeB = b.CreatedAt || b.DateCreation;
-                        return new Date(timeA) - new Date(timeB);
-                    })[0]; // Prendre le premier (le plus proche)
-                
-                if (nextDebut) {
-                    // Utiliser l'heure de début du nouveau lancement comme heure de fin du précédent
-                    endTime = nextDebut.HeureDebut
-                        ? formatDateTime(nextDebut.HeureDebut)
-                        : formatDateTime(nextDebut.CreatedAt || nextDebut.DateCreation);
-                    console.log(`✅ Heure de fin implicite depuis prochain lancement ${nextDebut.CodeLanctImprod}: ${endTime}`);
-                }
             }
             
             console.log(`🔍 Ligne principale pour ${key}:`, currentStatus);
