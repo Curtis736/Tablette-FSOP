@@ -1034,6 +1034,8 @@ router.get('/:operatorCode/operations',
         // 🔒 FILTRE IMPORTANT : Exclure les lancements transférés (StatutTraitement = 'T')
         // L'opérateur doit voir ses lancements tant qu'ils n'ont pas été transférés par l'admin
         // ⚡ OPTIMISATION : Utiliser LEFT JOIN avec sous-requête dérivée au lieu de sous-requête corrélée
+        // IMPORTANT: Convertir HeureDebut et HeureFin en VARCHAR(5) (HH:mm) directement dans SQL
+        // pour éviter les problèmes de timezone lors de la conversion par Node.js
         const eventsQuery = `
             SELECT 
                 h.NoEnreg,
@@ -1043,9 +1045,10 @@ router.get('/:operatorCode/operations',
                 h.OperatorCode,
                 h.CodeRubrique,
                 h.Statut,
-                h.HeureDebut,
-                h.HeureFin,
+                CONVERT(VARCHAR(5), h.HeureDebut, 108) AS HeureDebut,
+                CONVERT(VARCHAR(5), h.HeureFin, 108) AS HeureFin,
                 h.DateCreation,
+                h.CreatedAt,
                 l.DesignationLct1 as Article,
                 l.DesignationLct2 as ArticleDetail,
                 t.StatutTraitement

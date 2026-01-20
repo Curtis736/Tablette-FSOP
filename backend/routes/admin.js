@@ -1918,18 +1918,21 @@ router.get('/operators/:operatorCode/operations', async (req, res) => {
         // 🔒 FILTRE IMPORTANT : Exclure les lancements transférés (StatutTraitement = 'T')
         // L'opérateur doit voir ses lancements tant qu'ils n'ont pas été transférés par l'admin
         // ⚡ OPTIMISATION : Utiliser LEFT JOIN avec sous-requête dérivée au lieu de sous-requête corrélée
+        // IMPORTANT: Convertir HeureDebut et HeureFin en VARCHAR(5) (HH:mm) directement dans SQL
+        // pour éviter les problèmes de timezone lors de la conversion par Node.js
         const operatorEventsQuery = `
         SELECT 
                 h.NoEnreg,
                 h.Ident,
                 h.DateCreation,
+                h.CreatedAt,
                 h.CodeLanctImprod,
                 COALESCE(h.Phase, 'PRODUCTION') as Phase,
                 h.OperatorCode,
                 h.CodeRubrique,
                 h.Statut,
-                h.HeureDebut,
-                h.HeureFin,
+                CONVERT(VARCHAR(5), h.HeureDebut, 108) AS HeureDebut,
+                CONVERT(VARCHAR(5), h.HeureFin, 108) AS HeureFin,
                 r.Designation1 as operatorName,
                 l.DesignationLct1 as Article,
                 l.DesignationLct2 as ArticleDetail,
