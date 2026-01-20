@@ -307,7 +307,10 @@ async function listExcelFiles(dirPath) {
     try {
         const entries = await fsp.readdir(dirPath, { withFileTypes: true });
         for (const entry of entries) {
-            if (entry.isFile() && entry.name.toLowerCase().endsWith('.xlsx')) {
+            // Exclure les fichiers temporaires Excel (commencent par ~$)
+            if (entry.isFile() && 
+                entry.name.toLowerCase().endsWith('.xlsx') &&
+                !entry.name.startsWith('~$')) {
                 const fullPath = path.join(dirPath, entry.name);
                 const stat = await fsp.stat(fullPath);
                 files.push({
