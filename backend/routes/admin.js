@@ -678,9 +678,12 @@ function processLancementEvents(events) {
     const processedLancements = [];
     
     Object.keys(lancementGroups).forEach(key => {
-        const groupEvents = lancementGroups[key].sort((a, b) => 
-            new Date(a.DateCreation) - new Date(b.DateCreation)
-        );
+        // Trier par CreatedAt si disponible (datetime réelle), sinon DateCreation
+        const groupEvents = lancementGroups[key].sort((a, b) => {
+            const da = a.CreatedAt || a.DateCreation;
+            const db = b.CreatedAt || b.DateCreation;
+            return new Date(da) - new Date(db);
+        });
         
         // Trouver les événements clés
         const debutEvent = groupEvents.find(e => e.Ident === 'DEBUT');
@@ -703,16 +706,17 @@ function processLancementEvents(events) {
         }
         
         // Calculer les temps
-        const startTime = debutEvent ? formatDateTime(debutEvent.DateCreation) : null;
-        const endTime = finEvent ? formatDateTime(finEvent.DateCreation) : null;
-        const duration = (debutEvent && finEvent) ? 
-            calculateDuration(debutEvent.DateCreation, finEvent.DateCreation) : null;
+        // IMPORTANT: DateCreation est souvent DATE (00:00Z => 01:00 Paris). Utiliser CreatedAt si possible.
+        const startTime = debutEvent ? formatDateTime(debutEvent.CreatedAt || debutEvent.DateCreation) : null;
+        const endTime = finEvent ? formatDateTime(finEvent.CreatedAt || finEvent.DateCreation) : null;
+        const duration = (debutEvent && finEvent) ?
+            calculateDuration(debutEvent.CreatedAt || debutEvent.DateCreation, finEvent.CreatedAt || finEvent.DateCreation) : null;
         
         // Calculer le temps de pause total
         let totalPauseTime = 0;
         for (let i = 0; i < Math.min(pauseEvents.length, repriseEvents.length); i++) {
-            const pauseStart = new Date(pauseEvents[i].DateCreation);
-            const pauseEnd = new Date(repriseEvents[i].DateCreation);
+            const pauseStart = new Date(pauseEvents[i].CreatedAt || pauseEvents[i].DateCreation);
+            const pauseEnd = new Date(repriseEvents[i].CreatedAt || repriseEvents[i].DateCreation);
             if (!isNaN(pauseStart.getTime()) && !isNaN(pauseEnd.getTime())) {
                 totalPauseTime += pauseEnd.getTime() - pauseStart.getTime();
             }
@@ -731,14 +735,14 @@ function processLancementEvents(events) {
             phase: lastEvent.Phase,
             startTime: startTime,
             endTime: endTime,
-            pauseTime: pauseEvents.length > 0 ? formatDateTime(pauseEvents[0].DateCreation) : null,
+            pauseTime: pauseEvents.length > 0 ? formatDateTime(pauseEvents[0].CreatedAt || pauseEvents[0].DateCreation) : null,
             duration: duration,
             pauseDuration: pauseDuration,
             status: statusLabel,
             statusCode: currentStatus,
             generalStatus: currentStatus,
             events: groupEvents.length,
-            lastUpdate: lastEvent.DateCreation,
+            lastUpdate: lastEvent.CreatedAt || lastEvent.DateCreation,
             type: 'lancement' // Ligne principale toujours de type 'lancement'
         });
     });
