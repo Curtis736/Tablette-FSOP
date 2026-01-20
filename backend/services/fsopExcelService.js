@@ -419,17 +419,66 @@ async function validateSerialNumberInMesure(launchNumber, serialNumber, traceRoo
 
         console.log(`🔍 Recherche du numéro de série "${serialNumber}" dans ${excelPath}`);
 
+        // Vérifier que le fichier existe et est accessible
+        try {
+            const stats = await fs.stat(excelPath);
+            if (stats.size === 0) {
+                return {
+                    exists: false,
+                    excelPath: excelPath,
+                    message: `Le fichier Excel est vide (0 octets). Le fichier est peut-être corrompu.`
+                };
+            }
+            if (stats.size < 100) {
+                return {
+                    exists: false,
+                    excelPath: excelPath,
+                    message: `Le fichier Excel est trop petit (${stats.size} octets). Le fichier est probablement corrompu.`
+                };
+            }
+        } catch (statError) {
+            if (statError.code === 'ENOENT') {
+                return {
+                    exists: false,
+                    excelPath: excelPath,
+                    message: `Le fichier Excel n'existe pas ou a été déplacé.`
+                };
+            }
+            if (statError.code === 'EACCES') {
+                return {
+                    exists: false,
+                    excelPath: excelPath,
+                    message: `Accès refusé au fichier Excel. Vérifiez les permissions.`
+                };
+            }
+            // Continue si autre erreur (on essaiera quand même de lire)
+        }
+
         // Open Excel file and search for serial number
         let workbook;
         try {
             workbook = new ExcelJS.Workbook();
             await workbook.xlsx.readFile(excelPath);
         } catch (error) {
+            // Gérer les erreurs spécifiques
             if (error.message && (error.message.includes('EBUSY') || error.message.includes('locked'))) {
                 return {
                     exists: false,
                     excelPath: excelPath,
                     message: `Le fichier Excel est verrouillé. Veuillez le fermer et réessayer.`
+                };
+            }
+            // Erreurs JSZip (fichier corrompu)
+            if (error.message && (
+                error.message.includes('Can\'t find end of') ||
+                error.message.includes('end of central directory') ||
+                error.message.includes('corrupted') ||
+                error.message.includes('invalid')
+            )) {
+                return {
+                    exists: false,
+                    excelPath: excelPath,
+                    message: `Le fichier Excel est corrompu ou incomplet. Vérifiez que le fichier n'est pas en cours de téléchargement ou d'écriture, puis réessayez.`
                 };
             }
             throw error;
