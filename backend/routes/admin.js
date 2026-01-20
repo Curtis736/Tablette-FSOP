@@ -349,7 +349,9 @@ function processLancementEventsSingleLine(events) {
                 // DÉMARRÉ → FIN = TERMINÉ
                 status = 'TERMINE';
                 statusLabel = 'Terminé';
-                endTime = finEvent.HeureFin ? formatDateTime(finEvent.HeureFin) : formatDateTime(finEvent.DateCreation);
+                // Utiliser HeureFin si disponible (déjà converti en VARCHAR(5) par SQL)
+                // Sinon utiliser CreatedAt (DATETIME2) plutôt que DateCreation (DATE) pour éviter les problèmes de timezone
+                endTime = finEvent.HeureFin ? formatDateTime(finEvent.HeureFin) : formatDateTime(finEvent.CreatedAt || finEvent.DateCreation);
             } else if (pauseEvents.length > 0 && pauseEvents.length > repriseEvents.length) {
                 // DÉMARRÉ → PAUSE = EN PAUSE
                 status = 'PAUSE';
@@ -502,13 +504,13 @@ function processLancementEventsWithPauses(events) {
             let endTime = null;
             
             if (finEvent) {
+<<<<<<< HEAD
                 // IMPORTANT:
                 // - DateCreation est souvent un champ DATE (sans heure) => si on le convertit en Date, on obtient une "heure" artificielle (01:00/02:00),
-                //   ce qui casse l'affichage et déclenche le guard "end < start" => endTime devient null.
-                // - CreatedAt contient la vraie datetime, et colle à ce que voit l'utilisateur sur son poste.
-                endTime = finEvent.HeureFin
-                    ? formatDateTime(finEvent.HeureFin)
-                    : formatDateTime(finEvent.CreatedAt || finEvent.DateCreation);
+                // Utiliser HeureFin si disponible (déjà converti en VARCHAR(5) par SQL)
+                // Sinon utiliser CreatedAt (DATETIME2) plutôt que DateCreation (DATE) pour éviter les problèmes de timezone
+                // CreatedAt contient la vraie datetime, et colle à ce que voit l'utilisateur sur son poste
+                endTime = finEvent.HeureFin ? formatDateTime(finEvent.HeureFin) : formatDateTime(finEvent.CreatedAt || finEvent.DateCreation);
             }
             
             console.log(`🔍 Ligne principale pour ${key}:`, currentStatus);
@@ -563,7 +565,7 @@ function createLancementItem(startEvent, sequence, status, statusLabel, endTime 
             startTime = formatDateTime(heureDebut);
         }
     } else {
-        // Pas d'heure de début - utiliser CreatedAt (vraie datetime) plutôt que DateCreation (souvent DATE sans heure)
+        // Pas d'heure de début - utiliser CreatedAt (DATETIME2) plutôt que DateCreation (DATE) pour éviter les problèmes de timezone
         startTime = formatDateTime(startEvent.CreatedAt || startEvent.DateCreation);
     }
     
@@ -602,7 +604,7 @@ function createLancementItem(startEvent, sequence, status, statusLabel, endTime 
                 finalEndTime = formatDateTime(heureFin);
             }
         } else {
-            // Pas d'heure de fin - utiliser CreatedAt (vraie datetime) plutôt que DateCreation (souvent DATE sans heure)
+            // Pas d'heure de fin - utiliser CreatedAt (DATETIME2) plutôt que DateCreation (DATE) pour éviter les problèmes de timezone
             finalEndTime = formatDateTime(finEvent.CreatedAt || finEvent.DateCreation);
         }
     } else if (pauseEvent && status === 'PAUSE') {
@@ -637,8 +639,9 @@ function createLancementItem(startEvent, sequence, status, statusLabel, endTime 
         }
     }
     
+    // Utiliser CreatedAt pour les calculs de durée (plus précis que DateCreation)
     const duration = finalEndTime ? 
-        calculateDuration(startEvent.DateCreation, new Date(finalEndTime)) : null;
+        calculateDuration(startEvent.CreatedAt || startEvent.DateCreation, new Date(finalEndTime)) : null;
     
     return {
         id: startEvent.NoEnreg,
@@ -658,9 +661,7 @@ function createLancementItem(startEvent, sequence, status, statusLabel, endTime 
         generalStatus: status,
         events: sequence.length,
         // lastUpdate doit être une datetime fiable pour le tri
-        lastUpdate: finEvent
-            ? (finEvent.CreatedAt || finEvent.DateCreation)
-            : (pauseEvent ? (pauseEvent.CreatedAt || pauseEvent.DateCreation) : (startEvent.CreatedAt || startEvent.DateCreation)),
+        lastUpdate: finEvent ? (finEvent.CreatedAt || finEvent.DateCreation) : (pauseEvent ? (pauseEvent.CreatedAt || pauseEvent.DateCreation) : (startEvent.CreatedAt || startEvent.DateCreation)),
         type: (status === 'PAUSE' || status === 'PAUSE_TERMINEE') ? 'pause' : 'lancement'
     };
 }
@@ -709,10 +710,12 @@ function processLancementEvents(events) {
         }
         
         // Calculer les temps
-        // IMPORTANT: DateCreation est souvent DATE (00:00Z => 01:00 Paris). Utiliser CreatedAt si possible.
+        // Utiliser CreatedAt (DATETIME2) plutôt que DateCreation (DATE) pour éviter les problèmes de timezone
+        // DateCreation est souvent DATE (00:00Z => 01:00 Paris). Utiliser CreatedAt si possible.
         const startTime = debutEvent ? formatDateTime(debutEvent.CreatedAt || debutEvent.DateCreation) : null;
         const endTime = finEvent ? formatDateTime(finEvent.CreatedAt || finEvent.DateCreation) : null;
-        const duration = (debutEvent && finEvent) ?
+        // Utiliser CreatedAt pour les calculs de durée (plus précis que DateCreation)
+        const duration = (debutEvent && finEvent) ? 
             calculateDuration(debutEvent.CreatedAt || debutEvent.DateCreation, finEvent.CreatedAt || finEvent.DateCreation) : null;
         
         // Calculer le temps de pause total

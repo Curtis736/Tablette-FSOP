@@ -264,19 +264,59 @@ class MonitoringService {
                 updateParams.codeRubrique = corrections.CodeRubrique;
             }
             
+            // IMPORTANT: Si TotalDuration ou PauseDuration sont modifiés, recalculer ProductiveDuration automatiquement
+            let shouldRecalculateProductive = false;
+            
             if (corrections.TotalDuration !== undefined) {
                 updateFields.push('TotalDuration = @totalDuration');
                 updateParams.totalDuration = parseInt(corrections.TotalDuration);
+                shouldRecalculateProductive = true;
             }
             
             if (corrections.PauseDuration !== undefined) {
                 updateFields.push('PauseDuration = @pauseDuration');
                 updateParams.pauseDuration = parseInt(corrections.PauseDuration);
+                shouldRecalculateProductive = true;
             }
             
-            if (corrections.ProductiveDuration !== undefined) {
+            if (corrections.ProductiveDuration !== undefined && !shouldRecalculateProductive) {
+                // Si ProductiveDuration est modifié directement (sans modifier TotalDuration/PauseDuration)
                 updateFields.push('ProductiveDuration = @productiveDuration');
                 updateParams.productiveDuration = parseInt(corrections.ProductiveDuration);
+            } else if (shouldRecalculateProductive) {
+                // Recalculer ProductiveDuration = TotalDuration - PauseDuration
+                // Utiliser les nouvelles valeurs si fournies, sinon récupérer depuis la base
+                const newTotalDuration = corrections.TotalDuration !== undefined 
+                    ? parseInt(corrections.TotalDuration) 
+                    : null;
+                const newPauseDuration = corrections.PauseDuration !== undefined 
+                    ? parseInt(corrections.PauseDuration) 
+                    : null;
+                
+                if (newTotalDuration !== null && newPauseDuration !== null) {
+                    // Les deux valeurs sont fournies, calculer directement
+                    const calculatedProductive = Math.max(0, newTotalDuration - newPauseDuration);
+                    updateFields.push('ProductiveDuration = @productiveDuration');
+                    updateParams.productiveDuration = calculatedProductive;
+                    console.log(`🔄 ProductiveDuration recalculé automatiquement: ${calculatedProductive} minutes (Total=${newTotalDuration} - Pause=${newPauseDuration})`);
+                } else {
+                    // Une seule valeur modifiée, récupérer l'autre depuis la base et recalculer
+                    const currentRecordQuery = `
+                        SELECT TotalDuration, PauseDuration
+                        FROM [SEDI_APP_INDEPENDANTE].[dbo].[ABTEMPS_OPERATEURS]
+                        WHERE TempsId = @tempsId
+                    `;
+                    const currentRecord = await executeQuery(currentRecordQuery, { tempsId });
+                    
+                    if (currentRecord.length > 0) {
+                        const totalDuration = newTotalDuration !== null ? newTotalDuration : currentRecord[0].TotalDuration;
+                        const pauseDuration = newPauseDuration !== null ? newPauseDuration : currentRecord[0].PauseDuration;
+                        const calculatedProductive = Math.max(0, totalDuration - pauseDuration);
+                        updateFields.push('ProductiveDuration = @productiveDuration');
+                        updateParams.productiveDuration = calculatedProductive;
+                        console.log(`🔄 ProductiveDuration recalculé automatiquement: ${calculatedProductive} minutes (Total=${totalDuration} - Pause=${pauseDuration})`);
+                    }
+                }
             }
             
             if (corrections.StartTime !== undefined) {
@@ -600,7 +640,7 @@ class MonitoringService {
             // 1. Vérifier que les enregistrements existent et récupérer leurs données
             const { executeQuery } = require('../config/database');
             const checkQuery = `
-                SELECT TempsId, OperatorCode, LancementCode, StartTime, EndTime, StatutTraitement
+                SELECT TempsId, OperatorCode, LancementCode, StartTime, EndTime, StatutTraitement, ProductiveDuration
                 FROM [SEDI_APP_INDEPENDANTE].[dbo].[ABTEMPS_OPERATEURS]
                 WHERE TempsId IN (${tempsIds.map((_, i) => `@id${i}`).join(', ')})
             `;
@@ -639,6 +679,17 @@ class MonitoringService {
                     invalidIds.push({
                         tempsId,
                         errors: ['Champs obligatoires manquants (OperatorCode, LancementCode, StartTime, EndTime)']
+                    });
+                    continue;
+                }
+                
+                // IMPORTANT: SILOG n'accepte pas les enregistrements avec ProductiveDuration = 0
+                // Exclure ces enregistrements du transfert
+                const productiveDuration = record.ProductiveDuration || 0;
+                if (productiveDuration <= 0) {
+                    invalidIds.push({
+                        tempsId,
+                        errors: [`ProductiveDuration doit être > 0 pour être accepté par SILOG. Valeur actuelle: ${productiveDuration} minutes`]
                     });
                     continue;
                 }

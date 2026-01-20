@@ -108,7 +108,8 @@ class DataValidationService {
             }
 
             // Récupérer UNIQUEMENT les événements de cet opérateur
-            // IMPORTANT: convertir HeureDebut/HeureFin en HH:mm directement dans SQL pour éviter les décalages timezone
+            // IMPORTANT: Convertir HeureDebut et HeureFin en VARCHAR(5) (HH:mm) directement dans SQL
+            // pour éviter les problèmes de timezone lors de la conversion par Node.js
             const eventsQuery = `
                 SELECT 
                     h.NoEnreg,
@@ -150,7 +151,8 @@ class DataValidationService {
     async getAdminDataSecurely() {
         try {
             // Récupérer TOUS les événements avec validation stricte
-            // IMPORTANT: convertir HeureDebut/HeureFin en HH:mm directement dans SQL pour éviter les décalages timezone
+            // IMPORTANT: Convertir HeureDebut et HeureFin en VARCHAR(5) (HH:mm) directement dans SQL
+            // pour éviter les problèmes de timezone lors de la conversion par Node.js
             const eventsQuery = `
                 SELECT 
                     h.NoEnreg,

@@ -294,6 +294,13 @@ class OperationValidationService {
                 errors.push(`ProductiveDuration négatif: ${productiveDuration}`);
             }
             
+            // IMPORTANT: SILOG n'accepte pas les enregistrements avec ProductiveDuration = 0
+            // Les enregistrements non traités (StatutTraitement <> T) peuvent avoir ProductiveDuration = 0
+            // mais ils ne doivent pas être transférés tant que ProductiveDuration n'est pas > 0
+            if (productiveDuration <= 0) {
+                errors.push(`ProductiveDuration doit être > 0 pour être accepté par SILOG. Valeur actuelle: ${productiveDuration} minutes (TotalDuration=${totalDuration}min, PauseDuration=${pauseDuration}min)`);
+            }
+            
             // Vérifier que les champs requis sont présents
             if (!record.OperatorCode) {
                 errors.push('OperatorCode manquant');
@@ -355,8 +362,9 @@ class OperationValidationService {
             const totalDuration = record.TotalDuration || 0;
             const pauseDuration = record.PauseDuration || 0;
             const productiveDuration = record.ProductiveDuration || 0;
-            const calculatedProductive = totalDuration - pauseDuration;
+            const calculatedProductive = Math.max(0, totalDuration - pauseDuration);
             
+            // Vérifier la cohérence ProductiveDuration = TotalDuration - PauseDuration (tolérance 1 minute)
             if (Math.abs(productiveDuration - calculatedProductive) > 1) {
                 // Recalculer ProductiveDuration
                 const updateQuery = `
@@ -367,17 +375,17 @@ class OperationValidationService {
                 
                 await executeNonQuery(updateQuery, {
                     tempsId,
-                    productiveDuration: Math.max(0, calculatedProductive)
+                    productiveDuration: calculatedProductive
                 });
                 
-                fixes.push(`ProductiveDuration corrigé: ${productiveDuration} → ${calculatedProductive}`);
+                fixes.push(`ProductiveDuration corrigé: ${productiveDuration} → ${calculatedProductive} (TotalDuration=${totalDuration} - PauseDuration=${pauseDuration})`);
             }
             
             // Corriger les durées négatives
             if (totalDuration < 0 || pauseDuration < 0 || productiveDuration < 0) {
                 const correctedTotal = Math.max(0, totalDuration);
                 const correctedPause = Math.max(0, pauseDuration);
-                const correctedProductive = Math.max(0, calculatedProductive);
+                const correctedProductive = Math.max(0, correctedTotal - correctedPause);
                 
                 const updateQuery = `
                     UPDATE [SEDI_APP_INDEPENDANTE].[dbo].[ABTEMPS_OPERATEURS]
@@ -394,7 +402,21 @@ class OperationValidationService {
                     productiveDuration: correctedProductive
                 });
                 
-                fixes.push(`Durées négatives corrigées`);
+                fixes.push(`Durées négatives corrigées (ProductiveDuration recalculé: ${correctedProductive})`);
+            }
+            
+            // Vérifier que ProductiveDuration > 0 après correction (SILOG n'accepte pas les temps à 0)
+            // Note: On ne force pas ProductiveDuration > 0 car cela pourrait fausser les données réelles
+            // Mais on avertit si ProductiveDuration = 0 après correction
+            const finalRecordQuery = `
+                SELECT ProductiveDuration
+                FROM [SEDI_APP_INDEPENDANTE].[dbo].[ABTEMPS_OPERATEURS]
+                WHERE TempsId = @tempsId
+            `;
+            const finalRecord = await executeQuery(finalRecordQuery, { tempsId });
+            
+            if (finalRecord.length > 0 && finalRecord[0].ProductiveDuration <= 0) {
+                fixes.push(`⚠️ ATTENTION: ProductiveDuration = ${finalRecord[0].ProductiveDuration} après correction. SILOG n'accepte pas les temps à 0.`);
             }
             
             return {

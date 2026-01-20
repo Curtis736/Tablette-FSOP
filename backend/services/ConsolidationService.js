@@ -124,9 +124,47 @@ class ConsolidationService {
             // 5. Calculer les durées (utiliser le service unifié)
             const durations = DurationCalculationService.calculateDurations(events);
             
-            // 6. Extraire Phase et CodeRubrique
-            const phase = debutEvent.Phase || finEvent.Phase || 'PRODUCTION';
-            const codeRubrique = debutEvent.CodeRubrique || finEvent.CodeRubrique || operatorCode;
+            // 6. Récupérer Phase et CodeRubrique depuis V_LCTC (comme demandé par Franck MAILLARD)
+            // IMPORTANT: Phase et CodeRubrique doivent être récupérés IDENTIQUEMENT depuis V_LCTC
+            // Ils font partie des clés ERP et ne doivent pas avoir de fallback
+            let phase = null;
+            let codeRubrique = null;
+            
+            try {
+                const vlctcQuery = `
+                    SELECT TOP 1 Phase, CodeRubrique
+                    FROM [SEDI_APP_INDEPENDANTE].[dbo].[V_LCTC]
+                    WHERE CodeLancement = @lancementCode
+                `;
+                
+                const vlctcResult = await executeQuery(vlctcQuery, { lancementCode });
+                
+                if (vlctcResult && vlctcResult.length > 0) {
+                    // Prendre les valeurs EXACTEMENT telles quelles depuis V_LCTC (sans transformation)
+                    phase = vlctcResult[0].Phase;
+                    codeRubrique = vlctcResult[0].CodeRubrique;
+                    console.log(`✅ Phase et CodeRubrique récupérés depuis V_LCTC: Phase=${phase}, CodeRubrique=${codeRubrique}`);
+                } else {
+                    // Si V_LCTC ne trouve pas le lancement, c'est un problème de données
+                    // On ne peut pas utiliser les valeurs des événements car elles ne sont pas fiables
+                    console.error(`❌ ERREUR CRITIQUE: Lancement ${lancementCode} non trouvé dans V_LCTC`);
+                    console.error(`❌ Phase et CodeRubrique ne peuvent pas être déterminés car ils font partie des clés ERP`);
+                    return {
+                        success: false,
+                        tempsId: null,
+                        error: `Lancement ${lancementCode} non trouvé dans V_LCTC. Phase et CodeRubrique sont requis (clés ERP).`,
+                        warnings: ['Impossible de récupérer Phase et CodeRubrique depuis V_LCTC']
+                    };
+                }
+            } catch (error) {
+                console.error(`❌ Erreur lors de la récupération de Phase/CodeRubrique depuis V_LCTC:`, error);
+                return {
+                    success: false,
+                    tempsId: null,
+                    error: `Erreur lors de la récupération de Phase/CodeRubrique depuis V_LCTC: ${error.message}`,
+                    warnings: ['Erreur lors de la récupération depuis V_LCTC']
+                };
+            }
             
             // 7. Préparer les valeurs pour l'insertion
             // IMPORTANT: DateCreation est souvent une DATE (00:00:00) => utiliser CreatedAt ou HeureDebut/HeureFin
@@ -197,7 +235,16 @@ class ConsolidationService {
                 }
             }
             
-            // 9. Insérer dans ABTEMPS_OPERATEURS
+            // 7. Vérifier que ProductiveDuration > 0 (SILOG n'accepte pas les temps à 0)
+            if (durations.productiveDuration <= 0) {
+                console.warn(`⚠️ ProductiveDuration = ${durations.productiveDuration} (Total=${durations.totalDuration}, Pause=${durations.pauseDuration})`);
+                console.warn(`⚠️ SILOG n'accepte pas les enregistrements avec ProductiveDuration = 0`);
+                // Ne pas bloquer la consolidation, mais logger un avertissement
+                // L'admin pourra corriger manuellement si nécessaire
+            }
+            
+            // 8. Insérer dans ABTEMPS_OPERATEURS
+            // IMPORTANT: ProductiveDuration est en MINUTES (TotalDuration - PauseDuration)
             const insertQuery = `
                 INSERT INTO [SEDI_APP_INDEPENDANTE].[dbo].[ABTEMPS_OPERATEURS]
                 (OperatorCode, LancementCode, StartTime, EndTime, TotalDuration, PauseDuration, ProductiveDuration, EventsCount, Phase, CodeRubrique, DateCreation, StatutTraitement)
@@ -210,9 +257,9 @@ class ConsolidationService {
                 lancementCode,
                 startTime,
                 endTime,
-                totalDuration: durations.totalDuration,
-                pauseDuration: durations.pauseDuration,
-                productiveDuration: durations.productiveDuration,
+                totalDuration: durations.totalDuration, // en minutes
+                pauseDuration: durations.pauseDuration, // en minutes
+                productiveDuration: durations.productiveDuration, // en minutes (TotalDuration - PauseDuration)
                 eventsCount: durations.eventsCount,
                 phase,
                 codeRubrique
@@ -390,6 +437,12 @@ class ConsolidationService {
             // Calculer les durées
             const durations = DurationCalculationService.calculateDurations(events);
             
+            // Vérifier que ProductiveDuration > 0 (SILOG n'accepte pas les temps à 0)
+            if (durations.productiveDuration <= 0) {
+                console.warn(`⚠️ ProductiveDuration = ${durations.productiveDuration} après recalcul (Total=${durations.totalDuration}, Pause=${durations.pauseDuration})`);
+                console.warn(`⚠️ SILOG n'accepte pas les enregistrements avec ProductiveDuration = 0`);
+            }
+            
             // Mettre à jour l'enregistrement
             const updateQuery = `
                 UPDATE [SEDI_APP_INDEPENDANTE].[dbo].[ABTEMPS_OPERATEURS]
@@ -402,16 +455,21 @@ class ConsolidationService {
             
             await executeNonQuery(updateQuery, {
                 tempsId,
-                totalDuration: durations.totalDuration,
-                pauseDuration: durations.pauseDuration,
-                productiveDuration: durations.productiveDuration,
+                totalDuration: durations.totalDuration, // en minutes
+                pauseDuration: durations.pauseDuration, // en minutes
+                productiveDuration: durations.productiveDuration, // en minutes (TotalDuration - PauseDuration)
                 eventsCount: durations.eventsCount
             });
+            
+            console.log(`✅ Durées recalculées pour TempsId=${tempsId}: Total=${durations.totalDuration}min, Pause=${durations.pauseDuration}min, Productif=${durations.productiveDuration}min`);
             
             return {
                 success: true,
                 error: null,
-                durations
+                durations,
+                warnings: durations.productiveDuration <= 0 
+                    ? ['ProductiveDuration = 0 après recalcul. SILOG n\'accepte pas les temps à 0.'] 
+                    : []
             };
             
         } catch (error) {

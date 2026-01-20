@@ -142,12 +142,26 @@ class DurationCalculationService {
             pauseDuration += Math.floor((now - pauseStart) / (1000 * 60));
         }
         
-        const productiveDuration = Math.max(0, totalDuration - pauseDuration);
+        // ProductiveDuration = TotalDuration - PauseDuration (en minutes)
+        // IMPORTANT: ProductiveDuration doit être > 0 pour être accepté par SILOG
+        // Si ProductiveDuration = 0, cela signifie soit TotalDuration = 0, soit PauseDuration = TotalDuration
+        let productiveDuration = Math.max(0, totalDuration - pauseDuration);
+        
+        // Si l'opération est terminée (FIN existe) et ProductiveDuration = 0, 
+        // cela peut indiquer un problème de calcul ou une opération très courte.
+        // Pour éviter les rejets par SILOG, on garantit un minimum de 1 minute si l'opération est terminée.
+        // Note: Ceci est une mesure de sécurité. Si TotalDuration = 0, cela signifie qu'il n'y a pas eu de temps réel.
+        if (finEvent && productiveDuration === 0 && totalDuration > 0) {
+            // Si TotalDuration > 0 mais ProductiveDuration = 0, cela signifie que PauseDuration = TotalDuration
+            // C'est possible mais rare. On garde 0 dans ce cas car c'est la réalité.
+            // Si TotalDuration = 0, on ne peut pas garantir 1 minute car il n'y a pas eu de temps réel.
+            console.warn(`⚠️ ProductiveDuration = 0 pour une opération terminée (Total=${totalDuration}min, Pause=${pauseDuration}min)`);
+        }
         
         return {
-            totalDuration,
-            pauseDuration,
-            productiveDuration,
+            totalDuration, // en minutes
+            pauseDuration, // en minutes
+            productiveDuration, // en minutes (TotalDuration - PauseDuration)
             eventsCount: sortedEvents.length
         };
     }

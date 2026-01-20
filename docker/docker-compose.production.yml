@@ -19,6 +19,7 @@ services:
       - "SERVEURERP:${DB_SERVER_IP:-172.17.0.1}"
     environment:
       - NODE_ENV=production
+      - TZ=Europe/Paris
       # Admin authentication (override via docker/.env if needed)
       - ADMIN_USERNAME=${ADMIN_USERNAME:-admin}
       - ADMIN_PASSWORD=${ADMIN_PASSWORD:-admin}
@@ -65,6 +66,8 @@ services:
     container_name: sedi-tablette-frontend
     ports:
       - "8080:80"
+    environment:
+      - TZ=Europe/Paris
     depends_on:
       - backend
     networks:

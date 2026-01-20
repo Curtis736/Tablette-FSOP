@@ -216,13 +216,31 @@ router.post('/start', validateConcurrency, releaseResources, async (req, res) =>
             const existingTemps = await executeQuery(tempsCheckQuery, { operatorId, lancementCode });
             
             if (existingTemps.length === 0) {
+                // Récupérer Phase et CodeRubrique depuis V_LCTC (comme demandé par Franck MAILLARD)
+                let phase = 'PRODUCTION';
+                let codeRubrique = operatorId;
+                try {
+                    const vlctcQuery = `
+                        SELECT TOP 1 Phase, CodeRubrique
+                        FROM [SEDI_APP_INDEPENDANTE].[dbo].[V_LCTC]
+                        WHERE CodeLancement = @lancementCode
+                    `;
+                    const vlctcResult = await executeQuery(vlctcQuery, { lancementCode });
+                    if (vlctcResult && vlctcResult.length > 0) {
+                        phase = vlctcResult[0].Phase || phase;
+                        codeRubrique = vlctcResult[0].CodeRubrique || codeRubrique;
+                    }
+                } catch (error) {
+                    console.warn(`⚠️ Impossible de récupérer Phase/CodeRubrique depuis V_LCTC: ${error.message}`);
+                }
+                
                 // Créer nouvel enregistrement temps
                 const tempsInsertQuery = `
                     INSERT INTO [SEDI_APP_INDEPENDANTE].[dbo].[ABTEMPS_OPERATEURS]
-                    (OperatorCode, LancementCode, StartTime, EndTime, TotalDuration, PauseDuration, ProductiveDuration, EventsCount, DateCreation)
-                    VALUES (@operatorId, @lancementCode, GETDATE(), GETDATE(), 0, 0, 0, 1, GETDATE())
+                    (OperatorCode, LancementCode, StartTime, EndTime, TotalDuration, PauseDuration, ProductiveDuration, EventsCount, Phase, CodeRubrique, DateCreation)
+                    VALUES (@operatorId, @lancementCode, GETDATE(), GETDATE(), 0, 0, 0, 1, @phase, @codeRubrique, GETDATE())
                 `;
-                await executeQuery(tempsInsertQuery, { operatorId, lancementCode });
+                await executeQuery(tempsInsertQuery, { operatorId, lancementCode, phase, codeRubrique });
                 console.log('✅ Nouvel enregistrement temps créé');
             } else {
                 // Mettre à jour l'enregistrement existant
@@ -418,6 +436,13 @@ router.post('/stop', async (req, res) => {
             durations.eventsCount += 1; // +1 pour l'événement FIN qu'on va ajouter
             
             console.log(`📊 Durées calculées: Total=${durations.totalDuration}min, Pause=${durations.pauseDuration}min, Productif=${durations.productiveDuration}min`);
+            
+            // Vérifier que ProductiveDuration > 0 (SILOG n'accepte pas les temps à 0)
+            if (durations.productiveDuration <= 0) {
+                console.warn(`⚠️ ProductiveDuration = ${durations.productiveDuration} (Total=${durations.totalDuration}, Pause=${durations.pauseDuration})`);
+                console.warn(`⚠️ SILOG n'accepte pas les enregistrements avec ProductiveDuration = 0`);
+                console.warn(`⚠️ Cet enregistrement ne pourra pas être transféré vers SILOG tant que ProductiveDuration n'est pas > 0`);
+            }
         } catch (error) {
             console.log('⚠️ Erreur calcul durées:', error.message);
         }
@@ -696,11 +721,29 @@ router.post('/update-temps', async (req, res) => {
             });
             
         } else {
+            // Récupérer Phase et CodeRubrique depuis V_LCTC (comme demandé par Franck MAILLARD)
+            let phase = 'PRODUCTION';
+            let codeRubrique = operatorCode;
+            try {
+                const vlctcQuery = `
+                    SELECT TOP 1 Phase, CodeRubrique
+                    FROM [SEDI_APP_INDEPENDANTE].[dbo].[V_LCTC]
+                    WHERE CodeLancement = @lancementCode
+                `;
+                const vlctcResult = await executeQuery(vlctcQuery, { lancementCode });
+                if (vlctcResult && vlctcResult.length > 0) {
+                    phase = vlctcResult[0].Phase || phase;
+                    codeRubrique = vlctcResult[0].CodeRubrique || codeRubrique;
+                }
+            } catch (error) {
+                console.warn(`⚠️ Impossible de récupérer Phase/CodeRubrique depuis V_LCTC: ${error.message}`);
+            }
+            
             // Créer un nouvel enregistrement
             const insertQuery = `
                 INSERT INTO [SEDI_APP_INDEPENDANTE].[dbo].[ABTEMPS_OPERATEURS]
-                (OperatorCode, LancementCode, StartTime, EndTime, TotalDuration, PauseDuration, ProductiveDuration, EventsCount, DateCreation)
-                VALUES (@operatorCode, @lancementCode, GETDATE(), GETDATE(), @totalDuration, @pauseDuration, @productiveDuration, @eventsCount, GETDATE())
+                (OperatorCode, LancementCode, StartTime, EndTime, TotalDuration, PauseDuration, ProductiveDuration, EventsCount, Phase, CodeRubrique, DateCreation)
+                VALUES (@operatorCode, @lancementCode, GETDATE(), GETDATE(), @totalDuration, @pauseDuration, @productiveDuration, @eventsCount, @phase, @codeRubrique, GETDATE())
             `;
             
             await executeQuery(insertQuery, { 
@@ -709,7 +752,9 @@ router.post('/update-temps', async (req, res) => {
                 totalDuration, 
                 pauseDuration, 
                 productiveDuration, 
-                eventsCount 
+                eventsCount,
+                phase,
+                codeRubrique
             });
             
             res.json({
