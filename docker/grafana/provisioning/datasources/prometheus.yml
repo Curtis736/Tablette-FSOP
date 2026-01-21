@@ -4,7 +4,9 @@ datasources:
   - name: Prometheus
     type: prometheus
     access: proxy
-    url: http://prometheus:9090
+    # Use the explicit container_name from docker-compose.monitoring.yml to avoid DNS issues
+    # when running multiple compose projects on the same external network.
+    url: http://sedi-prometheus:9090
     isDefault: true
     editable: true
     uid: prometheus
