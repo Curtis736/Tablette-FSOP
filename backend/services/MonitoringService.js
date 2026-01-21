@@ -638,11 +638,13 @@ class MonitoringService {
             const fixedIds = [];
             
             // 1. Vérifier que les enregistrements existent et récupérer leurs données
+            // IMPORTANT: Selon Franck MAILLARD, ne prendre que StatutTraitement = NULL pour la remontée des temps
             const { executeQuery } = require('../config/database');
             const checkQuery = `
                 SELECT TempsId, OperatorCode, LancementCode, StartTime, EndTime, StatutTraitement, ProductiveDuration
                 FROM [SEDI_APP_INDEPENDANTE].[dbo].[ABTEMPS_OPERATEURS]
                 WHERE TempsId IN (${tempsIds.map((_, i) => `@id${i}`).join(', ')})
+                  AND StatutTraitement IS NULL
             `;
             const checkParams = {};
             tempsIds.forEach((id, i) => {
@@ -694,9 +696,14 @@ class MonitoringService {
                     continue;
                 }
                 
-                // Si StatutTraitement est 'T' (déjà transmis), on peut le sauter ou le réinclure selon le besoin
-                if (record.StatutTraitement === 'T') {
-                    console.log(`ℹ️ Enregistrement ${tempsId} déjà transmis, sera ignoré`);
+                // IMPORTANT: Selon Franck MAILLARD, ne prendre que StatutTraitement = NULL pour la remontée des temps
+                // Les enregistrements avec StatutTraitement != NULL (déjà traités ou transmis) sont exclus
+                if (record.StatutTraitement !== null && record.StatutTraitement !== undefined) {
+                    console.log(`ℹ️ Enregistrement ${tempsId} déjà traité (StatutTraitement=${record.StatutTraitement}), sera ignoré`);
+                    invalidIds.push({
+                        tempsId,
+                        errors: [`Enregistrement déjà traité (StatutTraitement=${record.StatutTraitement}). Seuls les enregistrements avec StatutTraitement = NULL peuvent être transmis.`]
+                    });
                     continue;
                 }
                 
