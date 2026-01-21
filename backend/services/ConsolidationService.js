@@ -155,8 +155,11 @@ class ConsolidationService {
                     console.warn(`⚠️ Cette opération ne peut pas être consolidée car Phase et CodeRubrique sont requis (clés ERP)`);
                     return {
                         success: false,
+                        skipped: true,
+                        skipReason: 'VLCTC_MISSING',
                         tempsId: null,
-                        error: `Lancement ${lancementCode} non trouvé dans V_LCTC. Phase et CodeRubrique sont requis (clés ERP). Raison probable: TypeRubrique <> 'O' (composant), LancementSolde <> 'N' (soldé), ou lancement inexistant.`,
+                        error: null,
+                        message: `Lancement ${lancementCode} ignoré: absent de V_LCTC (souvent normal si composant TypeRubrique <> 'O' ou lancement soldé LancementSolde <> 'N').`,
                         warnings: [
                             'Impossible de récupérer Phase et CodeRubrique depuis V_LCTC',
                             'C\'est normal si le lancement est un composant (TypeRubrique <> \'O\') ou s\'il est soldé',
@@ -376,10 +379,20 @@ class ConsolidationService {
                         });
                     }
                 } else {
-                    results.errors.push({
-                        operation: op,
-                        error: result.error || 'Consolidation échouée'
-                    });
+                    if (result.skipped) {
+                        results.skipped.push({
+                            OperatorCode,
+                            LancementCode,
+                            reason: result.skipReason || 'Ignoré',
+                            message: result.message || null,
+                            warnings: result.warnings || []
+                        });
+                    } else {
+                        results.errors.push({
+                            operation: op,
+                            error: result.error || 'Consolidation échouée'
+                        });
+                    }
                 }
             } catch (error) {
                 console.error(`❌ Erreur consolidation ${OperatorCode}/${LancementCode}:`, error);
