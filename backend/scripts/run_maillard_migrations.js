@@ -1,13 +1,24 @@
 /**
  * Script pour exécuter les migrations selon les spécifications de Franck MAILLARD
- * Usage: node backend/scripts/run_maillard_migrations.js
+ * 
+ * Usage depuis la VM:
+ *   docker exec -it sedi-tablette-backend node /app/scripts/run_maillard_migrations.js
+ * 
+ * Ou depuis le conteneur:
+ *   node /app/scripts/run_maillard_migrations.js
  * 
  * Migrations:
  * 1. migration_apply_maillard_specifications.sql - Met à jour V_LCTC et V_RESSOURC
  * 2. migration_create_vue_remontee_temps.sql - Crée V_REMONTE_TEMPS
  */
 
-require('dotenv').config();
+// Charger les variables d'environnement si disponibles
+try {
+    require('dotenv').config();
+} catch (e) {
+    // Ignorer si dotenv n'est pas disponible (dans Docker, les env vars sont déjà chargées)
+}
+
 const { executeQuery, executeNonQuery } = require('../config/database');
 const fs = require('fs');
 const path = require('path');
