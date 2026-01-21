@@ -1260,6 +1260,10 @@ class AdminPage {
 
             // 2) Un seul batch de consolidation pour celles sans TempsId
             const opsWithoutTempsId = terminatedOps.filter(op => !op.TempsId);
+            // Garder une trace des éléments ignorés/erreurs du batch de consolidation
+            // pour expliquer correctement l'absence de TempsId après reload.
+            let lastConsolidationSkipped = [];
+            let lastConsolidationErrors = [];
             if (opsWithoutTempsId.length > 0) {
                 console.log(`🔄 Consolidation de ${opsWithoutTempsId.length} opération(s) terminée(s) sans TempsId avant transfert...`);
                 const operationsToConsolidate = opsWithoutTempsId.map(op => ({
@@ -1273,10 +1277,13 @@ class AdminPage {
                     const consolidateResult = await this.apiService.consolidateMonitoringBatch(operationsToConsolidate);
                     const ok = consolidateResult?.results?.success || [];
                     const errors = consolidateResult?.results?.errors || [];
+                    const skipped = consolidateResult?.results?.skipped || [];
+                    lastConsolidationSkipped = skipped;
+                    lastConsolidationErrors = errors;
 
                     console.log(
                         `✅ Consolidation pré-transfert: ${ok.length} réussie(s), ` +
-                        `${(consolidateResult?.results?.skipped || []).length} ignorée(s), ` +
+                        `${skipped.length} ignorée(s), ` +
                         `${errors.length} erreur(s)`
                     );
 
@@ -1320,6 +1327,39 @@ class AdminPage {
             if (terminatedWithTempsId.length === 0) {
                 // Afficher les détails des opérations qui ont échoué
                 const failedOps = terminatedOps.filter(op => !op.TempsId);
+
+                // Si la consolidation a "ignoré" toutes les opérations (cas normal: lancement soldé/composant/absent de V_LCTC),
+                // ne pas afficher un message d'erreur DEBUT/FIN trompeur.
+                const skippedKeySet = new Set(
+                    (lastConsolidationSkipped || []).map(s => `${s.OperatorCode}/${s.LancementCode}`)
+                );
+                const failedNotSkipped = failedOps.filter(op => !skippedKeySet.has(`${op.OperatorCode}/${op.LancementCode}`));
+                const onlySkipped = failedOps.length > 0 && failedNotSkipped.length === 0 && (lastConsolidationErrors || []).length === 0;
+                if (onlySkipped) {
+                    const reasonCounts = (lastConsolidationSkipped || []).reduce((acc, s) => {
+                        const r = s.reason || 'Ignoré';
+                        acc[r] = (acc[r] || 0) + 1;
+                        return acc;
+                    }, {});
+                    const reasonsText = Object.entries(reasonCounts)
+                        .map(([k, v]) => `- ${k}: ${v}`)
+                        .join('\n');
+
+                    let msg = `Aucune opération terminée n'est éligible au transfert.\n\n` +
+                        `${failedOps.length} opération(s) ont été ignorée(s) (normal):\n`;
+                    failedOps.forEach(op => {
+                        msg += `• ${op.OperatorCode || '?'}/${op.LancementCode || '?'} - ${op.OperatorName || 'Opérateur inconnu'}\n`;
+                    });
+                    msg += `\nRaisons d'ignorance (consolidation):\n${reasonsText || '- (non précisé)'}\n\n` +
+                        `Exemples de causes normales: lancement soldé (LancementSolde <> 'N'), composant (TypeRubrique <> 'O'), ou lancement absent de V_LCTC.`;
+
+                    alert(msg);
+                    this.notificationManager.warning(
+                        `${failedOps.length} opération(s) ignorée(s) (normal). Voir l'alerte pour les détails.`,
+                        9000
+                    );
+                    return;
+                }
                 
                 // Construire un message détaillé pour alert() (qui gère mieux les multi-lignes)
                 let errorDetails = 'Aucune opération terminée n\'a un TempsId valide après consolidation.\n\n';
