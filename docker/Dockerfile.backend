@@ -38,12 +38,6 @@ EXPOSE 3001
 # Variables d'environnement par défaut
 ENV NODE_ENV=production \
     PORT=3001 \
-    DB_SERVER=SERVEURERP \
-    DB_DATABASE=SEDI_ERP \
-    DB_USER=QUALITE \
-    DB_PASSWORD=QUALITE \
-    DB_ENCRYPT=false \
-    DB_TRUST_CERT=true \
     API_TIMEOUT=30000 \
     CACHE_ENABLED=true \
     LOG_LEVEL=info

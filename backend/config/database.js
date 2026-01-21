@@ -9,7 +9,7 @@ try {
         DB_DATABASE: productionConfig?.DB_DATABASE
     });
 } catch (error) {
-    console.log('📝 Configuration de production non trouvée, utilisation des variables d\'environnement:', error.message);
+    console.log('📝 Configuration de production non trouvée (optionnel), utilisation des variables d\'environnement.');
 }
 
 // Configuration de la base de données SQL Server
@@ -44,7 +44,7 @@ console.log('🔧 Configuration finale de la base de données:', {
     server: config.server,
     database: config.database,
     user: config.user,
-    source: productionConfig ? 'config-production.js' : 'variables d\'environnement'
+    source: productionConfig?.__source ? `config-production.js (${productionConfig.__source})` : (productionConfig ? 'config-production.js' : 'variables d\'environnement')
 });
 
 // Configuration de la base ERP

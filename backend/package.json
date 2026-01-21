@@ -49,7 +49,7 @@
     "joi": "^17.11.0",
     "moment": "^2.29.4",
     "morgan": "^1.10.0",
-    "mssql": "^12.0.0",
+    "mssql": "^12.2.0",
     "node-fetch": "^2.7.0",
     "nodemailer": "^7.0.9",
     "prom-client": "^15.1.0",

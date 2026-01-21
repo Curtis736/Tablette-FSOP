@@ -79,6 +79,57 @@ async function checkLancements() {
             if (hasTypeO && hasSoldeN && (!vlctcResult || vlctcResult.length === 0)) {
                 console.log('❌ Problème: Les lancements devraient être dans V_LCTC mais ne le sont pas');
             }
+
+            // 4. Test automatique du "dernier point":
+            // Montrer un exemple concret:
+            // - lancement soldé => absent de V_LCTC (déjà démontré par les résultats ci-dessus)
+            // - lancement non soldé + TypeRubrique='O' => présent dans V_LCTC
+            if (!vlctcResult || vlctcResult.length === 0) {
+                console.log('\n=== Test automatique V_LCTC (preuve par exemple) ===');
+                console.log('🔎 Recherche d\'un lancement NON soldé présent dans V_LCTC...');
+
+                const sampleFromView = await executeQuery(`
+                    SELECT TOP 1 CodeLancement
+                    FROM [SEDI_APP_INDEPENDANTE].[dbo].[V_LCTC]
+                    ORDER BY CodeLancement DESC
+                `);
+
+                const sampleCode = sampleFromView?.[0]?.CodeLancement;
+                if (!sampleCode) {
+                    console.log('❌ Aucun lancement trouvé dans V_LCTC (la vue est vide) → impossible de démontrer le filtre avec un exemple.');
+                } else {
+                    console.log(`✅ Exemple lancement NON soldé trouvé dans V_LCTC: ${sampleCode}`);
+
+                    const sampleDetails = await executeQuery(`
+                        SELECT TOP 5
+                            LCTC.CodeLancement,
+                            LCTC.TypeRubrique,
+                            LCTE.LancementSolde,
+                            LCTC.Phase,
+                            LCTC.CodeRubrique
+                        FROM [SEDI_ERP].[dbo].[LCTC]
+                        JOIN [SEDI_ERP].[dbo].[LCTE] ON LCTE.CodeLancement = LCTC.CodeLancement
+                        WHERE LCTC.CodeLancement = @code
+                        ORDER BY LCTC.Phase, LCTC.CodeRubrique
+                    `, { code: sampleCode });
+
+                    const sampleViewRows = await executeQuery(`
+                        SELECT TOP 5
+                            CodeLancement,
+                            Phase,
+                            CodeRubrique,
+                            DateConsultation
+                        FROM [SEDI_APP_INDEPENDANTE].[dbo].[V_LCTC]
+                        WHERE CodeLancement = @code
+                        ORDER BY Phase, CodeRubrique
+                    `, { code: sampleCode });
+
+                    console.log('\n➡️ Données source SEDI_ERP (doit montrer LancementSolde=\'N\' et TypeRubrique=\'O\'):');
+                    console.log(JSON.stringify(sampleDetails, null, 2));
+                    console.log('\n➡️ Lignes retournées par V_LCTC (doit être non vide):');
+                    console.log(JSON.stringify(sampleViewRows, null, 2));
+                }
+            }
         } else {
             console.log('❌ Les lancements n\'existent pas dans SEDI_ERP.dbo.LCTC');
         }
