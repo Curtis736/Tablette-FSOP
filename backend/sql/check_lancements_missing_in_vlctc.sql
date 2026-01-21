@@ -14,13 +14,14 @@ PRINT '';
 -- 1. Vérifier si les lancements existent dans LCTC (SEDI_ERP)
 PRINT '1. Vérification dans SEDI_ERP.dbo.LCTC:';
 SELECT 
-    CodeLancement,
-    Phase,
-    CodeRubrique,
-    TypeRubrique,
-    LancementSolde
+    LCTC.CodeLancement,
+    LCTC.Phase,
+    LCTC.CodeRubrique,
+    LCTC.TypeRubrique,
+    LCTE.LancementSolde
 FROM [SEDI_ERP].[dbo].[LCTC]
-WHERE CodeLancement IN (@Lancement1, @Lancement2);
+LEFT JOIN [SEDI_ERP].[dbo].[LCTE] ON LCTE.CodeLancement = LCTC.CodeLancement
+WHERE LCTC.CodeLancement IN (@Lancement1, @Lancement2);
 GO
 
 -- 2. Vérifier ce que V_LCTC retourne pour ces lancements
@@ -54,13 +55,15 @@ GO
 PRINT '';
 PRINT '4. Tous les TypeRubrique pour ces lancements:';
 SELECT 
-    CodeLancement,
-    TypeRubrique,
+    LCTC.CodeLancement,
+    LCTC.TypeRubrique,
+    LCTE.LancementSolde,
     COUNT(*) as NombreLignes,
-    STRING_AGG(CAST(Phase AS VARCHAR), ', ') as Phases
+    STRING_AGG(CAST(LCTC.Phase AS VARCHAR), ', ') as Phases
 FROM [SEDI_ERP].[dbo].[LCTC]
-WHERE CodeLancement IN ('LT2400189', 'LT2501139')
-GROUP BY CodeLancement, TypeRubrique;
+LEFT JOIN [SEDI_ERP].[dbo].[LCTE] ON LCTE.CodeLancement = LCTC.CodeLancement
+WHERE LCTC.CodeLancement IN ('LT2400189', 'LT2501139')
+GROUP BY LCTC.CodeLancement, LCTC.TypeRubrique, LCTE.LancementSolde;
 GO
 
 PRINT '';
