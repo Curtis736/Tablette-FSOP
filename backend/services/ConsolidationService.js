@@ -145,15 +145,23 @@ class ConsolidationService {
                     codeRubrique = vlctcResult[0].CodeRubrique;
                     console.log(`✅ Phase et CodeRubrique récupérés depuis V_LCTC: Phase=${phase}, CodeRubrique=${codeRubrique}`);
                 } else {
-                    // Si V_LCTC ne trouve pas le lancement, c'est un problème de données
-                    // On ne peut pas utiliser les valeurs des événements car elles ne sont pas fiables
-                    console.error(`❌ ERREUR CRITIQUE: Lancement ${lancementCode} non trouvé dans V_LCTC`);
-                    console.error(`❌ Phase et CodeRubrique ne peuvent pas être déterminés car ils font partie des clés ERP`);
+                    // Si V_LCTC ne trouve pas le lancement, c'est probablement normal :
+                    // - Le lancement n'a pas TypeRubrique='O' (c'est un composant, pas un temps)
+                    // - Le lancement est soldé (LancementSolde <> 'N')
+                    // - Le lancement n'existe pas dans SEDI_ERP.dbo.LCTC
+                    // Ces opérations ne doivent PAS être consolidées selon les spécifications de Franck MAILLARD
+                    console.warn(`⚠️ Lancement ${lancementCode} non trouvé dans V_LCTC`);
+                    console.warn(`⚠️ Raisons possibles: TypeRubrique <> 'O' (composant), LancementSolde <> 'N' (soldé), ou lancement inexistant dans SEDI_ERP`);
+                    console.warn(`⚠️ Cette opération ne peut pas être consolidée car Phase et CodeRubrique sont requis (clés ERP)`);
                     return {
                         success: false,
                         tempsId: null,
-                        error: `Lancement ${lancementCode} non trouvé dans V_LCTC. Phase et CodeRubrique sont requis (clés ERP).`,
-                        warnings: ['Impossible de récupérer Phase et CodeRubrique depuis V_LCTC']
+                        error: `Lancement ${lancementCode} non trouvé dans V_LCTC. Phase et CodeRubrique sont requis (clés ERP). Raison probable: TypeRubrique <> 'O' (composant), LancementSolde <> 'N' (soldé), ou lancement inexistant.`,
+                        warnings: [
+                            'Impossible de récupérer Phase et CodeRubrique depuis V_LCTC',
+                            'C\'est normal si le lancement est un composant (TypeRubrique <> \'O\') ou s\'il est soldé',
+                            'Ces opérations ne doivent pas être consolidées selon les spécifications ERP'
+                        ]
                     };
                 }
             } catch (error) {
