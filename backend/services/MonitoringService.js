@@ -6,6 +6,20 @@
 const { executeQuery, executeNonQuery } = require('../config/database');
 
 class MonitoringService {
+    static _toDateOnly(value) {
+        if (!value) return null;
+        // SQL DATE often comes back as JS Date via mssql
+        if (value instanceof Date) {
+            if (isNaN(value.getTime())) return null;
+            return value.toISOString().slice(0, 10); // YYYY-MM-DD
+        }
+        const s = String(value).trim();
+        // Common formats: "2026-01-21", "2026-01-21T00:00:00.000Z"
+        const m = s.match(/^(\d{4}-\d{2}-\d{2})/);
+        if (m) return m[1];
+        return null;
+    }
+
     static _normalizeTimeString(input) {
         if (typeof input !== 'string') return null;
         const s = input.trim();
@@ -298,7 +312,7 @@ class MonitoringService {
             const currentRows = await executeQuery(currentQuery, { tempsId });
             const current = currentRows?.[0] || null;
             // Date (YYYY-MM-DD) de l'enregistrement pour construire StartTime/EndTime côté SQL (sans décalage timezone)
-            const dateOnly = current?.DateCreation ? String(current.DateCreation).substring(0, 10) : null;
+            const dateOnly = this._toDateOnly(current?.DateCreation);
             
             // Construire la requête de mise à jour
             const updateFields = [];
@@ -372,7 +386,7 @@ class MonitoringService {
             if (corrections.StartTime !== undefined) {
                 const parts = this._parseTimeParts(corrections.StartTime);
                 if (parts && dateOnly) {
-                    updateFields.push("StartTime = DATEADD(SECOND, DATEDIFF(SECOND, '00:00:00', @startTimeHms), CAST(@date AS DATETIME2))");
+                    updateFields.push("StartTime = DATEADD(SECOND, DATEDIFF(SECOND, '00:00:00', CAST(@startTimeHms AS TIME)), CAST(@date AS DATETIME2))");
                     updateParams.startTimeHms = this._timePartsToHms(parts);
                     updateParams.date = dateOnly;
                 } else {
@@ -385,7 +399,7 @@ class MonitoringService {
             if (corrections.EndTime !== undefined) {
                 const parts = this._parseTimeParts(corrections.EndTime);
                 if (parts && dateOnly) {
-                    updateFields.push("EndTime = DATEADD(SECOND, DATEDIFF(SECOND, '00:00:00', @endTimeHms), CAST(@date AS DATETIME2))");
+                    updateFields.push("EndTime = DATEADD(SECOND, DATEDIFF(SECOND, '00:00:00', CAST(@endTimeHms AS TIME)), CAST(@date AS DATETIME2))");
                     updateParams.endTimeHms = this._timePartsToHms(parts);
                     updateParams.date = dateOnly;
                 } else {
