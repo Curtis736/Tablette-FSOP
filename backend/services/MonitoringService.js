@@ -6,6 +6,50 @@
 const { executeQuery, executeNonQuery } = require('../config/database');
 
 class MonitoringService {
+    static _buildDateTimeFromInput(baseDate, input) {
+        if (!input) return null;
+
+        // If already a Date
+        if (input instanceof Date) {
+            return isNaN(input.getTime()) ? null : input;
+        }
+
+        // Try ISO / full datetime string
+        if (typeof input === 'string') {
+            const s = input.trim();
+
+            // HH:mm or HH:mm:ss => attach to baseDate (DateCreation)
+            const m = s.match(/^(\d{1,2}):(\d{2})(?::(\d{2}))?$/);
+            if (m) {
+                const d = new Date(baseDate);
+                if (isNaN(d.getTime())) return null;
+                const hh = parseInt(m[1], 10);
+                const mm = parseInt(m[2], 10);
+                const ss = m[3] ? parseInt(m[3], 10) : 0;
+                d.setHours(hh, mm, ss, 0);
+                return d;
+            }
+
+            const d = new Date(s);
+            if (!isNaN(d.getTime())) return d;
+        }
+
+        return null;
+    }
+
+    static _diffMinutes(start, end) {
+        if (!(start instanceof Date) || !(end instanceof Date)) return 0;
+        if (isNaN(start.getTime()) || isNaN(end.getTime())) return 0;
+
+        let e = end;
+        // If end earlier than start, assume it crossed midnight (+1 day)
+        if (e < start) {
+            e = new Date(e);
+            e.setDate(e.getDate() + 1);
+        }
+        return Math.max(0, Math.floor((e - start) / (1000 * 60)));
+    }
+
     /**
      * Réparer StartTime/EndTime/durations depuis ABHISTORIQUE_OPERATEURS (utile si Start/End = 00:00)
      * @param {number} tempsId
@@ -249,6 +293,16 @@ class MonitoringService {
                     error: 'Impossible de corriger un enregistrement déjà transmis à SILOG'
                 };
             }
+
+            // Charger les valeurs actuelles (pour recalcul cohérent si Start/End changent)
+            const currentQuery = `
+                SELECT TempsId, DateCreation, StartTime, EndTime, TotalDuration, PauseDuration, ProductiveDuration
+                FROM [SEDI_APP_INDEPENDANTE].[dbo].[ABTEMPS_OPERATEURS]
+                WHERE TempsId = @tempsId
+            `;
+            const currentRows = await executeQuery(currentQuery, { tempsId });
+            const current = currentRows?.[0] || null;
+            const baseDate = current?.DateCreation ? new Date(current.DateCreation) : new Date();
             
             // Construire la requête de mise à jour
             const updateFields = [];
@@ -321,12 +375,45 @@ class MonitoringService {
             
             if (corrections.StartTime !== undefined) {
                 updateFields.push('StartTime = @startTime');
-                updateParams.startTime = corrections.StartTime;
+                const dt = this._buildDateTimeFromInput(baseDate, corrections.StartTime);
+                updateParams.startTime = dt || corrections.StartTime;
             }
             
             if (corrections.EndTime !== undefined) {
                 updateFields.push('EndTime = @endTime');
-                updateParams.endTime = corrections.EndTime;
+                const dt = this._buildDateTimeFromInput(baseDate, corrections.EndTime);
+                updateParams.endTime = dt || corrections.EndTime;
+            }
+
+            // IMPORTANT: Si StartTime/EndTime sont modifiés, recalculer automatiquement TotalDuration/ProductiveDuration
+            // (sinon on peut avoir Start/End corrects mais ProductiveDuration = 0, rejet SILOG)
+            const shouldRecalculateFromTimes =
+                (corrections.StartTime !== undefined || corrections.EndTime !== undefined) &&
+                (corrections.TotalDuration === undefined && corrections.PauseDuration === undefined && corrections.ProductiveDuration === undefined);
+
+            if (shouldRecalculateFromTimes) {
+                const startVal = corrections.StartTime !== undefined
+                    ? this._buildDateTimeFromInput(baseDate, corrections.StartTime)
+                    : (current?.StartTime ? new Date(current.StartTime) : null);
+
+                const endVal = corrections.EndTime !== undefined
+                    ? this._buildDateTimeFromInput(baseDate, corrections.EndTime)
+                    : (current?.EndTime ? new Date(current.EndTime) : null);
+
+                if (startVal && endVal) {
+                    const total = this._diffMinutes(startVal, endVal);
+                    const pause = Number.isFinite(current?.PauseDuration) ? (current.PauseDuration || 0) : 0;
+                    const productive = Math.max(0, total - pause);
+
+                    updateFields.push('TotalDuration = @totalDuration');
+                    updateParams.totalDuration = total;
+
+                    updateFields.push('ProductiveDuration = @productiveDuration');
+                    updateParams.productiveDuration = productive;
+
+                    updateFields.push("CalculationMethod = 'MANUAL_TIMES'");
+                    console.log(`🔄 Recalcul durées depuis Start/End: Total=${total}min, Pause=${pause}min, Productif=${productive}min`);
+                }
             }
             
             if (updateFields.length === 0) {
