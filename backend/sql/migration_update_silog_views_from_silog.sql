@@ -65,6 +65,7 @@ SELECT
     E.DesignationArt2,
     C.Phase,
     C.CodeRubrique,
+    C.CodeLot,
     -- DateConsultation : Stockée en VarChar dans SILOG (VarAlphaUtil5), convertie en DateTime2
     -- D'après la vue existante, DateConsultation provient de E.VarAlphaUtil5 dans LCTE
     CAST(IIF(E.VarAlphaUtil5 = '' OR E.VarAlphaUtil5 IS NULL, NULL, E.VarAlphaUtil5) AS DATETIME2) AS DateConsultation

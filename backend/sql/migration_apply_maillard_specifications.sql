@@ -57,8 +57,9 @@ CREATE VIEW [dbo].[V_LCTC]
 AS
 SELECT 
     LCTC.CodeLancement,
-    Phase,
-    CodeRubrique,
+    LCTC.Phase,
+    LCTC.CodeRubrique,
+    LCTC.CodeLot,
     CAST(iif(LCTE.VARAlphaUtil5='',NULL,LCTE.VARAlphaUtil5) AS DATETIME2) AS DateConsultation
 FROM [SEDI_ERP].[dbo].[LCTC]
 JOIN [SEDI_ERP].[dbo].[LCTE] on LCTE.CodeLancement=LCTC.CodeLancement

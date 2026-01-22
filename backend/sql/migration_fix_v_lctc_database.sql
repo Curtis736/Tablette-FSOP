@@ -24,6 +24,7 @@ SELECT
     CodeLancement,
     Phase,
     CodeRubrique,
+    CodeLot,
     -- DateConsultation : À implémenter dans SILOG par Franck MAILLARD
     -- Pour l'instant, retourner NULL ou GETDATE()
     CAST(NULL AS DATETIME2) AS DateConsultation
