@@ -6,48 +6,43 @@
 const { executeQuery, executeNonQuery } = require('../config/database');
 
 class MonitoringService {
-    static _buildDateTimeFromInput(baseDate, input) {
-        if (!input) return null;
-
-        // If already a Date
-        if (input instanceof Date) {
-            return isNaN(input.getTime()) ? null : input;
-        }
-
-        // Try ISO / full datetime string
-        if (typeof input === 'string') {
-            const s = input.trim();
-
-            // HH:mm or HH:mm:ss => attach to baseDate (DateCreation)
-            const m = s.match(/^(\d{1,2}):(\d{2})(?::(\d{2}))?$/);
-            if (m) {
-                const d = new Date(baseDate);
-                if (isNaN(d.getTime())) return null;
-                const hh = parseInt(m[1], 10);
-                const mm = parseInt(m[2], 10);
-                const ss = m[3] ? parseInt(m[3], 10) : 0;
-                d.setHours(hh, mm, ss, 0);
-                return d;
-            }
-
-            const d = new Date(s);
-            if (!isNaN(d.getTime())) return d;
-        }
-
-        return null;
+    static _normalizeTimeString(input) {
+        if (typeof input !== 'string') return null;
+        const s = input.trim();
+        if (!s) return null;
+        // Accept "10h39" / "10H39" as well
+        return s.replace(/[hH]/g, ':');
     }
 
-    static _diffMinutes(start, end) {
-        if (!(start instanceof Date) || !(end instanceof Date)) return 0;
-        if (isNaN(start.getTime()) || isNaN(end.getTime())) return 0;
+    static _parseTimeParts(input) {
+        if (!input) return null;
+        const s = this._normalizeTimeString(String(input));
+        if (!s) return null;
+        const m = s.match(/^(\d{1,2}):(\d{1,2})(?::(\d{2}))?$/);
+        if (!m) return null;
+        const hh = parseInt(m[1], 10);
+        const mm = parseInt(m[2], 10);
+        const ss = m[3] ? parseInt(m[3], 10) : 0;
+        if (!Number.isFinite(hh) || !Number.isFinite(mm) || !Number.isFinite(ss)) return null;
+        if (hh < 0 || hh > 23 || mm < 0 || mm > 59 || ss < 0 || ss > 59) return null;
+        return { hh, mm, ss };
+    }
 
-        let e = end;
-        // If end earlier than start, assume it crossed midnight (+1 day)
-        if (e < start) {
-            e = new Date(e);
-            e.setDate(e.getDate() + 1);
-        }
-        return Math.max(0, Math.floor((e - start) / (1000 * 60)));
+    static _timePartsToHms(parts) {
+        if (!parts) return null;
+        const h = String(parts.hh).padStart(2, '0');
+        const m = String(parts.mm).padStart(2, '0');
+        const s = String(parts.ss || 0).padStart(2, '0');
+        return `${h}:${m}:${s}`;
+    }
+
+    static _minutesBetweenTimes(startParts, endParts) {
+        if (!startParts || !endParts) return 0;
+        const start = startParts.hh * 60 + startParts.mm;
+        const end = endParts.hh * 60 + endParts.mm;
+        if (end >= start) return end - start;
+        // Cross midnight
+        return (24 * 60 - start) + end;
     }
 
     /**
@@ -302,7 +297,8 @@ class MonitoringService {
             `;
             const currentRows = await executeQuery(currentQuery, { tempsId });
             const current = currentRows?.[0] || null;
-            const baseDate = current?.DateCreation ? new Date(current.DateCreation) : new Date();
+            // Date (YYYY-MM-DD) de l'enregistrement pour construire StartTime/EndTime côté SQL (sans décalage timezone)
+            const dateOnly = current?.DateCreation ? String(current.DateCreation).substring(0, 10) : null;
             
             // Construire la requête de mise à jour
             const updateFields = [];
@@ -374,15 +370,29 @@ class MonitoringService {
             }
             
             if (corrections.StartTime !== undefined) {
-                updateFields.push('StartTime = @startTime');
-                const dt = this._buildDateTimeFromInput(baseDate, corrections.StartTime);
-                updateParams.startTime = dt || corrections.StartTime;
+                const parts = this._parseTimeParts(corrections.StartTime);
+                if (parts && dateOnly) {
+                    updateFields.push("StartTime = DATEADD(SECOND, DATEDIFF(SECOND, '00:00:00', @startTimeHms), CAST(@date AS DATETIME2))");
+                    updateParams.startTimeHms = this._timePartsToHms(parts);
+                    updateParams.date = dateOnly;
+                } else {
+                    // Fallback: assume full datetime string
+                    updateFields.push('StartTime = @startTime');
+                    updateParams.startTime = corrections.StartTime;
+                }
             }
             
             if (corrections.EndTime !== undefined) {
-                updateFields.push('EndTime = @endTime');
-                const dt = this._buildDateTimeFromInput(baseDate, corrections.EndTime);
-                updateParams.endTime = dt || corrections.EndTime;
+                const parts = this._parseTimeParts(corrections.EndTime);
+                if (parts && dateOnly) {
+                    updateFields.push("EndTime = DATEADD(SECOND, DATEDIFF(SECOND, '00:00:00', @endTimeHms), CAST(@date AS DATETIME2))");
+                    updateParams.endTimeHms = this._timePartsToHms(parts);
+                    updateParams.date = dateOnly;
+                } else {
+                    // Fallback: assume full datetime string
+                    updateFields.push('EndTime = @endTime');
+                    updateParams.endTime = corrections.EndTime;
+                }
             }
 
             // IMPORTANT: Si StartTime/EndTime sont modifiés, recalculer automatiquement TotalDuration/ProductiveDuration
@@ -392,16 +402,16 @@ class MonitoringService {
                 (corrections.TotalDuration === undefined && corrections.PauseDuration === undefined && corrections.ProductiveDuration === undefined);
 
             if (shouldRecalculateFromTimes) {
-                const startVal = corrections.StartTime !== undefined
-                    ? this._buildDateTimeFromInput(baseDate, corrections.StartTime)
-                    : (current?.StartTime ? new Date(current.StartTime) : null);
+                const startParts = corrections.StartTime !== undefined
+                    ? this._parseTimeParts(corrections.StartTime)
+                    : this._parseTimeParts(current?.StartTime ? new Date(current.StartTime).toTimeString().substring(0, 5) : null);
 
-                const endVal = corrections.EndTime !== undefined
-                    ? this._buildDateTimeFromInput(baseDate, corrections.EndTime)
-                    : (current?.EndTime ? new Date(current.EndTime) : null);
+                const endParts = corrections.EndTime !== undefined
+                    ? this._parseTimeParts(corrections.EndTime)
+                    : this._parseTimeParts(current?.EndTime ? new Date(current.EndTime).toTimeString().substring(0, 5) : null);
 
-                if (startVal && endVal) {
-                    const total = this._diffMinutes(startVal, endVal);
+                if (startParts && endParts) {
+                    const total = this._minutesBetweenTimes(startParts, endParts);
                     const pause = Number.isFinite(current?.PauseDuration) ? (current.PauseDuration || 0) : 0;
                     const productive = Math.max(0, total - pause);
 
