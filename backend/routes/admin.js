@@ -495,6 +495,15 @@ function processLancementEventsWithPauses(events) {
             currentStatus = 'EN_COURS';
             statusLabel = 'En cours';
         }
+
+        // 🔒 RÈGLE: On n'affiche jamais "Terminé" sans événement FIN (sinon on se retrouve avec endTime = '-' malgré un statut terminé).
+        // La source de vérité d'une opération terminée est la présence d'un événement FIN.
+        const statusUpper = String(currentStatus || '').toUpperCase();
+        if ((statusUpper === 'TERMINE' || statusUpper === 'TERMINÉ') && !finEvent) {
+            console.warn(`⚠️ Statut terminé détecté sans FIN pour ${key} → forcé à EN_COURS (cohérence EndTime).`);
+            currentStatus = 'EN_COURS';
+            statusLabel = 'En cours';
+        }
         
         // Créer UNE SEULE ligne par opérateur/lancement (pas de doublons)
         // On n'affiche que les heures RÉELLES :
@@ -1158,6 +1167,7 @@ router.put('/operations/:id', async (req, res) => {
         // Construire la requête de mise à jour dynamiquement
         const updateFields = [];
         const params = { id: parseInt(id) };
+        let formattedEndTimeForFinEvent = null;
         
         // Heures et statut sont modifiables
         if (startTime !== undefined) {
@@ -1181,8 +1191,8 @@ router.put('/operations/:id', async (req, res) => {
                     error: 'Format d\'heure de fin invalide'
                 });
             }
-            updateFields.push('HeureFin = @endTime');
             params.endTime = formattedEndTime;
+            formattedEndTimeForFinEvent = formattedEndTime;
             console.log(`🔧 endTime: ${endTime} -> ${params.endTime}`);
         }
         
@@ -1225,7 +1235,15 @@ router.put('/operations/:id', async (req, res) => {
         
         // 🔒 VÉRIFICATION DE SÉCURITÉ : Vérifier que l'enregistrement existe et récupérer l'OperatorCode
         const checkQuery = `
-            SELECT OperatorCode, CodeLanctImprod
+            SELECT TOP 1
+                OperatorCode,
+                CodeLanctImprod,
+                Ident,
+                Phase,
+                CodeRubrique,
+                DateCreation,
+                SessionId,
+                RequestId
             FROM [SEDI_APP_INDEPENDANTE].[dbo].[ABHISTORIQUE_OPERATEURS]
             WHERE NoEnreg = @id
         `;
@@ -1246,6 +1264,27 @@ router.put('/operations/:id', async (req, res) => {
                 security: 'DATA_OWNERSHIP_VIOLATION'
             });
         }
+
+        const base = existing[0];
+        const baseOperatorCode = base.OperatorCode;
+        const baseLancementCode = base.CodeLanctImprod;
+        const baseDate = base.DateCreation; // DATE
+
+        // 🔒 RÈGLE: interdiction de passer une opération en TERMINE sans endTime (sinon EndTime restera vide)
+        const desiredStatus = req.body.status ? String(req.body.status).toUpperCase().trim() : null;
+        if (desiredStatus === 'TERMINE' && !formattedEndTimeForFinEvent) {
+            return res.status(400).json({
+                success: false,
+                error: 'Impossible de marquer TERMINE sans heure de fin (endTime).'
+            });
+        }
+
+        // Si l'enregistrement modifié est un FIN, on peut mettre à jour HeureFin directement sur cette ligne.
+        // Sinon (cas le plus courant côté UI: ligne "DEBUT"), on crée/maj l'événement FIN correspondant pour que l'heure de fin s'affiche
+        // et que la consolidation dispose d'un FIN réel.
+        if (formattedEndTimeForFinEvent && String(base.Ident || '').toUpperCase() === 'FIN') {
+            updateFields.push('HeureFin = @endTime');
+        }
         
         const updateQuery = `
             UPDATE [SEDI_APP_INDEPENDANTE].[dbo].[ABHISTORIQUE_OPERATEURS]
@@ -1253,11 +1292,81 @@ router.put('/operations/:id', async (req, res) => {
             WHERE NoEnreg = @id
         `;
         
-        console.log(`🔧 Requête de mise à jour:`, updateQuery);
-        console.log(`🔧 Paramètres:`, params);
-        console.log(`🔒 Opération appartenant à l'opérateur: ${existing[0].OperatorCode}`);
-        
-        await executeQuery(updateQuery, params);
+        if (updateFields.length > 0) {
+            console.log(`🔧 Requête de mise à jour:`, updateQuery);
+            console.log(`🔧 Paramètres:`, params);
+            console.log(`🔒 Opération appartenant à l'opérateur: ${baseOperatorCode}`);
+            await executeQuery(updateQuery, params);
+        }
+
+        // Mettre à jour / créer l'événement FIN si on a reçu endTime et que la ligne modifiée n'est pas FIN
+        if (formattedEndTimeForFinEvent && String(base.Ident || '').toUpperCase() !== 'FIN') {
+            const findFinQuery = `
+                SELECT TOP 1 NoEnreg
+                FROM [SEDI_APP_INDEPENDANTE].[dbo].[ABHISTORIQUE_OPERATEURS]
+                WHERE OperatorCode = @operatorCode
+                  AND CodeLanctImprod = @lancementCode
+                  AND Ident = 'FIN'
+                  AND CAST(DateCreation AS DATE) = CAST(@date AS DATE)
+                ORDER BY CreatedAt DESC, NoEnreg DESC
+            `;
+            const finRows = await executeQuery(findFinQuery, {
+                operatorCode: baseOperatorCode,
+                lancementCode: baseLancementCode,
+                date: baseDate
+            });
+
+            if (finRows.length > 0) {
+                const finId = finRows[0].NoEnreg;
+                console.log(`🔧 Mise à jour FIN existant NoEnreg=${finId} pour ${baseOperatorCode}/${baseLancementCode}`);
+                await executeQuery(`
+                    UPDATE [SEDI_APP_INDEPENDANTE].[dbo].[ABHISTORIQUE_OPERATEURS]
+                    SET HeureFin = @endTime,
+                        Statut = 'TERMINE'
+                    WHERE NoEnreg = @finId
+                `, { endTime: formattedEndTimeForFinEvent, finId });
+            } else {
+                console.log(`➕ Création d'un événement FIN pour ${baseOperatorCode}/${baseLancementCode} (heure fin: ${formattedEndTimeForFinEvent})`);
+                await executeQuery(`
+                    INSERT INTO [SEDI_APP_INDEPENDANTE].[dbo].[ABHISTORIQUE_OPERATEURS]
+                    (OperatorCode, CodeLanctImprod, CodeRubrique, Ident, Phase, Statut, HeureDebut, HeureFin, DateCreation, SessionId, RequestId, CreatedAt)
+                    VALUES (
+                        @operatorCode,
+                        @lancementCode,
+                        @codeRubrique,
+                        'FIN',
+                        @phase,
+                        'TERMINE',
+                        NULL,
+                        @endTime,
+                        CAST(@date AS DATE),
+                        @sessionId,
+                        @requestId,
+                        DATEADD(SECOND, DATEDIFF(SECOND, '00:00:00', @endTime), CAST(@date AS DATETIME2))
+                    )
+                `, {
+                    operatorCode: baseOperatorCode,
+                    lancementCode: baseLancementCode,
+                    codeRubrique: base.CodeRubrique || baseOperatorCode,
+                    phase: base.Phase || 'ADMIN',
+                    endTime: formattedEndTimeForFinEvent,
+                    date: baseDate,
+                    sessionId: base.SessionId || null,
+                    requestId: base.RequestId || null
+                });
+            }
+
+            // Optionnel: aligner le statut sur la ligne de base pour cohérence d'affichage
+            try {
+                await executeQuery(`
+                    UPDATE [SEDI_APP_INDEPENDANTE].[dbo].[ABHISTORIQUE_OPERATEURS]
+                    SET Statut = 'TERMINE'
+                    WHERE NoEnreg = @id
+                `, { id: parseInt(id) });
+            } catch (e) {
+                // non bloquant
+            }
+        }
         
         console.log(`✅ Opération ${id} modifiée avec succès`);
         
