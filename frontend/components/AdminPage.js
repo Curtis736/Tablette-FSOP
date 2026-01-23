@@ -296,6 +296,11 @@ class AdminPage {
             };
 
             const periodRange = (() => {
+                if (period === 'yesterday') {
+                    const y = new Date(now);
+                    y.setDate(y.getDate() - 1);
+                    return { date: toDateOnly(y) };
+                }
                 if (period === 'week') {
                     const start = startOfWeekMonday(now);
                     return { dateStart: toDateOnly(start), dateEnd: today };
