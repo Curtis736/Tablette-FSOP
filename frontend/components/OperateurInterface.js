@@ -81,6 +81,8 @@ class OperateurInterface {
         this.closeFsopBtn = document.getElementById('closeFsopBtn');
         this.fsopTemplateCodeInput = document.getElementById('fsopTemplateCode');
         this.fsopSerialNumberInput = document.getElementById('fsopSerialNumber');
+        this.fsopLotGroup = document.getElementById('fsopLotGroup');
+        this.fsopLotSelect = document.getElementById('fsopLotSelect');
         this.openFsopWordBtn = document.getElementById('openFsopWordBtn');
         this.openFsopFormBtn = document.getElementById('openFsopFormBtn');
         this.fsopFormModal = document.getElementById('fsopFormModal');
@@ -95,6 +97,7 @@ class OperateurInterface {
         // Instance du formulaire FSOP
         this.fsopForm = null;
         this.currentFsopData = null;
+        this.selectedFsopLot = null;
         
         // Initialiser le gestionnaire de scanner
         this.scannerManager = new ScannerManager();
@@ -317,6 +320,11 @@ class OperateurInterface {
         }
 
         this.fsopModal.style.display = 'flex';
+
+        // Charger les lots disponibles pour le lancement courant (si présent)
+        this.refreshFsopLots().catch((e) => {
+            console.warn('⚠️ Impossible de charger les lots FSOP:', e?.message || e);
+        });
         
         // Réattacher les listeners si l'élément n'était pas trouvé au démarrage
         if (!this.fsopSerialNumberInput) {
@@ -345,6 +353,61 @@ class OperateurInterface {
             this.fsopTemplateCodeInput.value = this.fsopTemplateCodeInput.value?.trim() || '';
             setTimeout(() => this.fsopTemplateCodeInput.focus(), 50);
         }
+    }
+
+    async refreshFsopLots() {
+        // Afficher un menu déroulant Lot si plusieurs lots possibles pour le LT courant.
+        const lt = this.getCurrentLaunchNumberForFsop();
+        if (!lt) {
+            if (this.fsopLotGroup) this.fsopLotGroup.style.display = 'none';
+            this.selectedFsopLot = null;
+            return;
+        }
+
+        if (!this.fsopLotGroup || !this.fsopLotSelect) return;
+
+        const result = await this.apiService.getFsopLots(lt);
+        const uniqueLots = result?.uniqueLots || [];
+        const items = result?.items || [];
+
+        // Aucun lot => cacher
+        if (!Array.isArray(uniqueLots) || uniqueLots.length === 0) {
+            this.fsopLotGroup.style.display = 'none';
+            this.selectedFsopLot = null;
+            return;
+        }
+
+        // Un seul lot => auto-sélection, cacher
+        if (uniqueLots.length === 1) {
+            this.selectedFsopLot = uniqueLots[0];
+            this.fsopLotGroup.style.display = 'none';
+            return;
+        }
+
+        // Plusieurs lots => afficher un dropdown
+        const options = [];
+        for (const it of items) {
+            const designation = it.designation || it.codeRubrique || 'Article';
+            for (const lot of (it.lots || [])) {
+                options.push({ label: `${designation} — ${lot}`, value: lot });
+            }
+        }
+
+        // Fallback si pas d'items: utiliser uniqueLots
+        if (options.length === 0) {
+            for (const lot of uniqueLots) options.push({ label: lot, value: lot });
+        }
+
+        this.fsopLotSelect.innerHTML = options
+            .map(o => `<option value="${this.escapeHtml(String(o.value))}">${this.escapeHtml(String(o.label))}</option>`)
+            .join('');
+
+        this.fsopLotGroup.style.display = 'block';
+        this.selectedFsopLot = options[0]?.value || null;
+
+        this.fsopLotSelect.onchange = () => {
+            this.selectedFsopLot = this.fsopLotSelect.value || null;
+        };
     }
 
     closeFsopModal() {
@@ -615,7 +678,12 @@ class OperateurInterface {
             const initialData = {
                 placeholders: {
                     '{{LT}}': lt,
-                    '{{SN}}': serialNumber
+                    '{{SN}}': serialNumber,
+                    ...(this.selectedFsopLot ? {
+                        '{{LOT}}': this.selectedFsopLot,
+                        '{{CODELOT}}': this.selectedFsopLot,
+                        '{{CODE_LOT}}': this.selectedFsopLot
+                    } : {})
                 },
                 launchNumber: lt, // Also pass as separate field for direct access
                 serialNumber: serialNumber, // Also pass as separate field for direct access

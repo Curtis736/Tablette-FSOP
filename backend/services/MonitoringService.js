@@ -194,7 +194,7 @@ class MonitoringService {
      */
     static async getTempsRecords(filters = {}) {
         try {
-            const { statutTraitement, operatorCode, lancementCode, date } = filters;
+            const { statutTraitement, operatorCode, lancementCode, date, dateStart, dateEnd } = filters;
             
             let whereConditions = [];
             const params = {};
@@ -218,9 +218,21 @@ class MonitoringService {
                 params.lancementCode = lancementCode;
             }
             
+            // Date filters:
+            // - date: exact day (YYYY-MM-DD)
+            // - dateStart/dateEnd: inclusive range (YYYY-MM-DD)
             if (date) {
                 whereConditions.push('CAST(t.DateCreation AS DATE) = @date');
                 params.date = date;
+            } else if (dateStart || dateEnd) {
+                if (dateStart) {
+                    whereConditions.push('CAST(t.DateCreation AS DATE) >= @dateStart');
+                    params.dateStart = dateStart;
+                }
+                if (dateEnd) {
+                    whereConditions.push('CAST(t.DateCreation AS DATE) <= @dateEnd');
+                    params.dateEnd = dateEnd;
+                }
             }
             
             const whereClause = whereConditions.length > 0 

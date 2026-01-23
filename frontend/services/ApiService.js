@@ -423,6 +423,11 @@ class ApiService {
         return this.post('/admin/monitoring/validate-and-transmit-batch', { tempsIds, triggerEdiJob, codeTache });
     }
 
+    // ===== FSOP =====
+    async getFsopLots(launchNumber) {
+        return this.get(`/fsop/lots/${encodeURIComponent(launchNumber)}`);
+    }
+
     // Export
     async exportOperations(date, format = 'csv') {
         return this.get(`/admin/export/${format}`, { date });

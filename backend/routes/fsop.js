@@ -13,6 +13,7 @@ const {
 } = require('../services/fsopWordService');
 const { readTemplatesFromExcel } = require('../services/fsopTemplatesExcelService');
 const { parseWordStructure } = require('../services/fsopWordParser');
+const { executeQuery } = require('../config/database');
 
 const router = express.Router();
 
@@ -68,6 +69,63 @@ function normalizeLaunchNumber(value) {
     }
     return raw;
 }
+
+/**
+ * GET /api/fsop/lots/:launchNumber
+ * Retourne les CodeLot trouvés dans SEDI_ERP.dbo.LCTC pour un lancement.
+ * - Si 1 seul lot distinct => l'UI peut l'auto-sélectionner
+ * - Si plusieurs lots => l'UI affiche un menu déroulant
+ */
+router.get('/lots/:launchNumber', async (req, res) => {
+    try {
+        const launchNumber = normalizeLaunchNumber(req.params.launchNumber);
+        if (!launchNumber) {
+            return res.status(400).json({ success: false, error: 'INVALID_LAUNCH_NUMBER' });
+        }
+
+        const rows = await executeQuery(`
+            SELECT
+                CodeRubrique,
+                Phase,
+                CodeLot
+            FROM [SEDI_ERP].[dbo].[LCTC]
+            WHERE CodeLancement = @launchNumber
+              AND CodeLot IS NOT NULL
+              AND LTRIM(RTRIM(CodeLot)) <> ''
+        `, { launchNumber });
+
+        const byRubrique = new Map(); // CodeRubrique -> Set(CodeLot)
+        const uniqueLots = new Set();
+
+        for (const r of rows || []) {
+            const codeRubrique = String(r.CodeRubrique || '').trim();
+            const codeLot = String(r.CodeLot || '').trim();
+            if (!codeRubrique || !codeLot) continue;
+            uniqueLots.add(codeLot);
+            if (!byRubrique.has(codeRubrique)) byRubrique.set(codeRubrique, new Set());
+            byRubrique.get(codeRubrique).add(codeLot);
+        }
+
+        const items = [...byRubrique.entries()]
+            .sort((a, b) => a[0].localeCompare(b[0]))
+            .map(([codeRubrique, lotSet]) => ({
+                designation: codeRubrique, // à défaut de table de désignation article
+                codeRubrique,
+                lots: [...lotSet].sort()
+            }));
+
+        return res.json({
+            success: true,
+            launchNumber,
+            uniqueLots: [...uniqueLots].sort(),
+            items,
+            count: uniqueLots.size
+        });
+    } catch (error) {
+        console.error('❌ Erreur récupération lots FSOP:', error);
+        return res.status(500).json({ success: false, error: 'INTERNAL_ERROR', message: error.message });
+    }
+});
 
 router.get('/debug/:launchNumber', async (req, res) => {
     try {

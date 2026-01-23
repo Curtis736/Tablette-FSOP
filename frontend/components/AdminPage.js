@@ -131,7 +131,16 @@ class AdminPage {
                 const statusFilter = document.getElementById('statusFilter');
                 if (statusFilter) {
                     statusFilter.addEventListener('change', () => {
-                        this.updateOperationsTable();
+                        // Recharger depuis le backend car ABTEMPS_OPERATEURS est filtré côté API
+                        this.loadData();
+                    });
+                }
+
+                // Filtre de période
+                const periodFilter = document.getElementById('periodFilter');
+                if (periodFilter) {
+                    periodFilter.addEventListener('change', () => {
+                        this.loadData();
                     });
                 }
                 
@@ -139,7 +148,8 @@ class AdminPage {
                 const searchFilter = document.getElementById('searchFilter');
                 if (searchFilter) {
                     searchFilter.addEventListener('input', () => {
-                        this.updateOperationsTable();
+                        // Recharger depuis le backend car le filtre lancement peut être appliqué côté API
+                        this.loadData();
                     });
                 }
                 
@@ -149,6 +159,7 @@ class AdminPage {
                     clearFiltersBtn.addEventListener('click', () => {
                         if (operatorSelect) operatorSelect.value = '';
                         if (statusFilter) statusFilter.value = '';
+                        if (periodFilter) periodFilter.value = 'today';
                         if (searchFilter) searchFilter.value = '';
                         this.loadData();
                     });
@@ -264,8 +275,38 @@ class AdminPage {
             this.isLoading = true;
             
             // Charger les opérateurs connectés et les données admin en parallèle avec timeout
-            // Utiliser la date du jour pour récupérer les données
-            const today = new Date().toISOString().split('T')[0];
+            // Appliquer la période sélectionnée pour la partie monitoring (ABTEMPS_OPERATEURS)
+            const now = new Date();
+            const today = now.toISOString().split('T')[0];
+            const period = document.getElementById('periodFilter')?.value || 'today';
+
+            const toDateOnly = (d) => d.toISOString().split('T')[0];
+            const startOfWeekMonday = (d) => {
+                const x = new Date(d);
+                x.setHours(0, 0, 0, 0);
+                const day = x.getDay(); // 0=dim, 1=lun...
+                const diff = (day === 0 ? -6 : 1) - day; // revenir au lundi
+                x.setDate(x.getDate() + diff);
+                return x;
+            };
+            const startOfMonth = (d) => {
+                const x = new Date(d.getFullYear(), d.getMonth(), 1);
+                x.setHours(0, 0, 0, 0);
+                return x;
+            };
+
+            const periodRange = (() => {
+                if (period === 'week') {
+                    const start = startOfWeekMonday(now);
+                    return { dateStart: toDateOnly(start), dateEnd: today };
+                }
+                if (period === 'month') {
+                    const start = startOfMonth(now);
+                    return { dateStart: toDateOnly(start), dateEnd: today };
+                }
+                // today / custom (non implémenté): fallback sur aujourd'hui
+                return { date: today };
+            })();
             
             // Créer des promesses avec timeout
             const timeoutPromise = new Promise((_, reject) => 
@@ -292,7 +333,7 @@ class AdminPage {
             const operatorCode = document.getElementById('operatorFilter')?.value || undefined;
             const lancementCode = document.getElementById('searchFilter')?.value?.trim() || undefined;
 
-            const filters = { date: today };
+            const filters = { ...periodRange };
             if (statutTraitement) filters.statutTraitement = statutTraitement;
             if (operatorCode) filters.operatorCode = operatorCode;
             if (lancementCode) filters.lancementCode = lancementCode;

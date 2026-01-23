@@ -3302,13 +3302,15 @@ router.get('/monitoring', async (req, res) => {
         res.setHeader('Pragma', 'no-cache');
         res.setHeader('Expires', '0');
 
-        const { statutTraitement, operatorCode, lancementCode, date } = req.query;
+        const { statutTraitement, operatorCode, lancementCode, date, dateStart, dateEnd } = req.query;
         
         const filters = {};
         if (statutTraitement !== undefined) filters.statutTraitement = statutTraitement;
         if (operatorCode) filters.operatorCode = operatorCode;
         if (lancementCode) filters.lancementCode = lancementCode;
         if (date) filters.date = date;
+        if (dateStart) filters.dateStart = dateStart;
+        if (dateEnd) filters.dateEnd = dateEnd;
         
         const result = await MonitoringService.getTempsRecords(filters);
         
