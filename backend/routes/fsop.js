@@ -94,24 +94,28 @@ router.get('/lots/:launchNumber', async (req, res) => {
               AND LTRIM(RTRIM(CodeLot)) <> ''
         `, { launchNumber });
 
-        const byRubrique = new Map(); // CodeRubrique -> Set(CodeLot)
+        const byRubrique = new Map(); // CodeRubrique -> { lots:Set, phases:Set }
         const uniqueLots = new Set();
 
         for (const r of rows || []) {
             const codeRubrique = String(r.CodeRubrique || '').trim();
+            const phase = String(r.Phase || '').trim();
             const codeLot = String(r.CodeLot || '').trim();
             if (!codeRubrique || !codeLot) continue;
             uniqueLots.add(codeLot);
-            if (!byRubrique.has(codeRubrique)) byRubrique.set(codeRubrique, new Set());
-            byRubrique.get(codeRubrique).add(codeLot);
+            if (!byRubrique.has(codeRubrique)) byRubrique.set(codeRubrique, { lots: new Set(), phases: new Set() });
+            const entry = byRubrique.get(codeRubrique);
+            entry.lots.add(codeLot);
+            if (phase) entry.phases.add(phase);
         }
 
         const items = [...byRubrique.entries()]
             .sort((a, b) => a[0].localeCompare(b[0]))
-            .map(([codeRubrique, lotSet]) => ({
-                designation: codeRubrique, // à défaut de table de désignation article
+            .map(([codeRubrique, entry]) => ({
+                designation: codeRubrique, // faute de désignation détaillée par ligne dans ce contexte
                 codeRubrique,
-                lots: [...lotSet].sort()
+                phases: [...entry.phases].sort(),
+                lots: [...entry.lots].sort()
             }));
 
         return res.json({

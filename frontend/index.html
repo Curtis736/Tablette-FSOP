@@ -439,22 +439,20 @@
                     </div>
                     <div class="input-group" id="fsopLotGroup" style="display:none;">
                         <i class="fas fa-box"></i>
-                        <select id="fsopLotSelect">
-                            <option value="">Lot (auto)</option>
-                        </select>
+                        <div id="fsopLotList" style="width:100%;"></div>
                     </div>
                     <div class="fsop-actions">
                         <button id="openFsopFormBtn" class="btn-primary">
                             <i class="fas fa-edit"></i>
                             Remplir dans l'interface
                         </button>
-                        <button id="openFsopWordBtn" class="btn-secondary">
-                            <i class="fas fa-download"></i>
-                            Ouvrir FSOP (Word)
+                        <button id="generateFsopLotBtn" class="btn-secondary">
+                            <i class="fas fa-box"></i>
+                            Générer Code Lot
                         </button>
                     </div>
                     <div class="help-text fsop-help">
-                        <small><i class="fas fa-info-circle"></i> Remplissez le formulaire directement dans l'interface ou téléchargez le Word pour l'ouvrir manuellement.</small>
+                        <small><i class="fas fa-info-circle"></i> Remplissez le formulaire dans l'interface. Le Code Lot est récupéré depuis l'ERP.</small>
                     </div>
                 </div>
             </div>

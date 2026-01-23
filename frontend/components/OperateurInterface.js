@@ -82,8 +82,8 @@ class OperateurInterface {
         this.fsopTemplateCodeInput = document.getElementById('fsopTemplateCode');
         this.fsopSerialNumberInput = document.getElementById('fsopSerialNumber');
         this.fsopLotGroup = document.getElementById('fsopLotGroup');
-        this.fsopLotSelect = document.getElementById('fsopLotSelect');
-        this.openFsopWordBtn = document.getElementById('openFsopWordBtn');
+        this.fsopLotList = document.getElementById('fsopLotList');
+        this.generateFsopLotBtn = document.getElementById('generateFsopLotBtn');
         this.openFsopFormBtn = document.getElementById('openFsopFormBtn');
         this.fsopFormModal = document.getElementById('fsopFormModal');
         this.closeFsopFormBtn = document.getElementById('closeFsopFormBtn');
@@ -98,6 +98,7 @@ class OperateurInterface {
         this.fsopForm = null;
         this.currentFsopData = null;
         this.selectedFsopLot = null;
+        this.selectedFsopLotsByRubrique = {}; // CodeRubrique -> CodeLot (choix utilisateur)
         
         // Initialiser le gestionnaire de scanner
         this.scannerManager = new ScannerManager();
@@ -206,8 +207,8 @@ class OperateurInterface {
             });
         }
 
-        if (this.openFsopWordBtn) {
-            this.openFsopWordBtn.addEventListener('click', () => this.handleOpenFsopWord());
+        if (this.generateFsopLotBtn) {
+            this.generateFsopLotBtn.addEventListener('click', () => this.handleGenerateFsopLot());
         }
 
         if (this.openFsopFormBtn) {
@@ -356,15 +357,17 @@ class OperateurInterface {
     }
 
     async refreshFsopLots() {
-        // Afficher un menu déroulant Lot si plusieurs lots possibles pour le LT courant.
+        // Lister toutes les "désignations" (CodeRubrique) du lancement et permettre le choix
+        // du CodeLot lorsqu'il y en a plusieurs sur une même désignation.
         const lt = this.getCurrentLaunchNumberForFsop();
         if (!lt) {
             if (this.fsopLotGroup) this.fsopLotGroup.style.display = 'none';
             this.selectedFsopLot = null;
+            this.selectedFsopLotsByRubrique = {};
             return;
         }
 
-        if (!this.fsopLotGroup || !this.fsopLotSelect) return;
+        if (!this.fsopLotGroup || !this.fsopLotList) return;
 
         const result = await this.apiService.getFsopLots(lt);
         const uniqueLots = result?.uniqueLots || [];
@@ -374,40 +377,122 @@ class OperateurInterface {
         if (!Array.isArray(uniqueLots) || uniqueLots.length === 0) {
             this.fsopLotGroup.style.display = 'none';
             this.selectedFsopLot = null;
+            this.selectedFsopLotsByRubrique = {};
             return;
         }
 
-        // Un seul lot => auto-sélection, cacher
-        if (uniqueLots.length === 1) {
-            this.selectedFsopLot = uniqueLots[0];
-            this.fsopLotGroup.style.display = 'none';
-            return;
-        }
+        // Construire une liste par CodeRubrique
+        const safeItems = Array.isArray(items) ? items : [];
+        const rowsHtml = [];
 
-        // Plusieurs lots => afficher un dropdown
-        const options = [];
-        for (const it of items) {
-            const designation = it.designation || it.codeRubrique || 'Article';
-            for (const lot of (it.lots || [])) {
-                options.push({ label: `${designation} — ${lot}`, value: lot });
+        // Reset selections if LT changed / refresh
+        this.selectedFsopLotsByRubrique = this.selectedFsopLotsByRubrique || {};
+
+        for (const it of safeItems) {
+            const codeRubrique = String(it.codeRubrique || '').trim();
+            const designation = String(it.designation || it.codeRubrique || '').trim() || 'Désignation';
+            const phases = Array.isArray(it.phases) ? it.phases.filter(Boolean) : [];
+            const lots = Array.isArray(it.lots) ? it.lots.filter(Boolean) : [];
+            if (!codeRubrique || lots.length === 0) continue;
+
+            const label = phases.length > 0
+                ? `${designation} (Phase ${phases.join(', ')})`
+                : designation;
+
+            if (lots.length === 1) {
+                const chosen = lots[0];
+                this.selectedFsopLotsByRubrique[codeRubrique] = chosen;
+                rowsHtml.push(`
+                    <div class="fsop-lot-row" style="display:flex; gap:10px; align-items:center; padding:6px 0; border-bottom:1px solid #eee;">
+                        <div style="flex:1; font-size:0.95rem;">${this.escapeHtml(label)}</div>
+                        <div style="min-width:140px; font-weight:600;">${this.escapeHtml(chosen)}</div>
+                    </div>
+                `);
+            } else {
+                const existing = this.selectedFsopLotsByRubrique[codeRubrique];
+                const initial = existing && lots.includes(existing) ? existing : lots[0];
+                this.selectedFsopLotsByRubrique[codeRubrique] = initial;
+
+                rowsHtml.push(`
+                    <div class="fsop-lot-row" style="display:flex; gap:10px; align-items:center; padding:6px 0; border-bottom:1px solid #eee;">
+                        <div style="flex:1; font-size:0.95rem;">${this.escapeHtml(label)}</div>
+                        <select data-code-rubrique="${this.escapeHtml(codeRubrique)}" style="min-width:180px; padding:8px; border-radius:8px; border:1px solid #ddd;">
+                            ${lots.map(l => `<option value="${this.escapeHtml(String(l))}" ${l === initial ? 'selected' : ''}>${this.escapeHtml(String(l))}</option>`).join('')}
+                        </select>
+                    </div>
+                `);
             }
         }
 
-        // Fallback si pas d'items: utiliser uniqueLots
-        if (options.length === 0) {
-            for (const lot of uniqueLots) options.push({ label: lot, value: lot });
+        // Fallback: si pas d'items, afficher juste les lots uniques
+        if (rowsHtml.length === 0) {
+            const lots = uniqueLots;
+            if (lots.length === 1) {
+                this.selectedFsopLot = lots[0];
+                this.fsopLotGroup.style.display = 'none';
+                return;
+            }
+            rowsHtml.push(`
+                <div class="fsop-lot-row" style="display:flex; gap:10px; align-items:center; padding:6px 0;">
+                    <div style="flex:1; font-size:0.95rem;">Code Lot</div>
+                    <select data-code-rubrique="__GLOBAL__" style="min-width:180px; padding:8px; border-radius:8px; border:1px solid #ddd;">
+                        ${lots.map(l => `<option value="${this.escapeHtml(String(l))}">${this.escapeHtml(String(l))}</option>`).join('')}
+                    </select>
+                </div>
+            `);
         }
 
-        this.fsopLotSelect.innerHTML = options
-            .map(o => `<option value="${this.escapeHtml(String(o.value))}">${this.escapeHtml(String(o.label))}</option>`)
-            .join('');
-
+        this.fsopLotList.innerHTML = rowsHtml.join('');
         this.fsopLotGroup.style.display = 'block';
-        this.selectedFsopLot = options[0]?.value || null;
 
-        this.fsopLotSelect.onchange = () => {
-            this.selectedFsopLot = this.fsopLotSelect.value || null;
-        };
+        // Bind events (delegation)
+        this.fsopLotList.querySelectorAll('select[data-code-rubrique]').forEach(sel => {
+            sel.onchange = () => {
+                const cr = sel.getAttribute('data-code-rubrique') || '';
+                const lot = sel.value || null;
+                if (cr) this.selectedFsopLotsByRubrique[cr] = lot;
+                this.selectedFsopLot = lot; // lot "courant" (celui choisi en dernier)
+            };
+        });
+
+        // Définir un lot "courant" par défaut si on en a exactement un au total
+        if (uniqueLots.length === 1) {
+            this.selectedFsopLot = uniqueLots[0];
+        }
+    }
+
+    async handleGenerateFsopLot() {
+        const lt = this.getCurrentLaunchNumberForFsop();
+        if (!lt) {
+            this.notificationManager.warning('Saisissez un LT valide avant de générer le Code Lot');
+            return;
+        }
+
+        const originalHtml = this.generateFsopLotBtn?.innerHTML;
+        try {
+            if (this.generateFsopLotBtn) {
+                this.generateFsopLotBtn.disabled = true;
+                this.generateFsopLotBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Génération...';
+            }
+
+            await this.refreshFsopLots();
+
+            if (this.selectedFsopLot) {
+                this.notificationManager.success(`Code Lot: ${this.selectedFsopLot}`, 4000);
+            } else if (this.fsopLotGroup && this.fsopLotGroup.style.display !== 'none') {
+                this.notificationManager.info('Sélectionnez un Code Lot dans la liste', 4000);
+            } else {
+                this.notificationManager.warning('Aucun Code Lot trouvé pour ce lancement', 5000);
+            }
+        } catch (e) {
+            console.error('❌ Erreur génération Code Lot:', e);
+            this.notificationManager.error('Erreur lors de la récupération du Code Lot');
+        } finally {
+            if (this.generateFsopLotBtn) {
+                this.generateFsopLotBtn.disabled = false;
+                this.generateFsopLotBtn.innerHTML = originalHtml || '<i class="fas fa-box"></i> Générer Code Lot';
+            }
+        }
     }
 
     closeFsopModal() {
