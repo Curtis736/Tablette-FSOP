@@ -1409,6 +1409,55 @@ class OperateurInterface {
             
         } catch (error) {
             console.error('Erreur:', error);
+
+            // Fallback UX: si le backend exige CodeOperation et fournit la liste, proposer un choix popup
+            if (error?.errorCode === 'CODE_OPERATION_REQUIRED' && Array.isArray(error?.errorData?.steps) && error.errorData.steps.length > 0) {
+                try {
+                    const steps = error.errorData.steps;
+                    const lines = steps.map((s, idx) => {
+                        const op = String(s.CodeOperation || '').trim();
+                        const phase = String(s.Phase || '').trim();
+                        const rubrique = String(s.CodeRubrique || '').trim();
+                        return `${idx + 1}) ${phase || 'Phase ?'} — ${op}${rubrique ? ` (${rubrique})` : ''}`;
+                    });
+
+                    const answer = window.prompt(
+                        `Plusieurs étapes de fabrication sont disponibles. Choisis le numéro de l'étape:\n\n${lines.join('\n')}\n\nNuméro:`
+                    );
+
+                    const choiceIdx = Number.parseInt(String(answer || '').trim(), 10) - 1;
+                    const chosen = steps[choiceIdx];
+                    const chosenOp = chosen ? String(chosen.CodeOperation || '').trim() : '';
+
+                    if (!chosen || !chosenOp) {
+                        this.notificationManager.error('Aucune étape sélectionnée');
+                        return;
+                    }
+
+                    this.selectedCodeOperation = chosenOp;
+                    this.availableSteps = steps;
+
+                    // Réessayer le démarrage avec l'étape choisie
+                    const operatorCode = this.operator.code || this.operator.id;
+                    await this.apiService.startOperation(operatorCode, code, { codeOperation: this.selectedCodeOperation });
+                    this.notificationManager.success('Opération démarrée');
+
+                    this.currentLancement = { CodeLancement: code };
+                    this.startTimer();
+                    this.startBtn.disabled = true;
+                    this.pauseBtn.disabled = false;
+                    this.stopBtn.disabled = false;
+                    this.statusDisplay.textContent = 'En cours';
+                    this.lancementInput.disabled = true;
+                    this.isPaused = false;
+                    this.loadOperatorHistory();
+                    return;
+                } catch (e) {
+                    console.error('Erreur fallback sélection étape:', e);
+                    // Continuer vers erreur générique ci-dessous
+                }
+            }
+
             this.notificationManager.error(error.message || 'Erreur de connexion');
         }
     }
