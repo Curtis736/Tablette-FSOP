@@ -254,6 +254,40 @@ body {
     position: relative;
 }
 
+/* Select/textarea should match input-group layout (avoid icon/text overlap) */
+.input-group select,
+.input-group textarea {
+    width: 100%;
+    padding: 15px 15px 15px 50px; /* leave space for the left icon */
+    border: 2px solid #e1e5e9;
+    border-radius: 10px;
+    font-size: 1.1rem;
+    transition: all 0.3s ease;
+    background: white;
+    pointer-events: auto;
+    z-index: 1;
+    position: relative;
+    line-height: 1.2;
+    min-height: 52px;
+}
+
+.input-group select:focus,
+.input-group textarea:focus {
+    outline: none;
+    border-color: #667eea;
+    box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.1);
+}
+
+/* FSOP lot list inside input-group: add left padding so it doesn't sit under the icon */
+#fsopLotList {
+    padding-left: 50px;
+}
+
+/* Ensure the operation-step select keeps icon spacing even if inline styles exist */
+#operationStepSelect {
+    padding-left: 50px !important;
+}
+
 /* Espace pour le bouton scanner uniquement dans l'input de lancement */
 .input-group.with-scanner input {
     padding-right: 70px;
