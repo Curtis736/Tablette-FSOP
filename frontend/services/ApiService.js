@@ -282,20 +282,24 @@ class ApiService {
     }
 
     // Opérations
-    async startOperation(operatorId, lancementCode) {
-        return this.post('/operators/start', { operatorId, lancementCode });
+    async getLancementSteps(lancementCode) {
+        return this.get(`/operators/steps/${encodeURIComponent(lancementCode)}`);
     }
 
-    async pauseOperation(operatorId, lancementCode) {
-        return this.post('/operators/pause', { operatorId, lancementCode });
+    async startOperation(operatorId, lancementCode, { codeOperation } = {}) {
+        return this.post('/operators/start', { operatorId, lancementCode, codeOperation });
     }
 
-    async resumeOperation(operatorId, lancementCode) {
-        return this.post('/operators/resume', { operatorId, lancementCode });
+    async pauseOperation(operatorId, lancementCode, { codeOperation } = {}) {
+        return this.post('/operators/pause', { operatorId, lancementCode, codeOperation });
     }
 
-    async stopOperation(operatorId, lancementCode) {
-        return this.post('/operators/stop', { operatorId, lancementCode });
+    async resumeOperation(operatorId, lancementCode, { codeOperation } = {}) {
+        return this.post('/operators/resume', { operatorId, lancementCode, codeOperation });
+    }
+
+    async stopOperation(operatorId, lancementCode, { codeOperation } = {}) {
+        return this.post('/operators/stop', { operatorId, lancementCode, codeOperation });
     }
 
     async getCurrentOperation(operatorId) {

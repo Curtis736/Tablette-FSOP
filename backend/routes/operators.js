@@ -112,9 +112,11 @@ function formatDateTime(dateTime) {
 function processLancementEvents(events) {
     const lancementGroups = {};
     
-    // Grouper les événements par lancement et opérateur
+    // Grouper les événements par lancement + opérateur + étape (Phase + CodeRubrique)
     events.forEach(event => {
-        const key = `${event.CodeLanctImprod}_${event.OperatorCode}`;  // ✅ CORRECTION : Utiliser OperatorCode
+        const phase = (event.Phase || '').toString().trim();
+        const rubrique = (event.CodeRubrique || '').toString().trim();
+        const key = `${event.CodeLanctImprod}_${event.OperatorCode}_${phase}_${rubrique}`;
         if (!lancementGroups[key]) {
             lancementGroups[key] = [];
         }
@@ -156,6 +158,7 @@ function processLancementEvents(events) {
             endTime: finEvent && finEvent.HeureFin ? formatDateTime(finEvent.HeureFin) : null,
             status: status,
             phase: firstEvent.Phase || 'PRODUCTION',
+            codeRubrique: firstEvent.CodeRubrique || null,
             lastUpdate: lastEvent.DateCreation
         };
         
@@ -563,13 +566,55 @@ async function quickCleanup() {
     }
 }
 
+// ===== Étapes de fabrication (CodeOperation) =====
+async function getLctcStepsForLaunch(lancementCode) {
+    const rows = await executeQuery(`
+        SELECT DISTINCT
+            LTRIM(RTRIM(CodeOperation)) AS CodeOperation,
+            LTRIM(RTRIM(Phase)) AS Phase,
+            LTRIM(RTRIM(CodeRubrique)) AS CodeRubrique
+        FROM [SEDI_ERP].[dbo].[LCTC]
+        WHERE CodeLancement = @lancementCode
+          AND TypeRubrique = 'O'
+          AND LancementSolde = 'N'
+          AND CodeOperation IS NOT NULL
+          AND LTRIM(RTRIM(CodeOperation)) <> ''
+        ORDER BY LTRIM(RTRIM(Phase)), LTRIM(RTRIM(CodeOperation)), LTRIM(RTRIM(CodeRubrique))
+    `, { lancementCode });
+    return rows || [];
+}
+
+async function resolveStepContext(lancementCode, codeOperation = null) {
+    const steps = await getLctcStepsForLaunch(lancementCode);
+    if (!codeOperation) {
+        return { steps, context: steps[0] || null };
+    }
+    const match = steps.find(s => String(s.CodeOperation || '').trim() === String(codeOperation || '').trim());
+    return { steps, context: match || null };
+}
+
+// GET /api/operators/steps/:lancementCode - Liste des étapes de fabrication (CodeOperation)
+router.get('/steps/:lancementCode', async (req, res) => {
+    try {
+        const lancementCode = String(req.params.lancementCode || '').trim().toUpperCase();
+        if (!/^LT\\d{7,8}$/.test(lancementCode)) {
+            return res.status(400).json({ success: false, error: 'INVALID_LAUNCH_NUMBER' });
+        }
+        const steps = await getLctcStepsForLaunch(lancementCode);
+        return res.json({ success: true, lancementCode, steps, count: steps.length });
+    } catch (error) {
+        console.error('❌ Erreur récupération étapes LCTC:', error);
+        return res.status(500).json({ success: false, error: 'INTERNAL_ERROR', message: error.message });
+    }
+});
+
 // POST /api/operators/start - Démarrer un lancement
 router.post('/start', async (req, res) => {
     try {
         // Nettoyage rapide avant l'opération
         await quickCleanup();
         
-        const { operatorId, lancementCode } = req.body;
+        const { operatorId, lancementCode, codeOperation } = req.body;
         
         if (!operatorId || !lancementCode) {
             return res.status(400).json({
@@ -621,6 +666,31 @@ router.post('/start', async (req, res) => {
         
         const requestId = req.audit?.requestId || generateRequestId();
 
+        // Résoudre Phase/CodeRubrique via CodeOperation (si plusieurs étapes)
+        const { steps, context } = await resolveStepContext(lancementCode, codeOperation);
+        if (steps.length > 1 && !codeOperation) {
+            return res.status(400).json({
+                success: false,
+                error: 'CODE_OPERATION_REQUIRED',
+                message: 'Plusieurs étapes de fabrication sont disponibles. Choisissez une étape (CodeOperation).',
+                lancementCode,
+                steps
+            });
+        }
+        if (steps.length > 0 && !context) {
+            return res.status(400).json({
+                success: false,
+                error: 'INVALID_CODE_OPERATION',
+                message: `CodeOperation invalide pour ${lancementCode}`,
+                lancementCode,
+                received: { codeOperation },
+                steps
+            });
+        }
+
+        const phase = context?.Phase || 'PRODUCTION';
+        const codeRubrique = context?.CodeRubrique || operatorId;
+
         // ✅ AUTORISATION : Plusieurs opérateurs peuvent travailler sur le même lancement simultanément
         // La vérification de conflit a été désactivée pour permettre la collaboration multi-opérateurs
         // Ancienne vérification commentée :
@@ -659,9 +729,9 @@ router.post('/start', async (req, res) => {
             VALUES (
                 @operatorId,
                 @lancementCode,
-                @operatorId,
+                @codeRubrique,
                 'DEBUT',
-                'PRODUCTION',
+                @phase,
                 'EN_COURS',
                 CAST(@currentTime AS TIME),
                 NULL,
@@ -675,6 +745,8 @@ router.post('/start', async (req, res) => {
         await executeNonQuery(insertQuery, { 
             operatorId, 
             lancementCode, 
+            codeRubrique,
+            phase,
             currentTime, 
             currentDate,
             sessionId: activeSession ? activeSession.SessionId : null,
@@ -711,7 +783,7 @@ router.post('/start', async (req, res) => {
 // POST /api/operators/pause - Mettre en pause un lancement
 router.post('/pause', async (req, res) => {
     try {
-        const { operatorId, lancementCode } = req.body;
+        const { operatorId, lancementCode, codeOperation } = req.body;
         
         // 🔒 VÉRIFICATION DE SÉCURITÉ : S'assurer que l'opérateur possède ce lancement
         // Vérifier qu'il existe un événement DEBUT pour ce lancement et cet opérateur aujourd'hui
@@ -762,6 +834,18 @@ router.post('/pause', async (req, res) => {
         const { time: currentTime, date: currentDate } = TimeUtils.getCurrentDateTime();
         
         TimeUtils.log(`⏸️ Pause lancement ${lancementCode} par opérateur ${operatorId} à ${currentTime}`);
+
+        // Garder Phase/CodeRubrique cohérents avec l'étape choisie (si fournie)
+        let phase = 'PRODUCTION';
+        let codeRubrique = operatorId;
+        if (codeOperation) {
+            const { steps, context } = await resolveStepContext(lancementCode, codeOperation);
+            if (steps.length > 0 && !context) {
+                return res.status(400).json({ success: false, error: 'INVALID_CODE_OPERATION', lancementCode, steps });
+            }
+            phase = context?.Phase || phase;
+            codeRubrique = context?.CodeRubrique || codeRubrique;
+        }
         
         // Enregistrer l'événement PAUSE dans ABHISTORIQUE_OPERATEURS avec l'heure française
         const insertQuery = `
@@ -770,9 +854,9 @@ router.post('/pause', async (req, res) => {
             VALUES (
                 '${operatorId}',
                 '${lancementCode}',
-                '${operatorId}',
+                '${codeRubrique}',
                 'PAUSE',
-                'PRODUCTION',
+                '${phase}',
                 'EN_PAUSE',
                 CAST('${currentTime}' AS TIME),
                 NULL,
@@ -807,7 +891,7 @@ router.post('/pause', async (req, res) => {
 // POST /api/operators/resume - Reprendre un lancement
 router.post('/resume', async (req, res) => {
     try {
-        const { operatorId, lancementCode } = req.body;
+        const { operatorId, lancementCode, codeOperation } = req.body;
         
         // 🔒 VÉRIFICATION DE SÉCURITÉ : S'assurer que l'opérateur possède ce lancement
         // Vérifier qu'il existe un événement DEBUT pour ce lancement et cet opérateur aujourd'hui
@@ -858,6 +942,17 @@ router.post('/resume', async (req, res) => {
         const { time: currentTime, date: currentDate } = TimeUtils.getCurrentDateTime();
         
         TimeUtils.log(`▶️ Reprise lancement ${lancementCode} par opérateur ${operatorId} à ${currentTime}`);
+
+        let phase = 'PRODUCTION';
+        let codeRubrique = operatorId;
+        if (codeOperation) {
+            const { steps, context } = await resolveStepContext(lancementCode, codeOperation);
+            if (steps.length > 0 && !context) {
+                return res.status(400).json({ success: false, error: 'INVALID_CODE_OPERATION', lancementCode, steps });
+            }
+            phase = context?.Phase || phase;
+            codeRubrique = context?.CodeRubrique || codeRubrique;
+        }
         
         // Enregistrer l'événement REPRISE dans ABHISTORIQUE_OPERATEURS avec l'heure française
         const insertQuery = `
@@ -866,9 +961,9 @@ router.post('/resume', async (req, res) => {
             VALUES (
                 '${operatorId}',
                 '${lancementCode}',
-                '${operatorId}',
+                '${codeRubrique}',
                 'REPRISE',
-                'PRODUCTION',
+                '${phase}',
                 'EN_COURS',
                 CAST('${currentTime}' AS TIME),
                 NULL,
@@ -903,7 +998,7 @@ router.post('/resume', async (req, res) => {
 // POST /api/operators/stop - Terminer un lancement
 router.post('/stop', async (req, res) => {
     try {
-        const { operatorId, lancementCode } = req.body;
+        const { operatorId, lancementCode, codeOperation } = req.body;
         
         // 🔒 VÉRIFICATION DE SÉCURITÉ : S'assurer que l'opérateur possède ce lancement
         // Vérifier qu'il existe un événement DEBUT pour ce lancement et cet opérateur aujourd'hui
@@ -925,24 +1020,6 @@ router.post('/stop', async (req, res) => {
             });
         }
         
-        // Vérifier qu'il n'y a pas déjà un événement FIN (pour éviter les doublons)
-        const finCheck = `
-            SELECT TOP 1 Ident
-            FROM [SEDI_APP_INDEPENDANTE].[dbo].[ABHISTORIQUE_OPERATEURS]
-            WHERE CodeLanctImprod = @lancementCode
-              AND OperatorCode = @operatorId
-              AND Ident = 'FIN'
-              AND CAST(DateCreation AS DATE) = CAST(GETDATE() AS DATE)
-        `;
-        const finExists = await executeQuery(finCheck, { operatorId, lancementCode });
-        if (finExists.length > 0) {
-            return res.status(403).json({
-                success: false,
-                error: `Ce lancement est déjà terminé.`,
-                security: 'ALREADY_FINISHED'
-            });
-        }
-        
         if (!operatorId || !lancementCode) {
             return res.status(400).json({
                 success: false,
@@ -954,6 +1031,37 @@ router.post('/stop', async (req, res) => {
         const { time: currentTime, date: currentDate } = TimeUtils.getCurrentDateTime();
         
         TimeUtils.log(`🏁 Arrêt lancement ${lancementCode} par opérateur ${operatorId} à ${currentTime}`);
+
+        let phase = 'PRODUCTION';
+        let codeRubrique = operatorId;
+        if (codeOperation) {
+            const { steps, context } = await resolveStepContext(lancementCode, codeOperation);
+            if (steps.length > 0 && !context) {
+                return res.status(400).json({ success: false, error: 'INVALID_CODE_OPERATION', lancementCode, steps });
+            }
+            phase = context?.Phase || phase;
+            codeRubrique = context?.CodeRubrique || codeRubrique;
+        }
+
+        // Vérifier qu'il n'y a pas déjà un événement FIN pour CETTE étape (Phase + CodeRubrique) aujourd'hui
+        const finCheck = `
+            SELECT TOP 1 Ident
+            FROM [SEDI_APP_INDEPENDANTE].[dbo].[ABHISTORIQUE_OPERATEURS]
+            WHERE CodeLanctImprod = @lancementCode
+              AND OperatorCode = @operatorId
+              AND Ident = 'FIN'
+              AND Phase = @phase
+              AND CodeRubrique = @codeRubrique
+              AND CAST(DateCreation AS DATE) = CAST(GETDATE() AS DATE)
+        `;
+        const finExists = await executeQuery(finCheck, { operatorId, lancementCode, phase, codeRubrique });
+        if (finExists.length > 0) {
+            return res.status(403).json({
+                success: false,
+                error: `Cette étape est déjà terminée.`,
+                security: 'ALREADY_FINISHED'
+            });
+        }
         
         // Enregistrer l'événement FIN dans ABHISTORIQUE_OPERATEURS avec l'heure française
         const insertQuery = `
@@ -962,9 +1070,9 @@ router.post('/stop', async (req, res) => {
             VALUES (
                 '${operatorId}',
                 '${lancementCode}',
-                '${operatorId}',
+                '${codeRubrique}',
                 'FIN',
-                'PRODUCTION',
+                '${phase}',
                 'TERMINE',
                 NULL,
                 CAST('${currentTime}' AS TIME),

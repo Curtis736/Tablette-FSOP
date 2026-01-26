@@ -124,57 +124,65 @@ class ConsolidationService {
             // 5. Calculer les durées (utiliser le service unifié)
             const durations = DurationCalculationService.calculateDurations(events);
             
-            // 6. Récupérer Phase et CodeRubrique depuis V_LCTC (comme demandé par Franck MAILLARD)
-            // IMPORTANT: Phase et CodeRubrique doivent être récupérés IDENTIQUEMENT depuis V_LCTC
-            // Ils font partie des clés ERP et ne doivent pas avoir de fallback
-            let phase = null;
-            let codeRubrique = null;
+            // 6. Déterminer Phase et CodeRubrique (clés ERP)
+            // - Si les événements contiennent déjà Phase/CodeRubrique (issus de l'ERP), on les utilise.
+            // - Sinon, fallback historique : récupérer depuis V_LCTC.
+            let phase = debutEvent?.Phase || null;
+            let codeRubrique = debutEvent?.CodeRubrique || null;
+
+            const hasErpKeysFromEvents = Boolean(
+                phase &&
+                codeRubrique &&
+                String(codeRubrique).trim() !== '' &&
+                String(phase).trim() !== '' &&
+                // Ancienne implémentation mettait CodeRubrique = operatorCode => ignorer ce cas
+                String(codeRubrique).trim() !== String(operatorCode).trim()
+            );
             
-            try {
-                const vlctcQuery = `
-                    SELECT TOP 1 Phase, CodeRubrique
-                    FROM [SEDI_APP_INDEPENDANTE].[dbo].[V_LCTC]
-                    WHERE CodeLancement = @lancementCode
-                `;
-                
-                const vlctcResult = await executeQuery(vlctcQuery, { lancementCode });
-                
-                if (vlctcResult && vlctcResult.length > 0) {
-                    // Prendre les valeurs EXACTEMENT telles quelles depuis V_LCTC (sans transformation)
-                    phase = vlctcResult[0].Phase;
-                    codeRubrique = vlctcResult[0].CodeRubrique;
-                    console.log(`✅ Phase et CodeRubrique récupérés depuis V_LCTC: Phase=${phase}, CodeRubrique=${codeRubrique}`);
-                } else {
-                    // Si V_LCTC ne trouve pas le lancement, c'est probablement normal :
-                    // - Le lancement n'a pas TypeRubrique='O' (c'est un composant, pas un temps)
-                    // - Le lancement est soldé (LancementSolde <> 'N')
-                    // - Le lancement n'existe pas dans SEDI_ERP.dbo.LCTC
-                    // Ces opérations ne doivent PAS être consolidées selon les spécifications de Franck MAILLARD
-                    console.warn(`⚠️ Lancement ${lancementCode} non trouvé dans V_LCTC`);
-                    console.warn(`⚠️ Raisons possibles: TypeRubrique <> 'O' (composant), LancementSolde <> 'N' (soldé), ou lancement inexistant dans SEDI_ERP`);
-                    console.warn(`⚠️ Cette opération ne peut pas être consolidée car Phase et CodeRubrique sont requis (clés ERP)`);
+            if (!hasErpKeysFromEvents) {
+                try {
+                    const vlctcQuery = `
+                        SELECT TOP 1 Phase, CodeRubrique
+                        FROM [SEDI_APP_INDEPENDANTE].[dbo].[V_LCTC]
+                        WHERE CodeLancement = @lancementCode
+                    `;
+                    
+                    const vlctcResult = await executeQuery(vlctcQuery, { lancementCode });
+                    
+                    if (vlctcResult && vlctcResult.length > 0) {
+                        // Prendre les valeurs EXACTEMENT telles quelles depuis V_LCTC (sans transformation)
+                        phase = vlctcResult[0].Phase;
+                        codeRubrique = vlctcResult[0].CodeRubrique;
+                        console.log(`✅ Phase et CodeRubrique récupérés depuis V_LCTC: Phase=${phase}, CodeRubrique=${codeRubrique}`);
+                    } else {
+                        console.warn(`⚠️ Lancement ${lancementCode} non trouvé dans V_LCTC`);
+                        console.warn(`⚠️ Raisons possibles: TypeRubrique <> 'O' (composant), LancementSolde <> 'N' (soldé), ou lancement inexistant dans SEDI_ERP`);
+                        console.warn(`⚠️ Cette opération ne peut pas être consolidée car Phase et CodeRubrique sont requis (clés ERP)`);
+                        return {
+                            success: false,
+                            skipped: true,
+                            skipReason: 'VLCTC_MISSING',
+                            tempsId: null,
+                            error: null,
+                            message: `Lancement ${lancementCode} ignoré: absent de V_LCTC (souvent normal si composant TypeRubrique <> 'O' ou lancement soldé LancementSolde <> 'N').`,
+                            warnings: [
+                                'Impossible de récupérer Phase et CodeRubrique depuis V_LCTC',
+                                'C\'est normal si le lancement est un composant (TypeRubrique <> \'O\') ou s\'il est soldé',
+                                'Ces opérations ne doivent pas être consolidées selon les spécifications ERP'
+                            ]
+                        };
+                    }
+                } catch (error) {
+                    console.error(`❌ Erreur lors de la récupération de Phase/CodeRubrique depuis V_LCTC:`, error);
                     return {
                         success: false,
-                        skipped: true,
-                        skipReason: 'VLCTC_MISSING',
                         tempsId: null,
-                        error: null,
-                        message: `Lancement ${lancementCode} ignoré: absent de V_LCTC (souvent normal si composant TypeRubrique <> 'O' ou lancement soldé LancementSolde <> 'N').`,
-                        warnings: [
-                            'Impossible de récupérer Phase et CodeRubrique depuis V_LCTC',
-                            'C\'est normal si le lancement est un composant (TypeRubrique <> \'O\') ou s\'il est soldé',
-                            'Ces opérations ne doivent pas être consolidées selon les spécifications ERP'
-                        ]
+                        error: `Erreur lors de la récupération de Phase/CodeRubrique depuis V_LCTC: ${error.message}`,
+                        warnings: ['Erreur lors de la récupération depuis V_LCTC']
                     };
                 }
-            } catch (error) {
-                console.error(`❌ Erreur lors de la récupération de Phase/CodeRubrique depuis V_LCTC:`, error);
-                return {
-                    success: false,
-                    tempsId: null,
-                    error: `Erreur lors de la récupération de Phase/CodeRubrique depuis V_LCTC: ${error.message}`,
-                    warnings: ['Erreur lors de la récupération depuis V_LCTC']
-                };
+            } else {
+                console.log(`✅ Phase/CodeRubrique déjà présents dans les événements: Phase=${phase}, CodeRubrique=${codeRubrique}`);
             }
             
             // 7. Préparer les valeurs pour l'insertion
@@ -387,11 +395,11 @@ class ConsolidationService {
                             message: result.message || null,
                             warnings: result.warnings || []
                         });
-                    } else {
-                        results.errors.push({
-                            operation: op,
-                            error: result.error || 'Consolidation échouée'
-                        });
+                } else {
+                    results.errors.push({
+                        operation: op,
+                        error: result.error || 'Consolidation échouée'
+                    });
                     }
                 }
             } catch (error) {

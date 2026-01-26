@@ -55,6 +55,10 @@ class OperateurInterface {
         this.timerDisplay = document.getElementById('timerDisplay');
         this.statusDisplay = document.getElementById('statusDisplay');
         this.endTimeDisplay = document.getElementById('endTimeDisplay');
+
+        // Étapes de fabrication (CodeOperation)
+        this.operationStepGroup = document.getElementById('operationStepGroup');
+        this.operationStepSelect = document.getElementById('operationStepSelect');
         
         // Éléments pour l'historique
         this.refreshHistoryBtn = document.getElementById('refreshHistoryBtn');
@@ -99,6 +103,10 @@ class OperateurInterface {
         this.currentFsopData = null;
         this.selectedFsopLot = null;
         this.selectedFsopLotsByRubrique = {}; // CodeRubrique -> CodeLot (choix utilisateur)
+
+        // Étapes / fabrication
+        this.availableSteps = [];
+        this.selectedCodeOperation = null;
         
         // Initialiser le gestionnaire de scanner
         this.scannerManager = new ScannerManager();
@@ -1204,6 +1212,9 @@ class OperateurInterface {
                 <small>✅ Lancement validé dans LCTE - Prêt à démarrer</small>
             `;
             this.notificationManager.success('Lancement trouvé et validé dans la base de données');
+
+            // Charger les étapes de fabrication (CodeOperation) si plusieurs
+            await this.refreshOperationSteps(code);
             
             // Recharger les commentaires pour ce lancement
             await this.loadComments();
@@ -1245,7 +1256,53 @@ class OperateurInterface {
             setTimeout(() => {
                 this.lancementInput.value = '';
                 this.controlsSection.style.display = 'none';
+                this.hideOperationSteps();
             }, 3000);
+        }
+    }
+
+    hideOperationSteps() {
+        if (this.operationStepGroup) this.operationStepGroup.style.display = 'none';
+        if (this.operationStepSelect) {
+            this.operationStepSelect.innerHTML = '<option value="">Choisir une étape (CodeOperation)</option>';
+        }
+        this.availableSteps = [];
+        this.selectedCodeOperation = null;
+    }
+
+    async refreshOperationSteps(lancementCode) {
+        if (!this.operationStepGroup || !this.operationStepSelect) return;
+
+        try {
+            const res = await this.apiService.getLancementSteps(lancementCode);
+            const steps = res?.steps || res?.data?.steps || [];
+            this.availableSteps = Array.isArray(steps) ? steps : [];
+
+            // 0 ou 1 étape => cacher le dropdown, auto-sélection
+            if (this.availableSteps.length <= 1) {
+                this.selectedCodeOperation = this.availableSteps[0]?.CodeOperation || null;
+                this.operationStepGroup.style.display = 'none';
+                return;
+            }
+
+            const optionsHtml = this.availableSteps.map(s => {
+                const op = String(s.CodeOperation || '').trim();
+                const phase = String(s.Phase || '').trim();
+                const rubrique = String(s.CodeRubrique || '').trim();
+                const label = `${phase || 'Phase ?'} — ${op}${rubrique ? ` (${rubrique})` : ''}`;
+                return `<option value="${this.escapeHtml(op)}">${this.escapeHtml(label)}</option>`;
+            }).join('');
+
+            this.operationStepSelect.innerHTML = optionsHtml;
+            this.operationStepGroup.style.display = 'flex';
+            this.selectedCodeOperation = this.availableSteps[0]?.CodeOperation || null;
+
+            this.operationStepSelect.onchange = () => {
+                this.selectedCodeOperation = this.operationStepSelect.value || null;
+            };
+        } catch (e) {
+            console.warn('⚠️ Impossible de récupérer les étapes (CodeOperation):', e?.message || e);
+            this.hideOperationSteps();
         }
     }
 
@@ -1325,11 +1382,16 @@ class OperateurInterface {
             
             if (this.isPaused) {
                 // Reprendre l'opération en pause
-                await this.apiService.resumeOperation(operatorCode, code);
+                await this.apiService.resumeOperation(operatorCode, code, { codeOperation: this.selectedCodeOperation });
                 this.notificationManager.success('Opération reprise');
             } else {
+                // Si plusieurs étapes existent, exiger un choix
+                if (Array.isArray(this.availableSteps) && this.availableSteps.length > 1 && !this.selectedCodeOperation) {
+                    this.notificationManager.error('Veuillez choisir une étape (CodeOperation)');
+                    return;
+                }
                 // Démarrer nouvelle opération
-                await this.apiService.startOperation(operatorCode, code);
+                await this.apiService.startOperation(operatorCode, code, { codeOperation: this.selectedCodeOperation });
                 this.notificationManager.success('Opération démarrée');
             }
             
@@ -1358,7 +1420,7 @@ class OperateurInterface {
         
         try {
             const operatorCode = this.operator.code || this.operator.id;
-            await this.apiService.pauseOperation(operatorCode, this.currentLancement.CodeLancement);
+            await this.apiService.pauseOperation(operatorCode, this.currentLancement.CodeLancement, { codeOperation: this.selectedCodeOperation });
             
             this.pauseTimer();
             this.startBtn.disabled = false;
@@ -1387,7 +1449,7 @@ class OperateurInterface {
             this.setFinalEndTime();
             
             const operatorCode = this.operator.code || this.operator.id;
-            const result = await this.apiService.stopOperation(operatorCode, this.currentLancement.CodeLancement);
+            const result = await this.apiService.stopOperation(operatorCode, this.currentLancement.CodeLancement, { codeOperation: this.selectedCodeOperation });
             
             this.stopTimer();
             this.resetControls();
@@ -1399,6 +1461,7 @@ class OperateurInterface {
             this.lancementInput.disabled = false;
             this.lancementInput.placeholder = "Saisir un nouveau code de lancement...";
             this.controlsSection.style.display = 'none';
+            this.hideOperationSteps();
             
             // Actualiser l'historique après arrêt
             this.loadOperatorHistory();
@@ -1417,6 +1480,7 @@ class OperateurInterface {
                 this.lancementInput.disabled = false;
                 this.lancementInput.placeholder = "Saisir un nouveau code de lancement...";
                 this.controlsSection.style.display = 'none';
+                this.hideOperationSteps();
                 this.loadOperatorHistory();
             } else {
             this.notificationManager.error(error.message || 'Erreur de connexion');

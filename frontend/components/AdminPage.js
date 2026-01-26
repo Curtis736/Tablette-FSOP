@@ -406,7 +406,9 @@ class AdminPage {
             const normalizeKey = (op) => {
                 const operator = (op?.OperatorCode ?? op?.operatorId ?? op?.OperatorId ?? '').toString().trim();
                 const lancement = (op?.LancementCode ?? op?.lancementCode ?? op?.lancementCode ?? '').toString().trim().toUpperCase();
-                return `${operator}_${lancement}`;
+                const phase = (op?.Phase ?? op?.phase ?? '').toString().trim().toUpperCase();
+                const rubrique = (op?.CodeRubrique ?? op?.codeRubrique ?? '').toString().trim().toUpperCase();
+                return `${operator}_${lancement}_${phase}_${rubrique}`;
             };
 
             const toHHmm = (dt) => {
