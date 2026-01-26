@@ -588,11 +588,12 @@ async function getLctcStepsForLaunch(lancementCode) {
 
 async function resolveStepContext(lancementCode, codeOperation = null) {
     const steps = await getLctcStepsForLaunch(lancementCode);
+    const uniqueOps = [...new Set((steps || []).map(s => String(s?.CodeOperation || '').trim()).filter(Boolean))];
     if (!codeOperation) {
-        return { steps, context: steps[0] || null };
+        return { steps, uniqueOps, context: steps[0] || null };
     }
     const match = steps.find(s => String(s.CodeOperation || '').trim() === String(codeOperation || '').trim());
-    return { steps, context: match || null };
+    return { steps, uniqueOps, context: match || null };
 }
 
 // GET /api/operators/steps/:lancementCode - Liste des étapes de fabrication (CodeOperation)
@@ -603,7 +604,15 @@ router.get('/steps/:lancementCode', async (req, res) => {
             return res.status(400).json({ success: false, error: 'INVALID_LAUNCH_NUMBER' });
         }
         const steps = await getLctcStepsForLaunch(lancementCode);
-        return res.json({ success: true, lancementCode, steps, count: steps.length });
+        const uniqueOps = [...new Set((steps || []).map(s => String(s?.CodeOperation || '').trim()).filter(Boolean))];
+        return res.json({
+            success: true,
+            lancementCode,
+            steps,
+            uniqueOperations: uniqueOps,
+            operationCount: uniqueOps.length,
+            count: steps.length
+        });
     } catch (error) {
         console.error('❌ Erreur récupération étapes LCTC:', error);
         return res.status(500).json({ success: false, error: 'INTERNAL_ERROR', message: error.message });
@@ -669,14 +678,17 @@ router.post('/start', async (req, res) => {
         const requestId = req.audit?.requestId || generateRequestId();
 
         // Résoudre Phase/CodeRubrique via CodeOperation (si plusieurs étapes)
-        const { steps, context } = await resolveStepContext(lancementCode, codeOperation);
-        if (steps.length > 1 && !codeOperation) {
+        const { steps, uniqueOps, context } = await resolveStepContext(lancementCode, codeOperation);
+        // Ne demander un choix que s'il y a plusieurs fabrications (CodeOperation distinctes)
+        if (uniqueOps.length > 1 && !codeOperation) {
             return res.status(400).json({
                 success: false,
                 error: 'CODE_OPERATION_REQUIRED',
                 message: 'Plusieurs étapes de fabrication sont disponibles. Choisissez une étape (CodeOperation).',
                 lancementCode,
-                steps
+                steps,
+                uniqueOperations: uniqueOps,
+                operationCount: uniqueOps.length
             });
         }
         if (steps.length > 0 && !context) {

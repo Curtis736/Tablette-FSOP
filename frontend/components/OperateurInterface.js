@@ -1276,26 +1276,31 @@ class OperateurInterface {
         try {
             const res = await this.apiService.getLancementSteps(lancementCode);
             const steps = res?.steps || res?.data?.steps || [];
+            const uniqueOperations = res?.uniqueOperations || res?.data?.uniqueOperations || [];
             this.availableSteps = Array.isArray(steps) ? steps : [];
 
-            // 0 ou 1 étape => cacher le dropdown, auto-sélection
-            if (this.availableSteps.length <= 1) {
-                this.selectedCodeOperation = this.availableSteps[0]?.CodeOperation || null;
+            // 0 ou 1 fabrication (CodeOperation distincte) => cacher, auto-sélection
+            const ops = Array.isArray(uniqueOperations) && uniqueOperations.length > 0
+                ? uniqueOperations
+                : [...new Set(this.availableSteps.map(s => String(s?.CodeOperation || '').trim()).filter(Boolean))];
+
+            if (ops.length <= 1) {
+                this.selectedCodeOperation = ops[0] || null;
                 this.operationStepGroup.style.display = 'none';
                 return;
             }
 
-            const optionsHtml = this.availableSteps.map(s => {
-                const op = String(s.CodeOperation || '').trim();
-                const phase = String(s.Phase || '').trim();
-                const rubrique = String(s.CodeRubrique || '').trim();
-                const label = `${phase || 'Phase ?'} — ${op}${rubrique ? ` (${rubrique})` : ''}`;
+            // Plusieurs fabrications => afficher dropdown sur CodeOperation uniques
+            const optionsHtml = ops.map(op => {
+                const rows = this.availableSteps.filter(s => String(s?.CodeOperation || '').trim() === op);
+                const phases = [...new Set(rows.map(r => String(r?.Phase || '').trim()).filter(Boolean))];
+                const label = `${phases.length ? phases.join(', ') : 'Phase ?'} — ${op}`;
                 return `<option value="${this.escapeHtml(op)}">${this.escapeHtml(label)}</option>`;
             }).join('');
 
             this.operationStepSelect.innerHTML = optionsHtml;
             this.operationStepGroup.style.display = 'flex';
-            this.selectedCodeOperation = this.availableSteps[0]?.CodeOperation || null;
+            this.selectedCodeOperation = ops[0] || null;
 
             this.operationStepSelect.onchange = () => {
                 this.selectedCodeOperation = this.operationStepSelect.value || null;
