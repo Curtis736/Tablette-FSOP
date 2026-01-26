@@ -1389,10 +1389,40 @@ router.put('/operations/:id', async (req, res) => {
 // POST /api/admin/operations - Ajouter une nouvelle opération
 router.post('/operations', async (req, res) => {
     try {
-        const { operatorId, lancementCode, startTime, status = 'DEBUT', phase = '' } = req.body;
+        const { operatorId, lancementCode, startTime, status = 'DEBUT', phase = '', codeOperation } = req.body;
         
         console.log('=== AJOUT NOUVELLE OPERATION ===');
         console.log('Données reçues:', req.body);
+
+        // Helper: récupérer les étapes de fabrication (CodeOperation) côté ERP pour décider si on doit demander un choix
+        const getStepsForLaunch = async (lt) => {
+            const rows = await executeQuery(`
+                SELECT DISTINCT
+                    LTRIM(RTRIM(C.CodeOperation)) AS CodeOperation,
+                    LTRIM(RTRIM(C.Phase)) AS Phase,
+                    LTRIM(RTRIM(C.CodeRubrique)) AS CodeRubrique
+                FROM [SEDI_ERP].[dbo].[LCTC] C
+                INNER JOIN [SEDI_ERP].[dbo].[LCTE] E
+                    ON E.CodeLancement = C.CodeLancement
+                    AND E.LancementSolde = 'N'
+                WHERE C.CodeLancement = @lancementCode
+                  AND C.TypeRubrique = 'O'
+                  AND C.CodeOperation IS NOT NULL
+                  AND LTRIM(RTRIM(C.CodeOperation)) <> ''
+                  AND UPPER(LTRIM(RTRIM(C.CodeOperation))) COLLATE Latin1_General_CI_AI <> 'SECHAGE'
+                ORDER BY LTRIM(RTRIM(C.Phase)), LTRIM(RTRIM(C.CodeOperation)), LTRIM(RTRIM(C.CodeRubrique))
+            `, { lancementCode: lt });
+            const steps = rows || [];
+            const uniqueOps = [...new Set(steps.map(s => String(s?.CodeOperation || '').trim()).filter(Boolean))];
+            return { steps, uniqueOps };
+        };
+
+        const resolveStep = async (lt, op) => {
+            const { steps, uniqueOps } = await getStepsForLaunch(lt);
+            const normalized = String(op || '').trim();
+            const ctx = steps.find(s => String(s?.CodeOperation || '').trim() === normalized) || null;
+            return { steps, uniqueOps, ctx };
+        };
         
         // Valider le numéro de lancement dans LCTE (optionnel pour l'admin)
         const validation = await validateLancement(lancementCode);
@@ -1416,12 +1446,53 @@ router.post('/operations', async (req, res) => {
             lancementInfo = validation.data;
             console.log('✅ Lancement validé:', lancementInfo);
         }
+
+        // Si lancement valide, appliquer la logique "choisir uniquement si plusieurs fabrications"
+        // et résoudre Phase/CodeRubrique depuis l'ERP quand codeOperation est fourni.
+        let erpPhase = null;
+        let erpRubrique = null;
+
+        if (validation.valid) {
+            const { steps, uniqueOps, ctx } = await resolveStep(lancementCode, codeOperation);
+            if (uniqueOps.length > 1 && !codeOperation) {
+                return res.status(400).json({
+                    success: false,
+                    error: 'CODE_OPERATION_REQUIRED',
+                    message: 'Plusieurs fabrications sont disponibles. Choisissez une fabrication (CodeOperation).',
+                    lancementCode,
+                    steps,
+                    uniqueOperations: uniqueOps,
+                    operationCount: uniqueOps.length
+                });
+            }
+            if (codeOperation) {
+                if (!ctx) {
+                    return res.status(400).json({
+                        success: false,
+                        error: 'INVALID_CODE_OPERATION',
+                        message: `CodeOperation invalide pour ${lancementCode}`,
+                        lancementCode,
+                        received: { codeOperation },
+                        steps,
+                        uniqueOperations: uniqueOps,
+                        operationCount: uniqueOps.length
+                    });
+                }
+                erpPhase = ctx.Phase || null;
+                erpRubrique = ctx.CodeRubrique || null;
+            } else if (uniqueOps.length === 1) {
+                // Auto-sélection implicite pour cohérence des clés ERP
+                const only = steps[0] || null;
+                erpPhase = only?.Phase || null;
+                erpRubrique = only?.CodeRubrique || null;
+            }
+        }
         
         // Insérer dans ABHISTORIQUE_OPERATEURS
-        // CodeRubrique est utilisé pour identifier l'opérateur qui effectue l'opération
-        const codeRubrique = phase || operatorId;
+        // Clés ERP: Phase + CodeRubrique (si disponibles via CodeOperation), sinon fallback admin.
+        const codeRubrique = erpRubrique || phase || operatorId;
         const finalStatus = status === 'DEBUT' ? 'EN_COURS' : status === 'FIN' ? 'TERMINE' : status;
-        const finalPhase = phase || 'ADMIN';
+        const finalPhase = erpPhase || phase || 'ADMIN';
 
         // Corrélation requête/session (peut être NULL côté admin si pas de session active)
         const requestId = req.audit?.requestId || generateRequestId();

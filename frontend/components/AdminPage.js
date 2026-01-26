@@ -960,14 +960,42 @@ class AdminPage {
             
             const lancementCode = prompt('Code lancement :');
             if (!lancementCode) return;
-            
-            const phase = prompt('Phase (optionnel) :') || '';
+
+            // Étape / fabrication (CodeOperation) : ne demander que s'il y a plusieurs fabrications distinctes
+            let codeOperation = null;
+            try {
+                const stepsRes = await this.apiService.getLancementSteps(lancementCode);
+                const uniqueOps = stepsRes?.uniqueOperations || [];
+                const opCount = stepsRes?.operationCount ?? uniqueOps.length;
+
+                if (Array.isArray(uniqueOps) && opCount > 1) {
+                    const lines = uniqueOps.map((op, idx) => `${idx + 1}) ${op}`);
+                    const answer = window.prompt(
+                        `Plusieurs fabrications sont disponibles pour ${lancementCode}.\nChoisis le numéro:\n\n${lines.join('\n')}\n\nNuméro:`
+                    );
+                    const choiceIdx = Number.parseInt(String(answer || '').trim(), 10) - 1;
+                    const chosen = uniqueOps[choiceIdx];
+                    if (!chosen) {
+                        this.notificationManager.error('Aucune fabrication sélectionnée (CodeOperation)');
+                        return;
+                    }
+                    codeOperation = chosen;
+                } else if (Array.isArray(uniqueOps) && uniqueOps.length === 1) {
+                    codeOperation = uniqueOps[0];
+                }
+            } catch (e) {
+                // Best effort: si l'endpoint steps échoue, on laisse l'admin créer une ligne "ADMIN"
+                console.warn('⚠️ Impossible de récupérer les étapes (CodeOperation) pour admin:', e?.message || e);
+            }
+
+            const phase = prompt('Phase (optionnel - laisser vide pour ERP/auto) :') || '';
             
             // Créer une nouvelle opération
             const newOperation = {
                 operatorId: operatorCode,
                 lancementCode: lancementCode,
                 phase: phase,
+                codeOperation,
                 startTime: new Date().toISOString(),
                 status: 'DEBUT'
             };
