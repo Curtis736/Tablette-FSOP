@@ -599,7 +599,7 @@ async function resolveStepContext(lancementCode, codeOperation = null) {
 router.get('/steps/:lancementCode', async (req, res) => {
     try {
         const lancementCode = String(req.params.lancementCode || '').trim().toUpperCase();
-        if (!/^LT\\d{7,8}$/.test(lancementCode)) {
+        if (!/^LT\d{7,8}$/.test(lancementCode)) {
             return res.status(400).json({ success: false, error: 'INVALID_LAUNCH_NUMBER' });
         }
         const steps = await getLctcStepsForLaunch(lancementCode);
