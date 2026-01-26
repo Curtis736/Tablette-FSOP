@@ -581,6 +581,8 @@ async function getLctcStepsForLaunch(lancementCode) {
           AND C.TypeRubrique = 'O'
           AND C.CodeOperation IS NOT NULL
           AND LTRIM(RTRIM(C.CodeOperation)) <> ''
+          -- Ne jamais proposer "Séchage" (accents/casse ignorés)
+          AND UPPER(LTRIM(RTRIM(C.CodeOperation))) COLLATE Latin1_General_CI_AI <> 'SECHAGE'
         ORDER BY LTRIM(RTRIM(Phase)), LTRIM(RTRIM(CodeOperation)), LTRIM(RTRIM(CodeRubrique))
     `, { lancementCode });
     return rows || [];
@@ -678,6 +680,13 @@ router.post('/start', async (req, res) => {
         const requestId = req.audit?.requestId || generateRequestId();
 
         // Résoudre Phase/CodeRubrique via CodeOperation (si plusieurs étapes)
+        if (codeOperation && String(codeOperation).trim().toUpperCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '') === 'SECHAGE') {
+            return res.status(400).json({
+                success: false,
+                error: 'FORBIDDEN_CODE_OPERATION',
+                message: 'CodeOperation "Séchage" est interdit.'
+            });
+        }
         const { steps, uniqueOps, context } = await resolveStepContext(lancementCode, codeOperation);
         // Ne demander un choix que s'il y a plusieurs fabrications (CodeOperation distinctes)
         if (uniqueOps.length > 1 && !codeOperation) {
