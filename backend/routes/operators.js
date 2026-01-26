@@ -573,12 +573,14 @@ async function getLctcStepsForLaunch(lancementCode) {
             LTRIM(RTRIM(CodeOperation)) AS CodeOperation,
             LTRIM(RTRIM(Phase)) AS Phase,
             LTRIM(RTRIM(CodeRubrique)) AS CodeRubrique
-        FROM [SEDI_ERP].[dbo].[LCTC]
-        WHERE CodeLancement = @lancementCode
-          AND TypeRubrique = 'O'
-          AND LancementSolde = 'N'
-          AND CodeOperation IS NOT NULL
-          AND LTRIM(RTRIM(CodeOperation)) <> ''
+        FROM [SEDI_ERP].[dbo].[LCTC] C
+        INNER JOIN [SEDI_ERP].[dbo].[LCTE] E
+            ON E.CodeLancement = C.CodeLancement
+            AND E.LancementSolde = 'N'
+        WHERE C.CodeLancement = @lancementCode
+          AND C.TypeRubrique = 'O'
+          AND C.CodeOperation IS NOT NULL
+          AND LTRIM(RTRIM(C.CodeOperation)) <> ''
         ORDER BY LTRIM(RTRIM(Phase)), LTRIM(RTRIM(CodeOperation)), LTRIM(RTRIM(CodeRubrique))
     `, { lancementCode });
     return rows || [];
