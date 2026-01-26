@@ -1193,6 +1193,9 @@ router.put('/operations/:id', async (req, res) => {
             }
             params.endTime = formattedEndTime;
             formattedEndTimeForFinEvent = formattedEndTime;
+            // Update the current record too (harmless if not FIN),
+            // and we'll also propagate to the FIN event after we load the base record.
+            updateFields.push('HeureFin = @endTime');
             console.log(`🔧 endTime: ${endTime} -> ${params.endTime}`);
         }
         
@@ -1271,6 +1274,76 @@ router.put('/operations/:id', async (req, res) => {
         const baseOperatorCode = base.OperatorCode;
         const baseLancementCode = base.CodeLanctImprod;
         const baseDate = base.DateCreation; // DATE
+        const basePhase = base.Phase;
+        const baseCodeRubrique = base.CodeRubrique;
+
+        // If user edits endTime, ensure the FIN event is updated (or created) for the same (LT + operator + phase + rubrique + date)
+        if (params.endTime && base.Ident !== 'FIN') {
+            try {
+                const finLookup = `
+                    SELECT TOP 1 NoEnreg
+                    FROM [SEDI_APP_INDEPENDANTE].[dbo].[ABHISTORIQUE_OPERATEURS]
+                    WHERE OperatorCode = @operatorCode
+                      AND CodeLanctImprod = @lancementCode
+                      AND Ident = 'FIN'
+                      AND Phase = @phase
+                      AND CodeRubrique = @codeRubrique
+                      AND CAST(DateCreation AS DATE) = CAST(@date AS DATE)
+                    ORDER BY CreatedAt DESC, NoEnreg DESC
+                `;
+                const finRows = await executeQuery(finLookup, {
+                    operatorCode: baseOperatorCode,
+                    lancementCode: baseLancementCode,
+                    phase: basePhase,
+                    codeRubrique: baseCodeRubrique,
+                    date: baseDate
+                });
+
+                if (finRows.length > 0) {
+                    const finId = finRows[0].NoEnreg;
+                    await executeQuery(
+                        `UPDATE [SEDI_APP_INDEPENDANTE].[dbo].[ABHISTORIQUE_OPERATEURS]
+                         SET HeureFin = @endTime
+                         WHERE NoEnreg = @id`,
+                        { id: finId, endTime: params.endTime }
+                    );
+                    console.log(`✅ HeureFin propagée sur l'événement FIN NoEnreg=${finId}`);
+                } else {
+                    // Create FIN event if missing (keeps UI and data consistent)
+                    const insertFin = `
+                        INSERT INTO [SEDI_APP_INDEPENDANTE].[dbo].[ABHISTORIQUE_OPERATEURS]
+                        (OperatorCode, CodeLanctImprod, CodeRubrique, Ident, Phase, Statut, HeureDebut, HeureFin, DateCreation, SessionId, RequestId, CreatedAt)
+                        VALUES (
+                            @operatorCode,
+                            @lancementCode,
+                            @codeRubrique,
+                            'FIN',
+                            @phase,
+                            'TERMINE',
+                            NULL,
+                            @endTime,
+                            CAST(@date AS DATE),
+                            @sessionId,
+                            @requestId,
+                            GETDATE()
+                        )
+                    `;
+                    await executeQuery(insertFin, {
+                        operatorCode: baseOperatorCode,
+                        lancementCode: baseLancementCode,
+                        codeRubrique: baseCodeRubrique,
+                        phase: basePhase,
+                        endTime: params.endTime,
+                        date: baseDate,
+                        sessionId: base.SessionId || null,
+                        requestId: base.RequestId || null
+                    });
+                    console.log(`✅ Événement FIN créé car absent (propagation endTime)`);
+                }
+            } catch (e) {
+                console.warn(`⚠️ Impossible de propager endTime sur FIN: ${e.message}`);
+            }
+        }
 
         // 🔒 RÈGLE: interdiction de passer une opération en TERMINE sans endTime (sinon EndTime restera vide)
         const desiredStatus = req.body.status ? String(req.body.status).toUpperCase().trim() : null;
