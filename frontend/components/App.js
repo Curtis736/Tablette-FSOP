@@ -1,5 +1,6 @@
 // Classe principale de l'application
-import OperateurInterface from './OperateurInterface.js?v=20251021-scanner-fix';
+// Bump version to bust browser cache when OperateurInterface changes (CodeOperation dropdown etc.)
+import OperateurInterface from './OperateurInterface.js?v=20260126-codeoperation';
 import AdminPage from './AdminPage.js?v=20260107-monitoring2';
 import ApiService from '../services/ApiService.js?v=20260107-monitoring2';
 import StorageService from '../services/StorageService.js?v=20251007-final';
