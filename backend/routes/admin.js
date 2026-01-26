@@ -1227,9 +1227,11 @@ router.put('/operations/:id', async (req, res) => {
         }
         
         if (updateFields.length === 0) {
-            return res.status(400).json({ 
-                success: false, 
-                error: 'Aucun champ à mettre à jour' 
+            // No-op update: avoid failing the UI when nothing actually changed
+            return res.json({
+                success: true,
+                message: 'Aucune modification',
+                noChange: true
             });
         }
         
