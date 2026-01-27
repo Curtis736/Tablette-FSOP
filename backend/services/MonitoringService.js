@@ -317,7 +317,8 @@ class MonitoringService {
 
             // Charger les valeurs actuelles (pour recalcul cohérent si Start/End changent)
             const currentQuery = `
-                SELECT TempsId, DateCreation, StartTime, EndTime, TotalDuration, PauseDuration, ProductiveDuration
+                SELECT TempsId, DateCreation, OperatorCode, LancementCode, Phase, CodeRubrique,
+                       StartTime, EndTime, TotalDuration, PauseDuration, ProductiveDuration
                 FROM [SEDI_APP_INDEPENDANTE].[dbo].[ABTEMPS_OPERATEURS]
                 WHERE TempsId = @tempsId
             `;
@@ -329,6 +330,23 @@ class MonitoringService {
             // Construire la requête de mise à jour
             const updateFields = [];
             const updateParams = { tempsId };
+
+            // Normaliser (supporte lancementCode ou LancementCode)
+            const requestedLancementCode = corrections?.LancementCode ?? corrections?.lancementCode;
+            const requestedLancementCodeTrimmed = requestedLancementCode !== undefined && requestedLancementCode !== null
+                ? String(requestedLancementCode).trim().toUpperCase()
+                : undefined;
+
+            if (requestedLancementCodeTrimmed !== undefined) {
+                if (!/^LT\d{7,8}$/.test(requestedLancementCodeTrimmed)) {
+                    return {
+                        success: false,
+                        error: 'Format de lancement invalide (attendu: LT########)'
+                    };
+                }
+                updateFields.push('LancementCode = @newLancementCode');
+                updateParams.newLancementCode = requestedLancementCodeTrimmed;
+            }
             
             if (corrections.Phase !== undefined) {
                 updateFields.push('Phase = @phase');
@@ -471,6 +489,38 @@ class MonitoringService {
             `;
             
             const result = await executeNonQuery(updateQuery, updateParams);
+
+            // Si le lancement a changé, déplacer aussi les événements ABHISTORIQUE de la même étape (opérateur+phase+rubrique+jour)
+            if (requestedLancementCodeTrimmed !== undefined && current) {
+                const oldLt = String(current.LancementCode || '').trim().toUpperCase();
+                const newLt = requestedLancementCodeTrimmed;
+                if (oldLt && newLt && oldLt !== newLt) {
+                    const operatorCode = String(current.OperatorCode || '').trim();
+                    const phase = String((corrections?.Phase ?? current.Phase ?? '')).trim();
+                    const codeRubrique = String((corrections?.CodeRubrique ?? current.CodeRubrique ?? '')).trim();
+                    const date = dateOnly;
+
+                    if (operatorCode && date) {
+                        const moveQuery = `
+                            UPDATE [SEDI_APP_INDEPENDANTE].[dbo].[ABHISTORIQUE_OPERATEURS]
+                            SET CodeLanctImprod = @newLt
+                            WHERE OperatorCode = @operatorCode
+                              AND CodeLanctImprod = @oldLt
+                              AND ISNULL(LTRIM(RTRIM(Phase)), '') = ISNULL(LTRIM(RTRIM(@phase)), '')
+                              AND ISNULL(LTRIM(RTRIM(CodeRubrique)), '') = ISNULL(LTRIM(RTRIM(@codeRubrique)), '')
+                              AND CAST(DateCreation AS DATE) = @date
+                        `;
+                        await executeNonQuery(moveQuery, {
+                            newLt,
+                            operatorCode,
+                            oldLt,
+                            phase: phase || null,
+                            codeRubrique: codeRubrique || null,
+                            date
+                        });
+                    }
+                }
+            }
             
             if (result.rowsAffected > 0) {
                 console.log(`✅ Enregistrement ${tempsId} corrigé avec succès`);

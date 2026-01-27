@@ -1698,18 +1698,21 @@ class AdminPage {
             return;
         }
 
+        const currentLancementCode = record?.LancementCode || '';
         const currentPhase = record?.Phase || '';
         const currentCodeRubrique = record?.CodeRubrique || '';
         const currentStartTime = record?.StartTime ? this.formatDateTime(record.StartTime) : '';
         const currentEndTime = record?.EndTime ? this.formatDateTime(record.EndTime) : '';
 
         // Correction simple via prompts (Phase/CodeRubrique/Start/End)
+        const lancementCode = prompt(`Lancement (actuel: ${currentLancementCode || 'vide'}) :`, currentLancementCode);
         const phase = prompt(`Phase (actuel: ${currentPhase || 'vide'}) :`, currentPhase);
         const codeRubrique = prompt(`CodeRubrique (actuel: ${currentCodeRubrique || 'vide'}) :`, currentCodeRubrique);
         const startTime = prompt(`Heure début (actuel: ${currentStartTime || 'vide'}) (YYYY-MM-DDTHH:mm:ss ou HH:mm) :`, currentStartTime);
         const endTime = prompt(`Heure fin (actuel: ${currentEndTime || 'vide'}) (YYYY-MM-DDTHH:mm:ss ou HH:mm) :`, currentEndTime);
 
         const corrections = {};
+        if (lancementCode !== null && lancementCode !== '' && lancementCode !== currentLancementCode) corrections.LancementCode = lancementCode;
         if (phase !== null && phase !== '' && phase !== currentPhase) corrections.Phase = phase;
         if (codeRubrique !== null && codeRubrique !== '' && codeRubrique !== currentCodeRubrique) corrections.CodeRubrique = codeRubrique;
         if (startTime !== null && startTime !== '' && startTime !== currentStartTime) corrections.StartTime = startTime;
@@ -1727,6 +1730,7 @@ class AdminPage {
                 
                 // Mettre à jour l'enregistrement en mémoire immédiatement
                 if (record) {
+                    if (corrections.LancementCode !== undefined) record.LancementCode = corrections.LancementCode;
                     if (corrections.Phase !== undefined) record.Phase = corrections.Phase;
                     if (corrections.CodeRubrique !== undefined) record.CodeRubrique = corrections.CodeRubrique;
                     if (corrections.StartTime !== undefined) record.StartTime = corrections.StartTime;
