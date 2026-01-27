@@ -1665,7 +1665,7 @@ router.delete('/operations/:id', async (req, res) => {
         
         // D'abord, récupérer les informations du lancement à partir de l'ID
         const getLancementQuery = `
-            SELECT CodeLanctImprod, CodeRubrique 
+            SELECT CodeLanctImprod, OperatorCode, Phase, CodeRubrique
             FROM [SEDI_APP_INDEPENDANTE].[dbo].[ABHISTORIQUE_OPERATEURS]
             WHERE NoEnreg = @id
         `;
@@ -1682,29 +1682,97 @@ router.delete('/operations/:id', async (req, res) => {
             });
         }
         
-        const { CodeLanctImprod, CodeRubrique, OperatorCode } = lancementInfo[0];
-        
-        // Utiliser OperatorCode si disponible, sinon CodeRubrique (pour compatibilité)
-        const operatorCodeToUse = OperatorCode || CodeRubrique;
-        
-        console.log(`🗑️ Suppression de tous les événements pour ${CodeLanctImprod} (opérateur: ${operatorCodeToUse})`);
-        
-        // Supprimer TOUS les événements de ce lancement pour cet opérateur
-        const deleteAllQuery = `
-            DELETE FROM [SEDI_APP_INDEPENDANTE].[dbo].[ABHISTORIQUE_OPERATEURS]
-            WHERE CodeLanctImprod = @lancementCode AND OperatorCode = @operatorCode
-        `;
-        
-        await executeQuery(deleteAllQuery, { 
-            lancementCode: CodeLanctImprod, 
-            operatorCode: operatorCodeToUse 
+        const { CodeLanctImprod, OperatorCode, Phase, CodeRubrique } = lancementInfo[0];
+
+        // Compatibilité:
+        // - Nouveau modèle: OperatorCode est renseigné, CodeRubrique = vrai code rubrique ERP
+        // - Ancien modèle: OperatorCode parfois NULL et CodeRubrique contenait le code opérateur
+        const operatorCodeToUse = (OperatorCode || '').toString().trim() || (CodeRubrique || '').toString().trim();
+
+        // Détection heuristique "legacy": OperatorCode absent + CodeRubrique ressemble à un code opérateur numérique
+        const isLegacy = !OperatorCode && typeof CodeRubrique === 'string' && /^\d+$/.test(CodeRubrique.trim());
+
+        if (!operatorCodeToUse) {
+            console.warn(`⚠️ Suppression impossible: OperatorCode/CodeRubrique manquants pour NoEnreg=${id}`);
+            return res.status(400).json({
+                success: false,
+                error: 'Impossible de déterminer le code opérateur pour supprimer cette opération'
+            });
+        }
+
+        if (isLegacy) {
+            console.log(`🗑️ Suppression (legacy) des événements pour ${CodeLanctImprod} (opérateur via CodeRubrique=${operatorCodeToUse})`);
+
+            // Ancien modèle: supprimer tous les événements du lancement pour cet opérateur (stocké dans CodeRubrique)
+            const deleteLegacyQuery = `
+                DELETE FROM [SEDI_APP_INDEPENDANTE].[dbo].[ABHISTORIQUE_OPERATEURS]
+                WHERE CodeLanctImprod = @lancementCode
+                  AND OperatorCode IS NULL
+                  AND CodeRubrique = @operatorCode
+            `;
+
+            await executeQuery(deleteLegacyQuery, {
+                lancementCode: CodeLanctImprod,
+                operatorCode: operatorCodeToUse
+            });
+        } else {
+            console.log(`🗑️ Suppression (par étape) pour ${CodeLanctImprod} (opérateur=${operatorCodeToUse}, phase=${Phase || 'NULL'}, rubrique=${CodeRubrique || 'NULL'})`);
+
+            // Nouveau modèle: supprimer tous les événements pour CETTE étape (Phase+CodeRubrique) du lancement et opérateur
+            const deleteStepQuery = `
+                DELETE FROM [SEDI_APP_INDEPENDANTE].[dbo].[ABHISTORIQUE_OPERATEURS]
+                WHERE CodeLanctImprod = @lancementCode
+                  AND (
+                        OperatorCode = @operatorCode
+                        OR (OperatorCode IS NULL AND CodeRubrique = @operatorCode) -- compatibilité si des lignes ont encore OperatorCode NULL
+                      )
+                  AND ( (Phase = @phase) OR (@phase IS NULL AND Phase IS NULL) )
+                  AND ( (CodeRubrique = @codeRubrique) OR (@codeRubrique IS NULL AND CodeRubrique IS NULL) )
+            `;
+
+            await executeQuery(deleteStepQuery, {
+                lancementCode: CodeLanctImprod,
+                operatorCode: operatorCodeToUse,
+                phase: Phase ?? null,
+                codeRubrique: CodeRubrique ?? null
+            });
+        }
+
+        // Vérifier s'il reste des événements pour ce "scope" (utile pour debug)
+        const remainingQuery = isLegacy
+            ? `
+                SELECT COUNT(*) AS remaining
+                FROM [SEDI_APP_INDEPENDANTE].[dbo].[ABHISTORIQUE_OPERATEURS]
+                WHERE CodeLanctImprod = @lancementCode
+                  AND OperatorCode IS NULL
+                  AND CodeRubrique = @operatorCode
+              `
+            : `
+                SELECT COUNT(*) AS remaining
+                FROM [SEDI_APP_INDEPENDANTE].[dbo].[ABHISTORIQUE_OPERATEURS]
+                WHERE CodeLanctImprod = @lancementCode
+                  AND (
+                        OperatorCode = @operatorCode
+                        OR (OperatorCode IS NULL AND CodeRubrique = @operatorCode)
+                      )
+                  AND ( (Phase = @phase) OR (@phase IS NULL AND Phase IS NULL) )
+                  AND ( (CodeRubrique = @codeRubrique) OR (@codeRubrique IS NULL AND CodeRubrique IS NULL) )
+              `;
+
+        const remaining = await executeQuery(remainingQuery, {
+            lancementCode: CodeLanctImprod,
+            operatorCode: operatorCodeToUse,
+            phase: Phase ?? null,
+            codeRubrique: CodeRubrique ?? null
         });
-        
-        console.log(`✅ Tous les événements du lancement ${CodeLanctImprod} supprimés avec succès`);
+
+        const remainingCount = remaining?.[0]?.remaining ?? null;
+        console.log(`✅ Suppression terminée. remaining=${remainingCount}`);
         
         res.json({
             success: true,
-            message: 'Opération supprimée avec succès'
+            message: 'Opération supprimée avec succès',
+            remaining: remainingCount
         });
         
     } catch (error) {
