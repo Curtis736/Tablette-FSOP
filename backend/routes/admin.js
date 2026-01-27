@@ -2311,6 +2311,175 @@ router.post('/cleanup-duplicates', async (req, res) => {
     }
 });
 
+// ============================================
+// TESTING HELPERS (safe purge, no DROP)
+// ============================================
+// ⚠️ Disabled by default. To enable: set ALLOW_TEST_PURGE=true on the backend container.
+// Purpose: allow re-running tests by deleting ONLY rows in ABHISTORIQUE_OPERATEURS / ABTEMPS_OPERATEURS (and optionally sessions)
+// without dropping tables.
+router.post('/testing/purge', async (req, res) => {
+    try {
+        if (String(process.env.ALLOW_TEST_PURGE || '').toLowerCase() !== 'true') {
+            return res.status(403).json({
+                success: false,
+                error: 'TEST_PURGE_DISABLED',
+                message: 'Purge test désactivée. Définissez ALLOW_TEST_PURGE=true côté backend pour l\'autoriser.'
+            });
+        }
+
+        const {
+            scope = 'today', // 'today' | 'range' | 'all'
+            dateStart,
+            dateEnd,
+            lancementCode,
+            lancementPrefix,
+            operatorCode,
+            includeSessions = false,
+            confirm
+        } = req.body || {};
+
+        if (confirm !== 'PURGE') {
+            return res.status(400).json({
+                success: false,
+                error: 'CONFIRM_REQUIRED',
+                message: 'Pour éviter une suppression accidentelle, envoyez { confirm: \"PURGE\" }.'
+            });
+        }
+
+        if (!['today', 'range', 'all'].includes(scope)) {
+            return res.status(400).json({ success: false, error: 'INVALID_SCOPE' });
+        }
+
+        const prefix = (lancementPrefix || '').trim() || null;
+        const lt = (lancementCode || '').trim().toUpperCase() || null;
+        const op = (operatorCode || '').trim() || null;
+
+        // Date boundaries
+        let dStart = null;
+        let dEnd = null;
+        if (scope === 'today') {
+            dStart = moment().format('YYYY-MM-DD');
+            dEnd = moment().format('YYYY-MM-DD');
+        } else if (scope === 'range') {
+            if (!dateStart || !dateEnd) {
+                return res.status(400).json({ success: false, error: 'DATE_RANGE_REQUIRED' });
+            }
+            dStart = moment(dateStart).format('YYYY-MM-DD');
+            dEnd = moment(dateEnd).format('YYYY-MM-DD');
+        } else if (scope === 'all') {
+            // keep nulls -> delete without date filter (still can be constrained by LT/operator)
+        }
+
+        // Final safety: if scope=all and no filters, refuse
+        if (scope === 'all' && !lt && !prefix && !op) {
+            return res.status(400).json({
+                success: false,
+                error: 'REFUSED',
+                message: 'Refusé: scope=all sans filtre. Fournissez lancementCode, lancementPrefix ou operatorCode.'
+            });
+        }
+
+        const whereHistorique = [];
+        const whereTemps = [];
+        const params = {};
+
+        if (op) {
+            whereHistorique.push('OperatorCode = @operatorCode');
+            whereTemps.push('OperatorCode = @operatorCode');
+            params.operatorCode = op;
+        }
+
+        if (lt) {
+            whereHistorique.push('CodeLanctImprod = @lancementCode');
+            whereTemps.push('LancementCode = @lancementCode');
+            params.lancementCode = lt;
+        } else if (prefix) {
+            whereHistorique.push('CodeLanctImprod LIKE @prefix');
+            whereTemps.push('LancementCode LIKE @prefix');
+            params.prefix = `${prefix.trim().toUpperCase()}%`;
+        }
+
+        if (dStart && dEnd) {
+            whereHistorique.push('CAST(DateCreation AS DATE) BETWEEN @dateStart AND @dateEnd');
+            whereTemps.push('CAST(DateCreation AS DATE) BETWEEN @dateStart AND @dateEnd');
+            params.dateStart = dStart;
+            params.dateEnd = dEnd;
+        }
+
+        const whereHistSql = whereHistorique.length ? `WHERE ${whereHistorique.join(' AND ')}` : '';
+        const whereTempsSql = whereTemps.length ? `WHERE ${whereTemps.join(' AND ')}` : '';
+
+        // Counts first
+        const countHist = await executeQuery(
+            `SELECT COUNT(*) AS c FROM [SEDI_APP_INDEPENDANTE].[dbo].[ABHISTORIQUE_OPERATEURS] ${whereHistSql}`,
+            params
+        );
+        const countTemps = await executeQuery(
+            `SELECT COUNT(*) AS c FROM [SEDI_APP_INDEPENDANTE].[dbo].[ABTEMPS_OPERATEURS] ${whereTempsSql}`,
+            params
+        );
+
+        const histC = countHist?.[0]?.c ?? 0;
+        const tempsC = countTemps?.[0]?.c ?? 0;
+
+        // Delete (no DROP)
+        await executeQuery(
+            `DELETE FROM [SEDI_APP_INDEPENDANTE].[dbo].[ABHISTORIQUE_OPERATEURS] ${whereHistSql}`,
+            params
+        );
+        await executeQuery(
+            `DELETE FROM [SEDI_APP_INDEPENDANTE].[dbo].[ABTEMPS_OPERATEURS] ${whereTempsSql}`,
+            params
+        );
+
+        let sessionsC = 0;
+        if (includeSessions) {
+            const whereSess = [];
+            const sessParams = {};
+            if (op) {
+                whereSess.push('OperatorCode = @operatorCode');
+                sessParams.operatorCode = op;
+            }
+            if (dStart && dEnd) {
+                whereSess.push('CAST(DateCreation AS DATE) BETWEEN @dateStart AND @dateEnd');
+                sessParams.dateStart = dStart;
+                sessParams.dateEnd = dEnd;
+            }
+            const whereSessSql = whereSess.length ? `WHERE ${whereSess.join(' AND ')}` : '';
+            const countSess = await executeQuery(
+                `SELECT COUNT(*) AS c FROM [SEDI_APP_INDEPENDANTE].[dbo].[ABSESSIONS_OPERATEURS] ${whereSessSql}`,
+                sessParams
+            );
+            sessionsC = countSess?.[0]?.c ?? 0;
+            await executeQuery(
+                `DELETE FROM [SEDI_APP_INDEPENDANTE].[dbo].[ABSESSIONS_OPERATEURS] ${whereSessSql}`,
+                sessParams
+            );
+        }
+
+        return res.json({
+            success: true,
+            message: 'Purge test effectuée',
+            deleted: {
+                ABHISTORIQUE_OPERATEURS: histC,
+                ABTEMPS_OPERATEURS: tempsC,
+                ABSESSIONS_OPERATEURS: sessionsC
+            },
+            scope,
+            filters: {
+                operatorCode: op || null,
+                lancementCode: lt || null,
+                lancementPrefix: prefix || null,
+                dateStart: dStart,
+                dateEnd: dEnd
+            }
+        });
+    } catch (error) {
+        console.error('❌ Erreur purge test:', error);
+        return res.status(500).json({ success: false, error: 'INTERNAL_ERROR', message: error.message });
+    }
+});
+
 // Route pour récupérer les lancements d'un opérateur spécifique
 router.get('/operators/:operatorCode/operations', async (req, res) => {
     try {
