@@ -729,6 +729,37 @@ body {
     white-space: nowrap;
 }
 
+/* Operator history table: "Étape" can be long -> allow wrap without breaking time columns */
+#operatorHistoryTable {
+    table-layout: fixed;
+}
+
+#operatorHistoryTable th,
+#operatorHistoryTable td {
+    vertical-align: top;
+}
+
+/* Col 3 = Étape */
+.data-table.tablet-optimized #operatorHistoryTable th:nth-child(3),
+.data-table.tablet-optimized #operatorHistoryTable td:nth-child(3) {
+    white-space: normal;
+    overflow-wrap: anywhere;
+    word-break: break-word;
+    min-width: 180px;
+    max-width: 280px;
+}
+
+/* Col 4/5 = Début/Fin keep compact */
+.data-table.tablet-optimized #operatorHistoryTable th:nth-child(4),
+.data-table.tablet-optimized #operatorHistoryTable td:nth-child(4),
+.data-table.tablet-optimized #operatorHistoryTable th:nth-child(5),
+.data-table.tablet-optimized #operatorHistoryTable td:nth-child(5) {
+    white-space: nowrap;
+    min-width: 70px;
+    max-width: 80px;
+    text-align: center;
+}
+
 .data-table.tablet-optimized th:first-child,
 .data-table.tablet-optimized td:first-child {
     min-width: 100px;
