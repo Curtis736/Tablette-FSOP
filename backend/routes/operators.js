@@ -1284,6 +1284,9 @@ router.get('/:operatorCode/operations',
                 ON t.OperatorCode = h.OperatorCode 
                 AND t.LancementCode = h.CodeLanctImprod
                 AND CAST(t.DateCreation AS DATE) = CAST(h.DateCreation AS DATE)
+                -- IMPORTANT: ne pas cacher une autre étape du même lancement (Phase+CodeRubrique)
+                AND ISNULL(LTRIM(RTRIM(t.Phase)), '') = ISNULL(LTRIM(RTRIM(COALESCE(h.Phase, 'PRODUCTION'))), '')
+                AND ISNULL(LTRIM(RTRIM(t.CodeRubrique)), '') = ISNULL(LTRIM(RTRIM(h.CodeRubrique)), '')
             -- ⚡ OPTIMISATION : Utiliser h.Phase directement (plus simple et fiable)
             -- Si Phase n'est pas dans h, on utilise 'PRODUCTION' par défaut
             WHERE h.OperatorCode = @operatorCode
@@ -1420,6 +1423,9 @@ router.get('/current/:operatorCode', authenticateOperator, async (req, res) => {
                 ON t.OperatorCode = h.OperatorCode 
                 AND t.LancementCode = h.CodeLanctImprod
                 AND CAST(t.DateCreation AS DATE) = CAST(h.DateCreation AS DATE)
+                -- IMPORTANT: ne pas cacher une autre étape du même lancement (Phase+CodeRubrique)
+                AND ISNULL(LTRIM(RTRIM(t.Phase)), '') = ISNULL(LTRIM(RTRIM(COALESCE(h.Phase, 'PRODUCTION'))), '')
+                AND ISNULL(LTRIM(RTRIM(t.CodeRubrique)), '') = ISNULL(LTRIM(RTRIM(h.CodeRubrique)), '')
             WHERE h.OperatorCode = @operatorCode
               AND h.Statut IN ('EN_COURS', 'EN_PAUSE')
               AND (t.StatutTraitement IS NULL OR t.StatutTraitement != 'T')
