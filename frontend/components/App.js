@@ -1,6 +1,6 @@
 // Classe principale de l'application
-// Bump version to bust browser cache when OperateurInterface changes (CodeOperation dropdown etc.)
-import OperateurInterface from './OperateurInterface.js?v=20260126-codeoperation';
+// Bump version to bust browser cache when OperateurInterface changes (history columns fabrication + codeRubrique)
+import OperateurInterface from './OperateurInterface.js?v=20260127-history-fab';
 // Bump to bust cache when AdminPage merging logic changes (duplicates after transfer, per-step keys, etc.)
 import AdminPage from './AdminPage.js?v=20260127-adminfix';
 import ApiService from '../services/ApiService.js?v=20260127-adminfix';

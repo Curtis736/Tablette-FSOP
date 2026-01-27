@@ -598,6 +598,57 @@ async function resolveStepContext(lancementCode, codeOperation = null) {
     return { steps, uniqueOps, context: match || null };
 }
 
+function buildInParams(values, prefix) {
+    const params = {};
+    const placeholders = [];
+    values.forEach((v, i) => {
+        const key = `${prefix}${i}`;
+        params[key] = v;
+        placeholders.push(`@${key}`);
+    });
+    return { params, placeholders: placeholders.join(', ') };
+}
+
+async function getFabricationMapForOperations(ops) {
+    // Map: `${CodeLancement}_${Phase}_${CodeRubrique}` -> "CodeOperation" (or joined list)
+    const launches = [...new Set((ops || []).map(o => String(o?.lancementCode || o?.CodeLancement || '').trim()).filter(Boolean))];
+    if (launches.length === 0) return new Map();
+
+    const { params, placeholders } = buildInParams(launches, 'lc');
+    const rows = await executeQuery(`
+        SELECT DISTINCT
+            C.CodeLancement,
+            LTRIM(RTRIM(C.Phase)) AS Phase,
+            LTRIM(RTRIM(C.CodeRubrique)) AS CodeRubrique,
+            LTRIM(RTRIM(C.CodeOperation)) AS CodeOperation
+        FROM [SEDI_ERP].[dbo].[LCTC] C
+        WHERE C.TypeRubrique = 'O'
+          AND C.CodeOperation IS NOT NULL
+          AND LTRIM(RTRIM(C.CodeOperation)) <> ''
+          -- Ne jamais proposer "Séchage" (accents/casse ignorés)
+          AND UPPER(LTRIM(RTRIM(C.CodeOperation))) COLLATE Latin1_General_CI_AI <> 'SECHAGE'
+          AND C.CodeLancement IN (${placeholders})
+    `, params);
+
+    const acc = new Map(); // key -> Set
+    (rows || []).forEach(r => {
+        const lc = String(r?.CodeLancement || '').trim();
+        const ph = String(r?.Phase || '').trim();
+        const rub = String(r?.CodeRubrique || '').trim();
+        const op = String(r?.CodeOperation || '').trim();
+        if (!lc || !op) return;
+        const key = `${lc}_${ph}_${rub}`;
+        if (!acc.has(key)) acc.set(key, new Set());
+        acc.get(key).add(op);
+    });
+
+    const out = new Map();
+    acc.forEach((set, key) => {
+        out.set(key, Array.from(set).join(' / '));
+    });
+    return out;
+}
+
 // GET /api/operators/steps/:lancementCode - Liste des étapes de fabrication (CodeOperation)
 router.get('/steps/:lancementCode', async (req, res) => {
     try {
@@ -606,14 +657,19 @@ router.get('/steps/:lancementCode', async (req, res) => {
             return res.status(400).json({ success: false, error: 'INVALID_LAUNCH_NUMBER' });
         }
         const steps = await getLctcStepsForLaunch(lancementCode);
+        // Ajouter un libellé "human friendly" (aujourd'hui: CodeOperation est déjà le nom de fabrication côté ERP)
+        const stepsWithLabel = (steps || []).map(s => ({
+            ...s,
+            Label: s?.CodeOperation
+        }));
         const uniqueOps = [...new Set((steps || []).map(s => String(s?.CodeOperation || '').trim()).filter(Boolean))];
         return res.json({
             success: true,
             lancementCode,
-            steps,
+            steps: stepsWithLabel,
             uniqueOperations: uniqueOps,
             operationCount: uniqueOps.length,
-            count: steps.length
+            count: stepsWithLabel.length
         });
     } catch (error) {
         console.error('❌ Erreur récupération étapes LCTC:', error);
@@ -1201,7 +1257,9 @@ router.get('/:operatorCode/operations',
         
         // Utiliser la fonction qui garde les pauses séparées
         const { processLancementEventsWithPauses } = require('./admin');
-        const allFormattedOperations = processLancementEventsWithPauses(events).map(operation => {
+        const processed = processLancementEventsWithPauses(events);
+        const fabricationMap = await getFabricationMapForOperations(processed);
+        const allFormattedOperations = processed.map(operation => {
             // Normaliser les heures pour s'assurer qu'elles sont au format HH:mm uniquement
             let startTime = operation.startTime;
             let endTime = operation.endTime;
@@ -1252,16 +1310,23 @@ router.get('/:operatorCode/operations',
                 status = statusMap[statusCode] || statusCode;
             }
             
+            const phase = operation.phase || 'PRODUCTION';
+            const codeRubrique = operation.codeRubrique || null;
+            const fabKey = `${operation.lancementCode}_${String(phase || '').trim()}_${String(codeRubrique || '').trim()}`;
+            const fabrication = fabricationMap.get(fabKey) || operation.codeOperation || operation.fabrication || '-';
+
             return {
                 id: operation.id,
                 operatorCode: operation.operatorId || operation.operatorCode,
                 lancementCode: operation.lancementCode,
                 article: operation.article || 'N/A',
+                fabrication,
                 startTime: startTime || '-',
                 endTime: endTime || '-',
                 status: status || 'En cours',
                 statusCode: statusCode || 'EN_COURS',
-                phase: operation.phase || 'PRODUCTION',
+                phase,
+                codeRubrique,
                 type: operation.type || 'lancement'
             };
         });
