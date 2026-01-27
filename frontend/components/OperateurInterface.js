@@ -1682,7 +1682,7 @@ class OperateurInterface {
             
             // Afficher un message de chargement
             const loadingRow = document.createElement('tr');
-            loadingRow.innerHTML = '<td colspan="8" class="no-data"><i class="fas fa-spinner fa-spin"></i> Chargement en cours...</td>';
+            loadingRow.innerHTML = '<td colspan="6" class="no-data"><i class="fas fa-spinner fa-spin"></i> Chargement en cours...</td>';
             this.operatorHistoryTableBody.innerHTML = '';
             this.operatorHistoryTableBody.appendChild(loadingRow);
             
@@ -1703,7 +1703,7 @@ class OperateurInterface {
                 const errorRow = document.createElement('tr');
                 errorRow.className = 'empty-state-row';
                 errorRow.innerHTML = `
-                    <td colspan="8" class="empty-state">
+                    <td colspan="6" class="empty-state">
                         <div style="text-align: center; padding: 3rem 2rem;">
                             <i class="fas fa-exclamation-triangle" style="font-size: 3rem; color: #ffc107; margin-bottom: 1rem; display: block;"></i>
                             <p style="font-size: 1.1rem; color: #666; margin: 0.5rem 0; font-weight: 500;">
@@ -1734,7 +1734,7 @@ class OperateurInterface {
                 const errorRow = document.createElement('tr');
                 errorRow.className = 'empty-state-row';
                 errorRow.innerHTML = `
-                    <td colspan="8" class="empty-state">
+                    <td colspan="6" class="empty-state">
                         <div style="text-align: center; padding: 3rem 2rem;">
                             <i class="fas fa-exclamation-circle" style="font-size: 3rem; color: #dc3545; margin-bottom: 1rem; display: block;"></i>
                             <p style="font-size: 1.1rem; color: #666; margin: 0.5rem 0; font-weight: 500;">
@@ -1755,7 +1755,7 @@ class OperateurInterface {
             const connectionErrorRow = document.createElement('tr');
             connectionErrorRow.className = 'empty-state-row';
             connectionErrorRow.innerHTML = `
-                <td colspan="8" class="empty-state">
+                <td colspan="6" class="empty-state">
                     <div style="text-align: center; padding: 3rem 2rem;">
                         <i class="fas fa-wifi" style="font-size: 3rem; color: #dc3545; margin-bottom: 1rem; display: block;"></i>
                         <p style="font-size: 1.1rem; color: #666; margin: 0.5rem 0; font-weight: 500;">
@@ -1786,7 +1786,7 @@ class OperateurInterface {
             const emptyRow = document.createElement('tr');
             emptyRow.className = 'empty-state-row';
             emptyRow.innerHTML = `
-                <td colspan="8" class="empty-state">
+                <td colspan="6" class="empty-state">
                     <div style="text-align: center; padding: 3rem 2rem;">
                         <i class="fas fa-history" style="font-size: 3rem; color: #ccc; margin-bottom: 1rem; display: block;"></i>
                         <p style="font-size: 1.1rem; color: #666; margin: 0.5rem 0; font-weight: 500;">
@@ -1826,9 +1826,7 @@ class OperateurInterface {
             row.innerHTML = `
                 <td>${operation.lancementCode || '-'} ${operation.type === 'pause' ? '<i class="fas fa-pause-circle pause-icon"></i>' : ''}</td>
                 <td>${operation.article || '-'}</td>
-                <td>${operation.fabrication || '-'}</td>
-                <td>${operation.phase || 'PRODUCTION'}</td>
-                <td>${operation.codeRubrique || '-'}</td>
+                <td>${this.escapeHtml(this.formatStepLabel(operation))}</td>
                 <td>${operation.startTime || '-'}</td>
                 <td>${operation.endTime || '-'}</td>
                 <td>
@@ -1840,6 +1838,23 @@ class OperateurInterface {
         
         console.log('✅ Historique affiché avec succès:', operations.length, 'opérations');
         console.log('=== FIN displayOperatorHistory ===');
+    }
+
+    formatStepLabel(operation) {
+        const phase = String(operation?.phase || '').trim();
+        const rubrique = String(operation?.codeRubrique || '').trim();
+        const fabrication = String(operation?.fabrication || '').trim();
+        const opCode = String(operation?.operatorCode || operation?.operatorId || '').trim();
+
+        // Si on n'a pas de vraie phase, fallback
+        const phaseLabel = phase && phase.toUpperCase() !== 'PRODUCTION' ? phase : 'PRODUCTION';
+
+        // Si codeRubrique == code opérateur (ancien modèle/fallback), ne pas l'afficher comme rubrique ERP
+        const hasRealRubrique = rubrique && opCode && rubrique !== opCode;
+        const rubPart = hasRealRubrique ? ` (${rubrique})` : '';
+
+        const fabPart = fabrication && fabrication !== '-' ? ` — ${fabrication}` : '';
+        return `${phaseLabel}${fabPart}${rubPart}`;
     }
 
     // Gestion des commentaires

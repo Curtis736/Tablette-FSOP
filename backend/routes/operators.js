@@ -592,8 +592,13 @@ async function resolveStepContext(lancementCode, codeOperation = null) {
     const steps = await getLctcStepsForLaunch(lancementCode);
     // On considère "une étape" = (Phase + CodeRubrique). CodeOperation est le libellé/nom de fabrication.
     const uniqueOps = [...new Set((steps || []).map(s => String(s?.CodeOperation || '').trim()).filter(Boolean))];
+    const uniqueSteps = [...new Set((steps || []).map(s => {
+        const ph = String(s?.Phase || '').trim();
+        const rub = String(s?.CodeRubrique || '').trim();
+        return `${ph}|${rub}`;
+    }).filter(k => k !== '|' && k !== ''))];
     if (!codeOperation) {
-        return { steps, uniqueOps, context: steps[0] || null };
+        return { steps, uniqueOps, uniqueSteps, context: steps[0] || null };
     }
     const raw = String(codeOperation || '').trim();
     // Support "StepId" = "PHASE|CODERUBRIQUE" (permet de choisir 010/040/060 même si CodeOperation est identique)
@@ -603,10 +608,10 @@ async function resolveStepContext(lancementCode, codeOperation = null) {
             String(s?.Phase || '').trim() === ph &&
             String(s?.CodeRubrique || '').trim() === rub
         );
-        return { steps, uniqueOps, context: matchByKey || null };
+        return { steps, uniqueOps, uniqueSteps, context: matchByKey || null };
     }
     const match = steps.find(s => String(s.CodeOperation || '').trim() === raw);
-    return { steps, uniqueOps, context: match || null };
+    return { steps, uniqueOps, uniqueSteps, context: match || null };
 }
 
 function buildInParams(values, prefix) {
@@ -681,11 +686,14 @@ router.get('/steps/:lancementCode', async (req, res) => {
             };
         });
         const uniqueOps = [...new Set((steps || []).map(s => String(s?.CodeOperation || '').trim()).filter(Boolean))];
+        const uniqueSteps = [...new Set((stepsWithLabel || []).map(s => String(s?.StepId || '').trim()).filter(Boolean))];
         return res.json({
             success: true,
             lancementCode,
             steps: stepsWithLabel,
             uniqueOperations: uniqueOps,
+            uniqueSteps,
+            stepCount: uniqueSteps.length,
             operationCount: uniqueOps.length,
             count: stepsWithLabel.length
         });
@@ -754,24 +762,37 @@ router.post('/start', async (req, res) => {
         const requestId = req.audit?.requestId || generateRequestId();
 
         // Résoudre Phase/CodeRubrique via CodeOperation (si plusieurs étapes)
-        if (codeOperation && String(codeOperation).trim().toUpperCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '') === 'SECHAGE') {
+        if (codeOperation) {
+            const normalized = String(codeOperation).trim().toUpperCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+            if (normalized === 'SECHAGE' || normalized === 'ETUVAGE') {
+                return res.status(400).json({
+                    success: false,
+                    error: 'FORBIDDEN_CODE_OPERATION',
+                    message: 'Étape "Séchage/ÉtuVage" est interdite.'
+                });
+            }
+        }
+        const { steps, uniqueOps, uniqueSteps, context } = await resolveStepContext(lancementCode, codeOperation);
+        // Ne demander un choix que s'il y a plusieurs étapes (Phase+CodeRubrique)
+        if (uniqueSteps.length > 1 && !codeOperation) {
+            return res.status(400).json({
+                success: false,
+                error: 'CODE_OPERATION_REQUIRED',
+                message: 'Plusieurs étapes sont disponibles. Choisissez une étape (Phase).',
+                lancementCode,
+                steps,
+                uniqueOperations: uniqueOps,
+                uniqueSteps,
+                stepCount: uniqueSteps.length,
+                operationCount: uniqueOps.length
+            });
+        }
+        // Compat: si l'ancien client envoie encore CodeOperation "Séchage"
+        if (false && codeOperation && String(codeOperation).trim().toUpperCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '') === 'SECHAGE') {
             return res.status(400).json({
                 success: false,
                 error: 'FORBIDDEN_CODE_OPERATION',
                 message: 'CodeOperation "Séchage" est interdit.'
-            });
-        }
-        const { steps, uniqueOps, context } = await resolveStepContext(lancementCode, codeOperation);
-        // Ne demander un choix que s'il y a plusieurs fabrications (CodeOperation distinctes)
-        if (uniqueOps.length > 1 && !codeOperation) {
-            return res.status(400).json({
-                success: false,
-                error: 'CODE_OPERATION_REQUIRED',
-                message: 'Plusieurs étapes de fabrication sont disponibles. Choisissez une étape (CodeOperation).',
-                lancementCode,
-                steps,
-                uniqueOperations: uniqueOps,
-                operationCount: uniqueOps.length
             });
         }
         if (steps.length > 0 && !context) {
