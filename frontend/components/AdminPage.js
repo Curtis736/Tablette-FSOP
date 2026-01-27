@@ -374,7 +374,7 @@ class AdminPage {
                     ProductiveDuration: null,
                     EventsCount: op.events || 0,
                     Phase: op.phase || 'PRODUCTION',
-                    CodeRubrique: op.operatorId,
+                    CodeRubrique: op.codeRubrique || op.operatorId,
                     StatutTraitement: null,
                     Status: op.status || 'En cours',
                     StatusCode: op.statusCode || 'EN_COURS',

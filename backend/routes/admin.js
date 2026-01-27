@@ -382,12 +382,14 @@ function processLancementEventsSingleLine(events) {
 function processLancementEventsWithPauses(events) {
     const lancementGroups = {};
     
-    // 🔒 ISOLATION STRICTE : Regrouper par CodeLanctImprod ET OperatorCode
+    // 🔒 ISOLATION STRICTE : Regrouper par CodeLanctImprod + OperatorCode + Phase + CodeRubrique
     // Chaque opérateur a son propre historique pour chaque lancement
     // Un même lancement peut avoir plusieurs historiques (un par opérateur)
     events.forEach(event => {
-        // Clé unique = Lancement + Opérateur (garantit l'isolation)
-        const key = `${event.CodeLanctImprod}_${event.OperatorCode}`;
+        const phase = (event.Phase || '').toString().trim();
+        const rubrique = (event.CodeRubrique || '').toString().trim();
+        // Clé unique = Lancement + Opérateur + Étape (garantit l'isolation par fabrication)
+        const key = `${event.CodeLanctImprod}_${event.OperatorCode}_${phase}_${rubrique}`;
         if (!lancementGroups[key]) {
             lancementGroups[key] = [];
         }
@@ -658,6 +660,7 @@ function createLancementItem(startEvent, sequence, status, statusLabel, endTime 
         lancementCode: startEvent.CodeLanctImprod,
         article: startEvent.Article || 'N/A',
         phase: startEvent.Phase,
+        codeRubrique: startEvent.CodeRubrique || null,
         startTime: startTime,
         endTime: finalEndTime,
         // pauseEvent.DateCreation peut être un DATE => utiliser CreatedAt pour l'heure réelle
@@ -954,14 +957,19 @@ async function getAdminStats(date) {
         // Exclure les opérations déjà transmises (StatutTraitement = 'T') pour ne pas les afficher dans le dashboard
         try {
             const transmittedQuery = `
-                SELECT OperatorCode, LancementCode
+                SELECT OperatorCode, LancementCode, Phase, CodeRubrique
                 FROM [SEDI_APP_INDEPENDANTE].[dbo].[ABTEMPS_OPERATEURS]
                 WHERE StatutTraitement = 'T'
                   AND CAST(DateCreation AS DATE) = @date
             `;
             const transmitted = await executeQuery(transmittedQuery, { date: targetDate });
-            const transmittedSet = new Set(transmitted.map(t => `${t.OperatorCode}_${t.LancementCode}`));
-            filteredEvents = filteredEvents.filter(e => !transmittedSet.has(`${e.OperatorCode}_${e.CodeLanctImprod}`));
+            const transmittedSet = new Set(
+                transmitted.map(t => `${t.OperatorCode}_${t.LancementCode}_${String(t.Phase || '').trim()}_${String(t.CodeRubrique || '').trim()}`)
+            );
+            filteredEvents = filteredEvents.filter(e => {
+                const k = `${e.OperatorCode}_${e.CodeLanctImprod}_${String(e.Phase || '').trim()}_${String(e.CodeRubrique || '').trim()}`;
+                return !transmittedSet.has(k);
+            });
         } catch (e) {
             console.warn('⚠️ Impossible de filtrer les opérations transmises pour les stats:', e.message);
         }
@@ -1063,14 +1071,19 @@ async function getAdminOperations(date, page = 1, limit = 25) {
         // Exclure les opérations déjà transmises (StatutTraitement = 'T') pour qu'elles disparaissent du dashboard
         try {
             const transmittedQuery = `
-                SELECT OperatorCode, LancementCode
+                SELECT OperatorCode, LancementCode, Phase, CodeRubrique
                 FROM [SEDI_APP_INDEPENDANTE].[dbo].[ABTEMPS_OPERATEURS]
                 WHERE StatutTraitement = 'T'
                   AND CAST(DateCreation AS DATE) = @date
             `;
             const transmitted = await executeQuery(transmittedQuery, { date: targetDate });
-            const transmittedSet = new Set(transmitted.map(t => `${t.OperatorCode}_${t.LancementCode}`));
-            filteredEvents = filteredEvents.filter(e => !transmittedSet.has(`${e.OperatorCode}_${e.CodeLanctImprod}`));
+            const transmittedSet = new Set(
+                transmitted.map(t => `${t.OperatorCode}_${t.LancementCode}_${String(t.Phase || '').trim()}_${String(t.CodeRubrique || '').trim()}`)
+            );
+            filteredEvents = filteredEvents.filter(e => {
+                const k = `${e.OperatorCode}_${e.CodeLanctImprod}_${String(e.Phase || '').trim()}_${String(e.CodeRubrique || '').trim()}`;
+                return !transmittedSet.has(k);
+            });
         } catch (e) {
             console.warn('⚠️ Impossible de filtrer les opérations transmises pour les opérations admin:', e.message);
         }
@@ -2198,6 +2211,8 @@ router.get('/operators/:operatorCode/operations', async (req, res) => {
             LEFT JOIN [SEDI_APP_INDEPENDANTE].[dbo].[ABTEMPS_OPERATEURS] t 
                 ON t.OperatorCode = h.OperatorCode 
                 AND t.LancementCode = h.CodeLanctImprod
+                AND ISNULL(t.Phase, '') = ISNULL(h.Phase, '')
+                AND ISNULL(t.CodeRubrique, '') = ISNULL(h.CodeRubrique, '')
                 AND CAST(t.DateCreation AS DATE) = CAST(h.DateCreation AS DATE)
             -- ⚡ OPTIMISATION : Utiliser h.Phase directement (plus simple et fiable)
             WHERE h.OperatorCode = @operatorCode
