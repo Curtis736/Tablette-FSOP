@@ -1033,6 +1033,54 @@ async function getAdminStats(date) {
 }
 
 // Fonction pour récupérer les opérations basées sur les événements ABHISTORIQUE_OPERATEURS
+function buildInParams(values, prefix) {
+    const params = {};
+    const placeholders = [];
+    (values || []).forEach((v, i) => {
+        const key = `${prefix}${i}`;
+        params[key] = v;
+        placeholders.push(`@${key}`);
+    });
+    return { params, placeholders: placeholders.join(', ') };
+}
+
+async function getFabricationMapForLaunches(lancements) {
+    // Map: `${CodeLancement}_${Phase}_${CodeRubrique}` -> "CodeOperation" (or joined list)
+    const unique = [...new Set((lancements || []).map(x => String(x || '').trim()).filter(Boolean))];
+    if (unique.length === 0) return new Map();
+
+    const { params, placeholders } = buildInParams(unique, 'lc');
+    const rows = await executeQuery(`
+        SELECT DISTINCT
+            C.CodeLancement,
+            LTRIM(RTRIM(C.Phase)) AS Phase,
+            LTRIM(RTRIM(C.CodeRubrique)) AS CodeRubrique,
+            LTRIM(RTRIM(C.CodeOperation)) AS CodeOperation
+        FROM [SEDI_ERP].[dbo].[LCTC] C
+        WHERE C.TypeRubrique = 'O'
+          AND C.CodeOperation IS NOT NULL
+          AND LTRIM(RTRIM(C.CodeOperation)) <> ''
+          AND UPPER(LTRIM(RTRIM(C.CodeOperation))) COLLATE Latin1_General_CI_AI <> 'SECHAGE'
+          AND C.CodeLancement IN (${placeholders})
+    `, params);
+
+    const acc = new Map(); // key -> Set(CodeOperation)
+    (rows || []).forEach(r => {
+        const lc = String(r?.CodeLancement || '').trim();
+        const ph = String(r?.Phase || '').trim();
+        const rub = String(r?.CodeRubrique || '').trim();
+        const op = String(r?.CodeOperation || '').trim();
+        if (!lc || !op) return;
+        const key = `${lc}_${ph}_${rub}`;
+        if (!acc.has(key)) acc.set(key, new Set());
+        acc.get(key).add(op);
+    });
+
+    const out = new Map();
+    acc.forEach((set, key) => out.set(key, Array.from(set).join(' / ')));
+    return out;
+}
+
 async function getAdminOperations(date, page = 1, limit = 25) {
     try {
         console.log('🚀 DEBUT getAdminOperations SÉCURISÉ - date:', date, 'page:', page, 'limit:', limit);
@@ -1137,6 +1185,11 @@ async function getAdminOperations(date, page = 1, limit = 25) {
                 lancementCode: lancement.lancementCode,
                 article: firstEvent?.Article || lancement.article || 'N/A',
                 articleDetail: firstEvent?.ArticleDetail || lancement.articleDetail || '',
+                phase: lancement.phase || null,
+                codeRubrique: lancement.codeRubrique || null,
+                // Duplicates of same fields with ERP-like casing (used by frontend normalizers)
+                Phase: lancement.phase || null,
+                CodeRubrique: lancement.codeRubrique || null,
                 startTime: lancement.startTime,
                 endTime: lancement.endTime,
                 pauseTime: lancement.pauseTime,
@@ -1149,6 +1202,20 @@ async function getAdminOperations(date, page = 1, limit = 25) {
                 editable: true
             };
         });
+
+        // Ajouter le libellé de fabrication (CodeOperation) depuis l'ERP via (LT + Phase + CodeRubrique)
+        try {
+            const lts = [...new Set(formattedOperations.map(o => String(o?.lancementCode || '').trim()).filter(Boolean))];
+            const fabMap = await getFabricationMapForLaunches(lts);
+            formattedOperations.forEach(o => {
+                const key = `${String(o.lancementCode || '').trim()}_${String(o.Phase || o.phase || '').trim()}_${String(o.CodeRubrique || o.codeRubrique || '').trim()}`;
+                const fabrication = fabMap.get(key) || '-';
+                o.fabrication = fabrication;
+                o.Fabrication = fabrication;
+            });
+        } catch (e) {
+            console.warn('⚠️ Impossible d\'enrichir les opérations admin avec la fabrication (CodeOperation):', e.message);
+        }
 
         console.log(`🎯 Envoi de ${formattedOperations.length} lancements regroupés (page ${page}/${Math.ceil(processedLancements.length / limit)})`);
         return {
@@ -3544,6 +3611,20 @@ router.get('/monitoring', async (req, res) => {
         const result = await MonitoringService.getTempsRecords(filters);
         
         if (result.success) {
+            // Enrichir les lignes consolidées (ABTEMPS) avec la fabrication (CodeOperation) depuis l'ERP
+            try {
+                const lts = [...new Set((result.data || []).map(r => String(r?.LancementCode || '').trim()).filter(Boolean))];
+                const fabMap = await getFabricationMapForLaunches(lts);
+                (result.data || []).forEach(r => {
+                    const key = `${String(r.LancementCode || '').trim()}_${String(r.Phase || '').trim()}_${String(r.CodeRubrique || '').trim()}`;
+                    const fabrication = fabMap.get(key) || '-';
+                    r.Fabrication = fabrication;
+                    r.fabrication = fabrication;
+                });
+            } catch (e) {
+                console.warn('⚠️ Impossible d\'enrichir /admin/monitoring avec la fabrication:', e.message);
+            }
+
             res.json({
                 success: true,
                 data: result.data,

@@ -375,6 +375,7 @@ class AdminPage {
                     EventsCount: op.events || 0,
                     Phase: op.phase || 'PRODUCTION',
                     CodeRubrique: op.codeRubrique || op.operatorId,
+                    Fabrication: op.fabrication || op.Fabrication || op.codeOperation || op.CodeOperation || '-',
                     StatutTraitement: null,
                     Status: op.status || 'En cours',
                     StatusCode: op.statusCode || 'EN_COURS',
@@ -703,7 +704,7 @@ class AdminPage {
         
         this.operationsTableBody.innerHTML = `
             <tr>
-                <td colspan="7" style="text-align: center; padding: 2rem; color: #dc3545;">
+                <td colspan="10" style="text-align: center; padding: 2rem; color: #dc3545;">
                     <i class="fas fa-exclamation-triangle" style="font-size: 2rem; margin-bottom: 1rem;"></i>
                     <br>
                     <strong>Erreur de chargement des données</strong>
@@ -1140,7 +1141,7 @@ class AdminPage {
             const row = document.createElement('tr');
             row.className = 'empty-state-row';
             row.innerHTML = `
-                <td colspan="7" class="empty-state">
+                <td colspan="10" class="empty-state">
                     <div style="text-align: center; padding: 3rem 2rem;">
                         <i class="fas fa-inbox" style="font-size: 3rem; color: #ccc; margin-bottom: 1rem; display: block;"></i>
                         <p style="font-size: 1.1rem; color: #666; margin: 0.5rem 0; font-weight: 500;">
@@ -1241,6 +1242,9 @@ class AdminPage {
                 <td>${operation.OperatorName || operation.OperatorCode || '-'}</td>
                 <td>${operation.LancementCode || '-'}</td>
                 <td>${operation.LancementName || '-'}</td>
+                <td>${operation.Fabrication || operation.fabrication || '-'}</td>
+                <td>${operation.Phase || operation.phase || '-'}</td>
+                <td>${operation.CodeRubrique || operation.codeRubrique || '-'}</td>
                 <td>${formattedStartTime}</td>
                 <td>${formattedEndTime}${timeWarning}</td>
                 <td>
@@ -1992,8 +1996,8 @@ class AdminPage {
         // Remplacer les cellules par des inputs (même logique que dans l'ancienne fonction)
         const cells = row.querySelectorAll('td');
         if (cells.length >= 6) {
-            // Cellule heure début (index 3)
-            cells[3].innerHTML = `
+            // Cellule heure début (index 6)
+            cells[6].innerHTML = `
                 <input type="time" 
                        data-field="startTime" 
                        data-id="${id}"
@@ -2003,8 +2007,8 @@ class AdminPage {
                        style="width: 100%; padding: 4px;">
             `;
             
-            // Cellule heure fin (index 4)
-            cells[4].innerHTML = `
+            // Cellule heure fin (index 7)
+            cells[7].innerHTML = `
                 <input type="time" 
                        data-field="endTime" 
                        data-id="${id}"
@@ -2015,8 +2019,8 @@ class AdminPage {
                        onchange="window.adminPage.validateTimeInput(this)">
             `;
             
-            // Cellule actions (index 6) - remplacer par boutons sauvegarder/annuler
-            cells[6].innerHTML = `
+            // Cellule actions (index 9) - remplacer par boutons sauvegarder/annuler
+            cells[9].innerHTML = `
                 <button class="btn btn-sm btn-success" onclick="window.adminPage.saveOperation('${id}')" title="Sauvegarder">
                     <i class="fas fa-check"></i>
                 </button>
@@ -2041,13 +2045,13 @@ class AdminPage {
         }
 
         const cells = row.querySelectorAll('td');
-        if (cells.length >= 6) {
-            // Mettre à jour les heures (cellules 3 et 4)
+        if (cells.length >= 9) {
+            // Mettre à jour les heures (cellules 6 et 7)
             const formattedStartTime = this.formatDateTime(record.StartTime);
             const formattedEndTime = this.formatDateTime(record.EndTime);
             
-            cells[3].textContent = formattedStartTime;
-            cells[4].textContent = formattedEndTime;
+            cells[6].textContent = formattedStartTime;
+            cells[7].textContent = formattedEndTime;
             
             console.log(`✅ Ligne ${tempsId} mise à jour dans le tableau:`, {
                 StartTime: formattedStartTime,
@@ -2795,18 +2799,18 @@ class AdminPage {
         
         // Mettre à jour les cellules d'heures et statut
         const cells = existingRow.querySelectorAll('td');
-        if (cells.length >= 6) {
-            // Cellule heure début (index 3) - utiliser startTime ou StartTime
+        if (cells.length >= 9) {
+            // Cellule heure début (index 6) - utiliser startTime ou StartTime
             const startTimeValue = operation.startTime || operation.StartTime;
             const formattedStartTime = this.formatDateTime(startTimeValue);
-            cells[3].innerHTML = formattedStartTime;
+            cells[6].innerHTML = formattedStartTime;
             
-            // Cellule heure fin (index 4) - utiliser endTime ou EndTime
+            // Cellule heure fin (index 7) - utiliser endTime ou EndTime
             const endTimeValue = operation.endTime || operation.EndTime;
             const formattedEndTime = this.formatDateTime(endTimeValue);
-            cells[4].innerHTML = formattedEndTime;
+            cells[7].innerHTML = formattedEndTime;
             
-            // Cellule statut (index 5)
+            // Cellule statut (index 8)
             // Utiliser le statut de l'opération, mais ne pas utiliser 'EN_COURS' par défaut si le statut est explicitement défini
             let statusCode = operation.statusCode || operation.StatusCode;
             let statusLabel = operation.status || operation.Status;
@@ -2834,7 +2838,7 @@ class AdminPage {
                 operationStatus: operation.status
             });
             
-            cells[5].innerHTML = `<span class="status-badge status-${statusCode}">${statusLabel}</span>`;
+            cells[8].innerHTML = `<span class="status-badge status-${statusCode}">${statusLabel}</span>`;
             
             console.log(`✅ Ligne ${operationId} mise à jour: ${formattedStartTime} -> ${formattedEndTime}, statut: ${statusCode} (${statusLabel})`);
         } else {
@@ -2857,8 +2861,8 @@ class AdminPage {
         }
         
         const cells = row.querySelectorAll('td');
-        const displayedStartTime = cells[3] ? cells[3].textContent : 'N/A';
-        const displayedEndTime = cells[4] ? cells[4].textContent : 'N/A';
+        const displayedStartTime = cells[6] ? cells[6].textContent : 'N/A';
+        const displayedEndTime = cells[7] ? cells[7].textContent : 'N/A';
         
         console.log(`🔍 Debug synchronisation ${operationId}:`, {
             memory: {
