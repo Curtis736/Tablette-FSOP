@@ -581,8 +581,8 @@ async function getLctcStepsForLaunch(lancementCode) {
           AND C.TypeRubrique = 'O'
           AND C.CodeOperation IS NOT NULL
           AND LTRIM(RTRIM(C.CodeOperation)) <> ''
-          -- Ne jamais proposer "Séchage" (accents/casse ignorés)
-          AND UPPER(LTRIM(RTRIM(C.CodeOperation))) COLLATE Latin1_General_CI_AI <> 'SECHAGE'
+          -- Ne jamais proposer "Séchage" / "ÉtuVage" (accents/casse ignorés)
+          AND UPPER(LTRIM(RTRIM(C.CodeOperation))) COLLATE Latin1_General_CI_AI NOT IN ('SECHAGE', 'ETUVAGE')
         ORDER BY LTRIM(RTRIM(Phase)), LTRIM(RTRIM(CodeOperation)), LTRIM(RTRIM(CodeRubrique))
     `, { lancementCode });
     return rows || [];
@@ -590,11 +590,22 @@ async function getLctcStepsForLaunch(lancementCode) {
 
 async function resolveStepContext(lancementCode, codeOperation = null) {
     const steps = await getLctcStepsForLaunch(lancementCode);
+    // On considère "une étape" = (Phase + CodeRubrique). CodeOperation est le libellé/nom de fabrication.
     const uniqueOps = [...new Set((steps || []).map(s => String(s?.CodeOperation || '').trim()).filter(Boolean))];
     if (!codeOperation) {
         return { steps, uniqueOps, context: steps[0] || null };
     }
-    const match = steps.find(s => String(s.CodeOperation || '').trim() === String(codeOperation || '').trim());
+    const raw = String(codeOperation || '').trim();
+    // Support "StepId" = "PHASE|CODERUBRIQUE" (permet de choisir 010/040/060 même si CodeOperation est identique)
+    if (raw.includes('|')) {
+        const [ph, rub] = raw.split('|').map(x => String(x || '').trim());
+        const matchByKey = steps.find(s =>
+            String(s?.Phase || '').trim() === ph &&
+            String(s?.CodeRubrique || '').trim() === rub
+        );
+        return { steps, uniqueOps, context: matchByKey || null };
+    }
+    const match = steps.find(s => String(s.CodeOperation || '').trim() === raw);
     return { steps, uniqueOps, context: match || null };
 }
 
@@ -625,8 +636,8 @@ async function getFabricationMapForOperations(ops) {
         WHERE C.TypeRubrique = 'O'
           AND C.CodeOperation IS NOT NULL
           AND LTRIM(RTRIM(C.CodeOperation)) <> ''
-          -- Ne jamais proposer "Séchage" (accents/casse ignorés)
-          AND UPPER(LTRIM(RTRIM(C.CodeOperation))) COLLATE Latin1_General_CI_AI <> 'SECHAGE'
+          -- Ne jamais proposer "Séchage" / "ÉtuVage" (accents/casse ignorés)
+          AND UPPER(LTRIM(RTRIM(C.CodeOperation))) COLLATE Latin1_General_CI_AI NOT IN ('SECHAGE', 'ETUVAGE')
           AND C.CodeLancement IN (${placeholders})
     `, params);
 
@@ -657,11 +668,18 @@ router.get('/steps/:lancementCode', async (req, res) => {
             return res.status(400).json({ success: false, error: 'INVALID_LAUNCH_NUMBER' });
         }
         const steps = await getLctcStepsForLaunch(lancementCode);
-        // Ajouter un libellé "human friendly" (aujourd'hui: CodeOperation est déjà le nom de fabrication côté ERP)
-        const stepsWithLabel = (steps || []).map(s => ({
-            ...s,
-            Label: s?.CodeOperation
-        }));
+        // Ajouter un "StepId" stable et un label lisible.
+        // NOTE: l'utilisateur veut choisir 010/040/060 => on se base sur Phase + CodeRubrique.
+        const stepsWithLabel = (steps || []).map(s => {
+            const phase = String(s?.Phase || '').trim();
+            const rubrique = String(s?.CodeRubrique || '').trim();
+            const fabrication = String(s?.CodeOperation || '').trim();
+            return {
+                ...s,
+                StepId: `${phase}|${rubrique}`,
+                Label: `${phase}${rubrique ? ` (${rubrique})` : ''} — ${fabrication || 'Fabrication'}`
+            };
+        });
         const uniqueOps = [...new Set((steps || []).map(s => String(s?.CodeOperation || '').trim()).filter(Boolean))];
         return res.json({
             success: true,

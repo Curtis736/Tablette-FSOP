@@ -1264,7 +1264,7 @@ class OperateurInterface {
     hideOperationSteps() {
         if (this.operationStepGroup) this.operationStepGroup.style.display = 'none';
         if (this.operationStepSelect) {
-            this.operationStepSelect.innerHTML = '<option value="">Choisir une étape (CodeOperation)</option>';
+            this.operationStepSelect.innerHTML = '<option value="">Choisir une étape (Phase)</option>';
         }
         this.availableSteps = [];
         this.selectedCodeOperation = null;
@@ -1276,31 +1276,52 @@ class OperateurInterface {
         try {
             const res = await this.apiService.getLancementSteps(lancementCode);
             const steps = res?.steps || res?.data?.steps || [];
-            const uniqueOperations = res?.uniqueOperations || res?.data?.uniqueOperations || [];
             this.availableSteps = Array.isArray(steps) ? steps : [];
 
-            // 0 ou 1 fabrication (CodeOperation distincte) => cacher, auto-sélection
-            const ops = Array.isArray(uniqueOperations) && uniqueOperations.length > 0
-                ? uniqueOperations
-                : [...new Set(this.availableSteps.map(s => String(s?.CodeOperation || '').trim()).filter(Boolean))];
+            // Étapes distinctes = (Phase + CodeRubrique) => permet de choisir 010/040/060
+            const stepItems = this.availableSteps
+                .map(s => {
+                    const phase = String(s?.Phase || '').trim();
+                    const rubrique = String(s?.CodeRubrique || '').trim();
+                    const fabrication = String(s?.CodeOperation || '').trim();
+                    const stepId = String(s?.StepId || `${phase}|${rubrique}`).trim();
+                    const label = String(s?.Label || `${phase}${rubrique ? ` (${rubrique})` : ''} — ${fabrication || 'Fabrication'}`).trim();
 
-            if (ops.length <= 1) {
-                this.selectedCodeOperation = ops[0] || null;
+                    // Double sécurité: ne jamais afficher Séchage / ÉtuVage
+                    const normalizedFab = fabrication
+                        .toUpperCase()
+                        .normalize('NFD')
+                        .replace(/[\u0300-\u036f]/g, '')
+                        .trim();
+                    if (normalizedFab === 'SECHAGE' || normalizedFab === 'ETUVAGE') return null;
+
+                    return { stepId, label };
+                })
+                .filter(Boolean);
+
+            const uniqueSteps = [];
+            const seen = new Set();
+            for (const s of stepItems) {
+                if (!s.stepId || seen.has(s.stepId)) continue;
+                seen.add(s.stepId);
+                uniqueSteps.push(s);
+            }
+
+            if (uniqueSteps.length <= 1) {
+                // Auto-sélection s'il n'y a qu'une étape
+                this.selectedCodeOperation = uniqueSteps[0]?.stepId || null;
                 this.operationStepGroup.style.display = 'none';
                 return;
             }
 
-            // Plusieurs fabrications => afficher dropdown sur CodeOperation uniques
-            const optionsHtml = ops.map(op => {
-                const rows = this.availableSteps.filter(s => String(s?.CodeOperation || '').trim() === op);
-                const phases = [...new Set(rows.map(r => String(r?.Phase || '').trim()).filter(Boolean))];
-                const label = `${phases.length ? phases.join(', ') : 'Phase ?'} — ${op}`;
-                return `<option value="${this.escapeHtml(op)}">${this.escapeHtml(label)}</option>`;
-            }).join('');
+            const optionsHtml = [
+                '<option value="">Choisir une étape (Phase)</option>',
+                ...uniqueSteps.map(s => `<option value="${this.escapeHtml(s.stepId)}">${this.escapeHtml(s.label)}</option>`)
+            ].join('');
 
             this.operationStepSelect.innerHTML = optionsHtml;
             this.operationStepGroup.style.display = 'flex';
-            this.selectedCodeOperation = ops[0] || null;
+            this.selectedCodeOperation = null;
 
             this.operationStepSelect.onchange = () => {
                 this.selectedCodeOperation = this.operationStepSelect.value || null;
@@ -1392,7 +1413,7 @@ class OperateurInterface {
             } else {
                 // Si plusieurs étapes existent, exiger un choix
                 if (Array.isArray(this.availableSteps) && this.availableSteps.length > 1 && !this.selectedCodeOperation) {
-                    this.notificationManager.error('Veuillez choisir une étape (CodeOperation)');
+                    this.notificationManager.error('Veuillez choisir une étape (Phase)');
                     return;
                 }
                 // Démarrer nouvelle opération
@@ -1415,7 +1436,7 @@ class OperateurInterface {
         } catch (error) {
             console.error('Erreur:', error);
 
-            // Fallback UX: si le backend exige CodeOperation et fournit la liste, proposer un choix popup
+            // Fallback UX: si le backend exige un choix d'étape et fournit la liste, proposer un choix popup
             if (error?.errorCode === 'CODE_OPERATION_REQUIRED' && Array.isArray(error?.errorData?.steps) && error.errorData.steps.length > 0) {
                 try {
                     const steps = error.errorData.steps;
@@ -1432,14 +1453,16 @@ class OperateurInterface {
 
                     const choiceIdx = Number.parseInt(String(answer || '').trim(), 10) - 1;
                     const chosen = steps[choiceIdx];
+                    const chosenStepId = chosen ? String(chosen.StepId || '').trim() : '';
                     const chosenOp = chosen ? String(chosen.CodeOperation || '').trim() : '';
+                    const chosenValue = chosenStepId || chosenOp;
 
-                    if (!chosen || !chosenOp) {
+                    if (!chosen || !chosenValue) {
                         this.notificationManager.error('Aucune étape sélectionnée');
                         return;
                     }
 
-                    this.selectedCodeOperation = chosenOp;
+                    this.selectedCodeOperation = chosenValue;
                     this.availableSteps = steps;
 
                     // Réessayer le démarrage avec l'étape choisie
