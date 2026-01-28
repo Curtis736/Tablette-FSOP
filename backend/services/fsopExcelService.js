@@ -172,14 +172,48 @@ function normalizeHeaderToTagLike(text) {
 }
 
 /**
+ * Trouver la ligne d'en-tête la plus probable dans une feuille.
+ * Certains fichiers ont un titre sur les lignes 1-2 et les vrais en-têtes sur la ligne 3 (comme sur ton screenshot).
+ * Heuristique: chercher une ligne contenant des libellés SN et/ou "Lancement".
+ */
+function detectHeaderRowIndex(worksheet, maxScanRows = 10) {
+    if (!worksheet) return 1;
+    const max = Math.min(maxScanRows, worksheet.rowCount || maxScanRows);
+
+    for (let rowIdx = 1; rowIdx <= max; rowIdx++) {
+        const row = worksheet.getRow(rowIdx);
+        if (!row || row.cellCount === 0) continue;
+
+        let hitSN = false;
+        let hitLaunch = false;
+        let nonEmpty = 0;
+
+        for (let col = 1; col <= row.cellCount; col++) {
+            const v = row.getCell(col).value;
+            if (v === null || v === undefined || v === '') continue;
+            nonEmpty++;
+            const t = String(v).toLowerCase();
+            if (/s\/?n/.test(t) || /num.*serie/.test(t) || /no.*serie/.test(t) || /\b(sn|serial)\b/.test(t)) hitSN = true;
+            if (t.includes('lancement')) hitLaunch = true;
+        }
+
+        // needs some density so we don't match "Plan : 23.199" title rows
+        if (nonEmpty >= 3 && (hitSN || hitLaunch)) {
+            return rowIdx;
+        }
+    }
+    return 1;
+}
+
+/**
  * Trouver l'index de colonne (1-based) correspondant à un tag, en utilisant la première ligne comme en-têtes.
  */
-function findColumnByName(worksheet, tagName) {
+function findColumnByName(worksheet, tagName, headerRowIndex = 1) {
     if (!worksheet || !tagName) return null;
     const normalizedTag = normalizeHeaderToTagLike(tagName);
     if (!normalizedTag) return null;
 
-    const headerRow = worksheet.getRow(1);
+    const headerRow = worksheet.getRow(headerRowIndex || 1);
     if (!headerRow) return null;
 
     for (let col = 1; col <= headerRow.cellCount; col++) {
@@ -212,13 +246,13 @@ function normalizeSerialNumberForCompare(sn) {
  * Trouver la ligne correspondant au numéro de série dans un worksheet.
  * On cherche une colonne \"SN\" (S/N, N° de S/N, Numéro de série, etc.) puis on parcourt les lignes.
  */
-function findRowBySerialNumber(worksheet, serialNumber) {
+function findRowBySerialNumber(worksheet, serialNumber, headerRowIndex = 1) {
     if (!worksheet || !serialNumber) return null;
 
     const normalizedTarget = normalizeSerialNumberForCompare(serialNumber);
     if (!normalizedTarget) return null;
 
-    const headerRow = worksheet.getRow(1);
+    const headerRow = worksheet.getRow(headerRowIndex || 1);
     if (!headerRow) return null;
 
     const candidateCols = [];
@@ -243,7 +277,7 @@ function findRowBySerialNumber(worksheet, serialNumber) {
         return null;
     }
 
-    for (let rowIdx = 2; rowIdx <= worksheet.rowCount; rowIdx++) {
+    for (let rowIdx = (headerRowIndex || 1) + 1; rowIdx <= worksheet.rowCount; rowIdx++) {
         const row = worksheet.getRow(rowIdx);
         for (const col of candidateCols) {
             const cellVal = row.getCell(col).value;
@@ -329,14 +363,17 @@ async function updateExcelWithTaggedMeasures(excelPath, taggedMeasures, options 
             // Si possible, préparer la localisation de la ligne SN une seule fois
             let snWorksheet = null;
             let snRowIndex = null;
+            let snHeaderRowIndex = 1;
 
             if (serialNumber) {
                 for (const ws of workbook.worksheets) {
-                    const rowIdx = findRowBySerialNumber(ws, serialNumber);
+                    const headerIdx = detectHeaderRowIndex(ws, 10);
+                    const rowIdx = findRowBySerialNumber(ws, serialNumber, headerIdx);
                     if (rowIdx !== null) {
                         snWorksheet = ws;
                         snRowIndex = rowIdx;
-                        console.log(`✅ Ligne SN trouvée pour ${serialNumber} dans la feuille "${ws.name}" (ligne ${rowIdx})`);
+                        snHeaderRowIndex = headerIdx;
+                        console.log(`✅ Ligne SN trouvée pour ${serialNumber} dans la feuille "${ws.name}" (en-tête ligne ${headerIdx}, données ligne ${rowIdx})`);
                         break;
                     }
                 }
@@ -359,7 +396,7 @@ async function updateExcelWithTaggedMeasures(excelPath, taggedMeasures, options 
 
                     // Priorité 1 : si on a trouvé une ligne SN, essayer de trouver la colonne correspondante
                     if (snWorksheet && snRowIndex !== null) {
-                        const colIdx = findColumnByName(snWorksheet, tagName);
+                        const colIdx = findColumnByName(snWorksheet, tagName, snHeaderRowIndex);
                         if (colIdx !== null) {
                             const row = snWorksheet.getRow(snRowIndex);
                             const cell = row.getCell(colIdx);
@@ -779,7 +816,13 @@ module.exports = {
     findExcelFileByReference,
     findMesureFileInLaunch,
     updateExcelWithTaggedMeasures,
-    validateSerialNumberInMesure
+    validateSerialNumberInMesure,
+    __test: {
+        detectHeaderRowIndex,
+        findRowBySerialNumber,
+        findColumnByName,
+        normalizeHeaderToTagLike
+    }
 };
 
 
