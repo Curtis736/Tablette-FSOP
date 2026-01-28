@@ -262,8 +262,9 @@ function extractTextFromParagraphXml(paraXml) {
     while ((m = textRegex.exec(paraXml)) !== null) {
         const attrs = m[1] || '';
         let raw = (m[2] || '').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&');
-        // Safety: if some templates contain literal Word tags inside text, strip them
-        raw = raw.replace(/<\/?w:[^>]+>/gi, '');
+        // Safety: some templates contain literal Word XML tags embedded in text (e.g. w14:checkbox).
+        // Strip any XML-like tags that include a namespace prefix (something:tag), but keep comparisons like "< 0,5 dB".
+        raw = raw.replace(/<\/?[A-Za-z0-9._-]+:[^>]*?>/g, '');
         const preserve = /xml:space="preserve"/i.test(attrs);
 
         if (preserve) {
@@ -372,7 +373,8 @@ function extractTextFromCellXml(tcXml) {
     while ((m = textRegex.exec(tcXml)) !== null) {
         const attrs = m[1] || '';
         let raw = (m[2] || '').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&');
-        raw = raw.replace(/<\/?w:[^>]+>/gi, '');
+        // Same protection as paragraphs: strip namespaced XML tags embedded as literal text.
+        raw = raw.replace(/<\/?[A-Za-z0-9._-]+:[^>]*?>/g, '');
         const preserve = /xml:space="preserve"/i.test(attrs);
 
         if (preserve) {
@@ -2293,6 +2295,11 @@ function extractTaggedMeasures(xmlContent, placeholders) {
 }
 
 module.exports = {
-    parseWordStructure
+    parseWordStructure,
+    // Expose a tiny surface for unit tests (does not affect runtime behavior)
+    __test: {
+        extractTextFromParagraphXml,
+        extractTextFromCellXml
+    }
 };
 
