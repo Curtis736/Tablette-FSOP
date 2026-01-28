@@ -1248,6 +1248,7 @@ router.put('/operations/:id', async (req, res) => {
         const updateFields = [];
         const params = { id: parseInt(id) };
         let formattedEndTimeForFinEvent = null;
+        let requestedLancementCode = lancementCode;
         
         // Heures et statut sont modifiables
         if (startTime !== undefined) {
@@ -1304,18 +1305,23 @@ router.put('/operations/:id', async (req, res) => {
             }
         }
         
-        // Ignorer les autres champs non modifiables
-        if (operatorName !== undefined || lancementCode !== undefined || article !== undefined) {
-            console.log('⚠️ Seules les heures et le statut peuvent être modifiés');
-        }
-        
-        if (updateFields.length === 0) {
-            // No-op update: avoid failing the UI when nothing actually changed
-            return res.json({
-                success: true,
-                message: 'Aucune modification',
-                noChange: true
-            });
+        // Normaliser lancementCode si fourni (admin: correction LT)
+        if (requestedLancementCode !== undefined) {
+            const normalized = String(requestedLancementCode || '').trim().toUpperCase();
+            if (!normalized) {
+                return res.status(400).json({
+                    success: false,
+                    error: 'LancementCode invalide (vide)'
+                });
+            }
+            // Format attendu: LT + 7 ou 8 chiffres
+            if (!/^LT\d{7,8}$/.test(normalized)) {
+                return res.status(400).json({
+                    success: false,
+                    error: 'Format de lancement invalide (attendu: LT1234567 ou LT12345678)'
+                });
+            }
+            requestedLancementCode = normalized;
         }
         
         // 🔒 VÉRIFICATION DE SÉCURITÉ : Vérifier que l'enregistrement existe et récupérer l'OperatorCode
@@ -1352,10 +1358,74 @@ router.put('/operations/:id', async (req, res) => {
 
         const base = existing[0];
         const baseOperatorCode = base.OperatorCode;
-        const baseLancementCode = base.CodeLanctImprod;
+        let baseLancementCode = base.CodeLanctImprod;
         const baseDate = base.DateCreation; // DATE
         const basePhase = base.Phase;
         const baseCodeRubrique = base.CodeRubrique;
+        const baseSessionId = base.SessionId || null;
+
+        // Admin: allow correcting LT for non-consolidated operations by updating the whole step group
+        // We update all events for the same (Operator + Phase + CodeRubrique + day), and prefer SessionId when available.
+        let didLancementUpdate = false;
+        if (requestedLancementCode !== undefined && requestedLancementCode !== String(baseLancementCode || '').trim().toUpperCase()) {
+            try {
+                if (baseSessionId) {
+                    await executeQuery(
+                        `UPDATE [SEDI_APP_INDEPENDANTE].[dbo].[ABHISTORIQUE_OPERATEURS]
+                         SET CodeLanctImprod = @newLancementCode
+                         WHERE OperatorCode = @operatorCode
+                           AND SessionId = @sessionId
+                           AND Phase = @phase
+                           AND CodeRubrique = @codeRubrique
+                           AND CAST(DateCreation AS DATE) = CAST(@date AS DATE)`,
+                        {
+                            newLancementCode: requestedLancementCode,
+                            operatorCode: baseOperatorCode,
+                            sessionId: baseSessionId,
+                            phase: basePhase,
+                            codeRubrique: baseCodeRubrique,
+                            date: baseDate
+                        }
+                    );
+                } else {
+                    await executeQuery(
+                        `UPDATE [SEDI_APP_INDEPENDANTE].[dbo].[ABHISTORIQUE_OPERATEURS]
+                         SET CodeLanctImprod = @newLancementCode
+                         WHERE OperatorCode = @operatorCode
+                           AND CodeLanctImprod = @oldLancementCode
+                           AND Phase = @phase
+                           AND CodeRubrique = @codeRubrique
+                           AND CAST(DateCreation AS DATE) = CAST(@date AS DATE)`,
+                        {
+                            newLancementCode: requestedLancementCode,
+                            oldLancementCode: baseLancementCode,
+                            operatorCode: baseOperatorCode,
+                            phase: basePhase,
+                            codeRubrique: baseCodeRubrique,
+                            date: baseDate
+                        }
+                    );
+                }
+                didLancementUpdate = true;
+                baseLancementCode = requestedLancementCode; // Important for FIN propagation below
+                console.log(`✅ LancementCode corrigé: ${String(base.CodeLanctImprod || '').trim()} -> ${requestedLancementCode}`);
+            } catch (e) {
+                console.warn(`⚠️ Impossible de corriger le lancement: ${e.message}`);
+                return res.status(500).json({
+                    success: false,
+                    error: 'Erreur serveur lors de la correction du lancement'
+                });
+            }
+        }
+
+        // If nothing to change (including LT), treat as no-op success
+        if (updateFields.length === 0 && !didLancementUpdate) {
+            return res.json({
+                success: true,
+                message: 'Aucune modification',
+                noChange: true
+            });
+        }
 
         // If user edits endTime, ensure the FIN event is updated (or created) for the same (LT + operator + phase + rubrique + date)
         if (params.endTime && base.Ident !== 'FIN') {
@@ -1549,7 +1619,8 @@ router.post('/operations', async (req, res) => {
         console.log('=== AJOUT NOUVELLE OPERATION ===');
         console.log('Données reçues:', req.body);
 
-        // Helper: récupérer les étapes de fabrication (CodeOperation) côté ERP pour décider si on doit demander un choix
+        // Helper: récupérer les étapes ERP pour décider si on doit demander un choix
+        // IMPORTANT: une "étape" = (Phase + CodeRubrique). CodeOperation est le libellé / nom de fabrication.
         const getStepsForLaunch = async (lt) => {
             const rows = await executeQuery(`
                 SELECT DISTINCT
@@ -1564,19 +1635,42 @@ router.post('/operations', async (req, res) => {
                   AND C.TypeRubrique = 'O'
                   AND C.CodeOperation IS NOT NULL
                   AND LTRIM(RTRIM(C.CodeOperation)) <> ''
-                  AND UPPER(LTRIM(RTRIM(C.CodeOperation))) COLLATE Latin1_General_CI_AI <> 'SECHAGE'
+                  -- Ne jamais proposer "Séchage" / "ÉtuVage" (accents/casse ignorés)
+                  AND UPPER(LTRIM(RTRIM(C.CodeOperation))) COLLATE Latin1_General_CI_AI NOT IN ('SECHAGE', 'ETUVAGE')
                 ORDER BY LTRIM(RTRIM(C.Phase)), LTRIM(RTRIM(C.CodeOperation)), LTRIM(RTRIM(C.CodeRubrique))
             `, { lancementCode: lt });
-            const steps = rows || [];
+            const steps = (rows || []).map(s => {
+                const phase = String(s?.Phase || '').trim();
+                const rubrique = String(s?.CodeRubrique || '').trim();
+                const fabrication = String(s?.CodeOperation || '').trim();
+                return {
+                    ...s,
+                    StepId: `${phase}|${rubrique}`,
+                    Label: `${phase}${rubrique ? ` (${rubrique})` : ''} — ${fabrication || 'Fabrication'}`
+                };
+            });
             const uniqueOps = [...new Set(steps.map(s => String(s?.CodeOperation || '').trim()).filter(Boolean))];
-            return { steps, uniqueOps };
+            const uniqueSteps = [...new Set(steps.map(s => String(s?.StepId || '').trim()).filter(Boolean))];
+            return { steps, uniqueOps, uniqueSteps };
         };
 
         const resolveStep = async (lt, op) => {
-            const { steps, uniqueOps } = await getStepsForLaunch(lt);
-            const normalized = String(op || '').trim();
-            const ctx = steps.find(s => String(s?.CodeOperation || '').trim() === normalized) || null;
-            return { steps, uniqueOps, ctx };
+            const { steps, uniqueOps, uniqueSteps } = await getStepsForLaunch(lt);
+            const raw = String(op || '').trim();
+            if (!raw) return { steps, uniqueOps, uniqueSteps, ctx: steps[0] || null };
+
+            // Support "StepId" = "PHASE|CODERUBRIQUE" (permet de choisir une étape même si CodeOperation est identique)
+            if (raw.includes('|')) {
+                const [ph, rub] = raw.split('|').map(x => String(x || '').trim());
+                const matchByKey = steps.find(s =>
+                    String(s?.Phase || '').trim() === ph &&
+                    String(s?.CodeRubrique || '').trim() === rub
+                );
+                return { steps, uniqueOps, uniqueSteps, ctx: matchByKey || null };
+            }
+
+            const ctx = steps.find(s => String(s?.CodeOperation || '').trim() === raw) || null;
+            return { steps, uniqueOps, uniqueSteps, ctx };
         };
         
         // Valider le numéro de lancement dans LCTE (optionnel pour l'admin)
@@ -1602,21 +1696,23 @@ router.post('/operations', async (req, res) => {
             console.log('✅ Lancement validé:', lancementInfo);
         }
 
-        // Si lancement valide, appliquer la logique "choisir uniquement si plusieurs fabrications"
+        // Si lancement valide, appliquer la logique "choisir uniquement si plusieurs étapes (Phase+CodeRubrique)"
         // et résoudre Phase/CodeRubrique depuis l'ERP quand codeOperation est fourni.
         let erpPhase = null;
         let erpRubrique = null;
 
         if (validation.valid) {
-            const { steps, uniqueOps, ctx } = await resolveStep(lancementCode, codeOperation);
-            if (uniqueOps.length > 1 && !codeOperation) {
+            const { steps, uniqueOps, uniqueSteps, ctx } = await resolveStep(lancementCode, codeOperation);
+            if (uniqueSteps.length > 1 && !codeOperation) {
                 return res.status(400).json({
                     success: false,
                     error: 'CODE_OPERATION_REQUIRED',
-                    message: 'Plusieurs fabrications sont disponibles. Choisissez une fabrication (CodeOperation).',
+                    message: 'Plusieurs étapes sont disponibles. Choisissez une étape (Phase).',
                     lancementCode,
                     steps,
                     uniqueOperations: uniqueOps,
+                    uniqueSteps,
+                    stepCount: uniqueSteps.length,
                     operationCount: uniqueOps.length
                 });
             }
@@ -1630,13 +1726,15 @@ router.post('/operations', async (req, res) => {
                         received: { codeOperation },
                         steps,
                         uniqueOperations: uniqueOps,
+                        uniqueSteps,
+                        stepCount: uniqueSteps.length,
                         operationCount: uniqueOps.length
                     });
                 }
                 erpPhase = ctx.Phase || null;
                 erpRubrique = ctx.CodeRubrique || null;
-            } else if (uniqueOps.length === 1) {
-                // Auto-sélection implicite pour cohérence des clés ERP
+            } else if (uniqueSteps.length === 1) {
+                // Auto-sélection implicite pour cohérence des clés ERP (clé = Phase + CodeRubrique)
                 const only = steps[0] || null;
                 erpPhase = only?.Phase || null;
                 erpRubrique = only?.CodeRubrique || null;

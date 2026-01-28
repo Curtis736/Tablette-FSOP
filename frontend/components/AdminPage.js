@@ -961,27 +961,37 @@ class AdminPage {
             const lancementCode = prompt('Code lancement :');
             if (!lancementCode) return;
 
-            // Étape / fabrication (CodeOperation) : ne demander que s'il y a plusieurs fabrications distinctes
+            // Étape (Phase + CodeRubrique) : ne demander que s'il y a plusieurs étapes
             let codeOperation = null;
             try {
                 const stepsRes = await this.apiService.getLancementSteps(lancementCode);
-                const uniqueOps = stepsRes?.uniqueOperations || [];
-                const opCount = stepsRes?.operationCount ?? uniqueOps.length;
+                const steps = stepsRes?.steps || [];
+                const uniqueSteps = stepsRes?.uniqueSteps || [];
+                const stepCount = stepsRes?.stepCount ?? uniqueSteps.length;
 
-                if (Array.isArray(uniqueOps) && opCount > 1) {
-                    const lines = uniqueOps.map((op, idx) => `${idx + 1}) ${op}`);
+                if (Array.isArray(uniqueSteps) && stepCount > 1) {
+                    // Afficher une liste lisible des étapes (Phase (CodeRubrique) — Fabrication)
+                    const byStepId = new Map();
+                    (steps || []).forEach(s => {
+                        const stepId = String(s?.StepId || '').trim();
+                        if (!stepId || byStepId.has(stepId)) return;
+                        byStepId.set(stepId, String(s?.Label || stepId).trim());
+                    });
+                    const options = Array.from(byStepId.entries()).map(([stepId, label]) => ({ stepId, label }));
+                    const lines = options.map((o, idx) => `${idx + 1}) ${o.label}`);
                     const answer = window.prompt(
-                        `Plusieurs fabrications sont disponibles pour ${lancementCode}.\nChoisis le numéro:\n\n${lines.join('\n')}\n\nNuméro:`
+                        `Plusieurs étapes sont disponibles pour ${lancementCode}.\nChoisis le numéro:\n\n${lines.join('\n')}\n\nNuméro:`
                     );
                     const choiceIdx = Number.parseInt(String(answer || '').trim(), 10) - 1;
-                    const chosen = uniqueOps[choiceIdx];
+                    const chosen = options[choiceIdx]?.stepId;
                     if (!chosen) {
-                        this.notificationManager.error('Aucune fabrication sélectionnée (CodeOperation)');
+                        this.notificationManager.error('Aucune étape sélectionnée');
                         return;
                     }
                     codeOperation = chosen;
-                } else if (Array.isArray(uniqueOps) && uniqueOps.length === 1) {
-                    codeOperation = uniqueOps[0];
+                } else if (Array.isArray(uniqueSteps) && uniqueSteps.length === 1) {
+                    // Envoyer StepId (Phase|CodeRubrique) pour éviter les collisions quand CodeOperation est identique
+                    codeOperation = uniqueSteps[0];
                 }
             } catch (e) {
                 // Best effort: si l'endpoint steps échoue, on laisse l'admin créer une ligne "ADMIN"
@@ -1900,8 +1910,18 @@ class AdminPage {
         const eventId = record.EventId || record.id || id;
 
         // Préparer les valeurs actuelles pour les popups
+        const currentLancementCode = String(record.LancementCode || record.CodeLanctImprod || record.lancementCode || '').trim();
         const currentStart = this.cleanTimeValue(record.startTime || record.StartTime || '');
         const currentEnd = this.cleanTimeValue(record.endTime || record.EndTime || '');
+
+        const newLancementCode = prompt(
+            `Lancement (actuel: ${currentLancementCode || 'vide'}) :`,
+            currentLancementCode
+        );
+        if (newLancementCode === null) {
+            // Annulé par l'utilisateur
+            return;
+        }
 
         const newStart = prompt(
             `Heure début (actuel: ${currentStart || 'vide'}) - format HH:mm :`,
@@ -1922,6 +1942,8 @@ class AdminPage {
         }
 
         const updateData = {};
+        const normalizedLancement = String(newLancementCode || '').trim();
+        if (normalizedLancement && normalizedLancement !== currentLancementCode) updateData.lancementCode = normalizedLancement;
         if (newStart && newStart !== currentStart) updateData.startTime = newStart;
         if (newEnd && newEnd !== currentEnd) updateData.endTime = newEnd;
 
