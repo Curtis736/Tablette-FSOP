@@ -55,10 +55,6 @@ class OperateurInterface {
         this.timerDisplay = document.getElementById('timerDisplay');
         this.statusDisplay = document.getElementById('statusDisplay');
         this.endTimeDisplay = document.getElementById('endTimeDisplay');
-
-        // Étapes de fabrication (CodeOperation)
-        this.operationStepGroup = document.getElementById('operationStepGroup');
-        this.operationStepSelect = document.getElementById('operationStepSelect');
         
         // Éléments pour l'historique
         this.refreshHistoryBtn = document.getElementById('refreshHistoryBtn');
@@ -85,9 +81,7 @@ class OperateurInterface {
         this.closeFsopBtn = document.getElementById('closeFsopBtn');
         this.fsopTemplateCodeInput = document.getElementById('fsopTemplateCode');
         this.fsopSerialNumberInput = document.getElementById('fsopSerialNumber');
-        this.fsopLotGroup = document.getElementById('fsopLotGroup');
-        this.fsopLotList = document.getElementById('fsopLotList');
-        this.generateFsopLotBtn = document.getElementById('generateFsopLotBtn');
+        this.openFsopWordBtn = document.getElementById('openFsopWordBtn');
         this.openFsopFormBtn = document.getElementById('openFsopFormBtn');
         this.fsopFormModal = document.getElementById('fsopFormModal');
         this.closeFsopFormBtn = document.getElementById('closeFsopFormBtn');
@@ -101,12 +95,6 @@ class OperateurInterface {
         // Instance du formulaire FSOP
         this.fsopForm = null;
         this.currentFsopData = null;
-        this.selectedFsopLot = null;
-        this.selectedFsopLotsByRubrique = {}; // CodeRubrique -> CodeLot (choix utilisateur)
-
-        // Étapes / fabrication
-        this.availableSteps = [];
-        this.selectedCodeOperation = null;
         
         // Initialiser le gestionnaire de scanner
         this.scannerManager = new ScannerManager();
@@ -215,8 +203,8 @@ class OperateurInterface {
             });
         }
 
-        if (this.generateFsopLotBtn) {
-            this.generateFsopLotBtn.addEventListener('click', () => this.handleGenerateFsopLot());
+        if (this.openFsopWordBtn) {
+            this.openFsopWordBtn.addEventListener('click', () => this.handleOpenFsopWord());
         }
 
         if (this.openFsopFormBtn) {
@@ -329,11 +317,6 @@ class OperateurInterface {
         }
 
         this.fsopModal.style.display = 'flex';
-
-        // Charger les lots disponibles pour le lancement courant (si présent)
-        this.refreshFsopLots().catch((e) => {
-            console.warn('⚠️ Impossible de charger les lots FSOP:', e?.message || e);
-        });
         
         // Réattacher les listeners si l'élément n'était pas trouvé au démarrage
         if (!this.fsopSerialNumberInput) {
@@ -361,145 +344,6 @@ class OperateurInterface {
         if (this.fsopTemplateCodeInput) {
             this.fsopTemplateCodeInput.value = this.fsopTemplateCodeInput.value?.trim() || '';
             setTimeout(() => this.fsopTemplateCodeInput.focus(), 50);
-        }
-    }
-
-    async refreshFsopLots() {
-        // Lister toutes les "désignations" (CodeRubrique) du lancement et permettre le choix
-        // du CodeLot lorsqu'il y en a plusieurs sur une même désignation.
-        const lt = this.getCurrentLaunchNumberForFsop();
-        if (!lt) {
-            if (this.fsopLotGroup) this.fsopLotGroup.style.display = 'none';
-            this.selectedFsopLot = null;
-            this.selectedFsopLotsByRubrique = {};
-            return;
-        }
-
-        if (!this.fsopLotGroup || !this.fsopLotList) return;
-
-        const result = await this.apiService.getFsopLots(lt);
-        const uniqueLots = result?.uniqueLots || [];
-        const items = result?.items || [];
-
-        // Aucun lot => cacher
-        if (!Array.isArray(uniqueLots) || uniqueLots.length === 0) {
-            this.fsopLotGroup.style.display = 'none';
-            this.selectedFsopLot = null;
-            this.selectedFsopLotsByRubrique = {};
-            return;
-        }
-
-        // Construire une liste par CodeRubrique
-        const safeItems = Array.isArray(items) ? items : [];
-        const rowsHtml = [];
-
-        // Reset selections if LT changed / refresh
-        this.selectedFsopLotsByRubrique = this.selectedFsopLotsByRubrique || {};
-
-        for (const it of safeItems) {
-            const codeRubrique = String(it.codeRubrique || '').trim();
-            const designation = String(it.designation || it.codeRubrique || '').trim() || 'Désignation';
-            const phases = Array.isArray(it.phases) ? it.phases.filter(Boolean) : [];
-            const lots = Array.isArray(it.lots) ? it.lots.filter(Boolean) : [];
-            if (!codeRubrique || lots.length === 0) continue;
-
-            const label = phases.length > 0
-                ? `${designation} (Phase ${phases.join(', ')})`
-                : designation;
-
-            if (lots.length === 1) {
-                const chosen = lots[0];
-                this.selectedFsopLotsByRubrique[codeRubrique] = chosen;
-                rowsHtml.push(`
-                    <div class="fsop-lot-row" style="display:flex; gap:10px; align-items:center; padding:6px 0; border-bottom:1px solid #eee;">
-                        <div style="flex:1; font-size:0.95rem;">${this.escapeHtml(label)}</div>
-                        <div style="min-width:140px; font-weight:600;">${this.escapeHtml(chosen)}</div>
-                    </div>
-                `);
-            } else {
-                const existing = this.selectedFsopLotsByRubrique[codeRubrique];
-                const initial = existing && lots.includes(existing) ? existing : lots[0];
-                this.selectedFsopLotsByRubrique[codeRubrique] = initial;
-
-                rowsHtml.push(`
-                    <div class="fsop-lot-row" style="display:flex; gap:10px; align-items:center; padding:6px 0; border-bottom:1px solid #eee;">
-                        <div style="flex:1; font-size:0.95rem;">${this.escapeHtml(label)}</div>
-                        <select data-code-rubrique="${this.escapeHtml(codeRubrique)}" style="min-width:180px; padding:8px; border-radius:8px; border:1px solid #ddd;">
-                            ${lots.map(l => `<option value="${this.escapeHtml(String(l))}" ${l === initial ? 'selected' : ''}>${this.escapeHtml(String(l))}</option>`).join('')}
-                        </select>
-                    </div>
-                `);
-            }
-        }
-
-        // Fallback: si pas d'items, afficher juste les lots uniques
-        if (rowsHtml.length === 0) {
-            const lots = uniqueLots;
-            if (lots.length === 1) {
-                this.selectedFsopLot = lots[0];
-                this.fsopLotGroup.style.display = 'none';
-                return;
-            }
-            rowsHtml.push(`
-                <div class="fsop-lot-row" style="display:flex; gap:10px; align-items:center; padding:6px 0;">
-                    <div style="flex:1; font-size:0.95rem;">Code Lot</div>
-                    <select data-code-rubrique="__GLOBAL__" style="min-width:180px; padding:8px; border-radius:8px; border:1px solid #ddd;">
-                        ${lots.map(l => `<option value="${this.escapeHtml(String(l))}">${this.escapeHtml(String(l))}</option>`).join('')}
-                    </select>
-                </div>
-            `);
-        }
-
-        this.fsopLotList.innerHTML = rowsHtml.join('');
-        this.fsopLotGroup.style.display = 'block';
-
-        // Bind events (delegation)
-        this.fsopLotList.querySelectorAll('select[data-code-rubrique]').forEach(sel => {
-            sel.onchange = () => {
-                const cr = sel.getAttribute('data-code-rubrique') || '';
-                const lot = sel.value || null;
-                if (cr) this.selectedFsopLotsByRubrique[cr] = lot;
-                this.selectedFsopLot = lot; // lot "courant" (celui choisi en dernier)
-            };
-        });
-
-        // Définir un lot "courant" par défaut si on en a exactement un au total
-        if (uniqueLots.length === 1) {
-            this.selectedFsopLot = uniqueLots[0];
-        }
-    }
-
-    async handleGenerateFsopLot() {
-        const lt = this.getCurrentLaunchNumberForFsop();
-        if (!lt) {
-            this.notificationManager.warning('Saisissez un LT valide avant de générer le Code Lot');
-            return;
-        }
-
-        const originalHtml = this.generateFsopLotBtn?.innerHTML;
-        try {
-            if (this.generateFsopLotBtn) {
-                this.generateFsopLotBtn.disabled = true;
-                this.generateFsopLotBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Génération...';
-            }
-
-            await this.refreshFsopLots();
-
-            if (this.selectedFsopLot) {
-                this.notificationManager.success(`Code Lot: ${this.selectedFsopLot}`, 4000);
-            } else if (this.fsopLotGroup && this.fsopLotGroup.style.display !== 'none') {
-                this.notificationManager.info('Sélectionnez un Code Lot dans la liste', 4000);
-            } else {
-                this.notificationManager.warning('Aucun Code Lot trouvé pour ce lancement', 5000);
-            }
-        } catch (e) {
-            console.error('❌ Erreur génération Code Lot:', e);
-            this.notificationManager.error('Erreur lors de la récupération du Code Lot');
-        } finally {
-            if (this.generateFsopLotBtn) {
-                this.generateFsopLotBtn.disabled = false;
-                this.generateFsopLotBtn.innerHTML = originalHtml || '<i class="fas fa-box"></i> Générer Code Lot';
-            }
         }
     }
 
@@ -771,12 +615,7 @@ class OperateurInterface {
             const initialData = {
                 placeholders: {
                     '{{LT}}': lt,
-                    '{{SN}}': serialNumber,
-                    ...(this.selectedFsopLot ? {
-                        '{{LOT}}': this.selectedFsopLot,
-                        '{{CODELOT}}': this.selectedFsopLot,
-                        '{{CODE_LOT}}': this.selectedFsopLot
-                    } : {})
+                    '{{SN}}': serialNumber
                 },
                 launchNumber: lt, // Also pass as separate field for direct access
                 serialNumber: serialNumber, // Also pass as separate field for direct access
@@ -1155,7 +994,7 @@ class OperateurInterface {
             this.controlsSection.style.display = 'block';
             this.selectedLancement.textContent = code;
             this.lancementDetails.innerHTML = `
-                <strong>Code: ${code}</strong><br>
+                <strong>Lancement: ${code}</strong><br>
                 <span class="status-badge status-pending">En attente de validation</span>
             `;
             
@@ -1206,15 +1045,12 @@ class OperateurInterface {
             };
             
             this.lancementDetails.innerHTML = `
-                <strong>Code: ${code}</strong><br>
+                <strong>Lancement: ${code}</strong><br>
                 <strong>Article: ${lancement.CodeArticle || 'N/A'}</strong><br>
                 <strong>Désignation: ${lancement.DesignationLct1 || 'N/A'}</strong><br>
                 <small>✅ Lancement validé dans LCTE - Prêt à démarrer</small>
             `;
             this.notificationManager.success('Lancement trouvé et validé dans la base de données');
-
-            // Charger les étapes de fabrication (CodeOperation) si plusieurs
-            await this.refreshOperationSteps(code);
             
             // Recharger les commentaires pour ce lancement
             await this.loadComments();
@@ -1233,7 +1069,7 @@ class OperateurInterface {
             if (error.status === 409) {
                 // Conflit : lancement déjà en cours par un autre opérateur
                 this.lancementDetails.innerHTML = `
-                    <strong>Code: ${code}</strong><br>
+                    <strong>Lancement: ${code}</strong><br>
                     <small style="color: red;">❌ Lancement déjà en cours par un autre opérateur</small><br>
                     <small style="color: orange;">⚠️ Contactez l'administrateur pour résoudre le conflit</small>
                 `;
@@ -1243,7 +1079,7 @@ class OperateurInterface {
             } else {
                 // Autres erreurs (lancement non trouvé, etc.)
                 this.lancementDetails.innerHTML = `
-                    <strong>Code: ${code}</strong><br>
+                    <strong>Lancement: ${code}</strong><br>
                     <small>❌ Lancement non trouvé dans la base de données LCTE</small><br>
                     <small>Veuillez vérifier le code de lancement</small>
                 `;
@@ -1256,79 +1092,7 @@ class OperateurInterface {
             setTimeout(() => {
                 this.lancementInput.value = '';
                 this.controlsSection.style.display = 'none';
-                this.hideOperationSteps();
             }, 3000);
-        }
-    }
-
-    hideOperationSteps() {
-        if (this.operationStepGroup) this.operationStepGroup.style.display = 'none';
-        if (this.operationStepSelect) {
-            this.operationStepSelect.innerHTML = '<option value="">Choisir une étape (Phase)</option>';
-        }
-        this.availableSteps = [];
-        this.selectedCodeOperation = null;
-    }
-
-    async refreshOperationSteps(lancementCode) {
-        if (!this.operationStepGroup || !this.operationStepSelect) return;
-
-        try {
-            const res = await this.apiService.getLancementSteps(lancementCode);
-            const steps = res?.steps || res?.data?.steps || [];
-            this.availableSteps = Array.isArray(steps) ? steps : [];
-
-            // Étapes distinctes = (Phase + CodeRubrique) => permet de choisir 010/040/060
-            const stepItems = this.availableSteps
-                .map(s => {
-                    const phase = String(s?.Phase || '').trim();
-                    const rubrique = String(s?.CodeRubrique || '').trim();
-                    const fabrication = String(s?.CodeOperation || '').trim();
-                    const stepId = String(s?.StepId || `${phase}|${rubrique}`).trim();
-                    const label = String(s?.Label || `${phase}${rubrique ? ` (${rubrique})` : ''} — ${fabrication || 'Fabrication'}`).trim();
-
-                    // Double sécurité: ne jamais afficher Séchage / ÉtuVage
-                    const normalizedFab = fabrication
-                        .toUpperCase()
-                        .normalize('NFD')
-                        .replace(/[\u0300-\u036f]/g, '')
-                        .trim();
-                    if (normalizedFab === 'SECHAGE' || normalizedFab === 'ETUVAGE') return null;
-
-                    return { stepId, label };
-                })
-                .filter(Boolean);
-
-            const uniqueSteps = [];
-            const seen = new Set();
-            for (const s of stepItems) {
-                if (!s.stepId || seen.has(s.stepId)) continue;
-                seen.add(s.stepId);
-                uniqueSteps.push(s);
-            }
-
-            if (uniqueSteps.length <= 1) {
-                // Auto-sélection s'il n'y a qu'une étape
-                this.selectedCodeOperation = uniqueSteps[0]?.stepId || null;
-                this.operationStepGroup.style.display = 'none';
-                return;
-            }
-
-            const optionsHtml = [
-                '<option value="">Choisir une étape (Phase)</option>',
-                ...uniqueSteps.map(s => `<option value="${this.escapeHtml(s.stepId)}">${this.escapeHtml(s.label)}</option>`)
-            ].join('');
-
-            this.operationStepSelect.innerHTML = optionsHtml;
-            this.operationStepGroup.style.display = 'flex';
-            this.selectedCodeOperation = null;
-
-            this.operationStepSelect.onchange = () => {
-                this.selectedCodeOperation = this.operationStepSelect.value || null;
-            };
-        } catch (e) {
-            console.warn('⚠️ Impossible de récupérer les étapes (CodeOperation):', e?.message || e);
-            this.hideOperationSteps();
         }
     }
 
@@ -1367,7 +1131,7 @@ class OperateurInterface {
         this.statusDisplay.textContent = 'En cours';
         
         this.lancementDetails.innerHTML = `
-            <strong>Code: ${operation.CodeLancement}</strong><br>
+            <strong>Lancement: ${operation.CodeLancement}</strong><br>
             <small>Opération en cours depuis ${new Date(operation.DateTravail).toLocaleTimeString('fr-FR', { timeZone: 'Europe/Paris', hour: '2-digit', minute: '2-digit' })}</small>
         `;
         
@@ -1389,7 +1153,7 @@ class OperateurInterface {
         this.statusDisplay.textContent = 'En pause';
         
         this.lancementDetails.innerHTML = `
-            <strong>Code: ${operation.CodeLancement}</strong><br>
+            <strong>Lancement: ${operation.CodeLancement}</strong><br>
             <small>Opération en pause depuis ${new Date(operation.DateTravail).toLocaleTimeString('fr-FR', { timeZone: 'Europe/Paris', hour: '2-digit', minute: '2-digit' })}</small>
         `;
         
@@ -1408,16 +1172,11 @@ class OperateurInterface {
             
             if (this.isPaused) {
                 // Reprendre l'opération en pause
-                await this.apiService.resumeOperation(operatorCode, code, { codeOperation: this.selectedCodeOperation });
+                await this.apiService.resumeOperation(operatorCode, code);
                 this.notificationManager.success('Opération reprise');
             } else {
-                // Si plusieurs étapes existent, exiger un choix
-                if (Array.isArray(this.availableSteps) && this.availableSteps.length > 1 && !this.selectedCodeOperation) {
-                    this.notificationManager.error('Veuillez choisir une étape (Phase)');
-                    return;
-                }
                 // Démarrer nouvelle opération
-                await this.apiService.startOperation(operatorCode, code, { codeOperation: this.selectedCodeOperation });
+                await this.apiService.startOperation(operatorCode, code);
                 this.notificationManager.success('Opération démarrée');
             }
             
@@ -1435,57 +1194,6 @@ class OperateurInterface {
             
         } catch (error) {
             console.error('Erreur:', error);
-
-            // Fallback UX: si le backend exige un choix d'étape et fournit la liste, proposer un choix popup
-            if (error?.errorCode === 'CODE_OPERATION_REQUIRED' && Array.isArray(error?.errorData?.steps) && error.errorData.steps.length > 0) {
-                try {
-                    const steps = error.errorData.steps;
-                    const lines = steps.map((s, idx) => {
-                        const op = String(s.CodeOperation || '').trim();
-                        const phase = String(s.Phase || '').trim();
-                        const rubrique = String(s.CodeRubrique || '').trim();
-                        return `${idx + 1}) ${phase || 'Phase ?'} — ${op}${rubrique ? ` (${rubrique})` : ''}`;
-                    });
-
-                    const answer = window.prompt(
-                        `Plusieurs étapes de fabrication sont disponibles. Choisis le numéro de l'étape:\n\n${lines.join('\n')}\n\nNuméro:`
-                    );
-
-                    const choiceIdx = Number.parseInt(String(answer || '').trim(), 10) - 1;
-                    const chosen = steps[choiceIdx];
-                    const chosenStepId = chosen ? String(chosen.StepId || '').trim() : '';
-                    const chosenOp = chosen ? String(chosen.CodeOperation || '').trim() : '';
-                    const chosenValue = chosenStepId || chosenOp;
-
-                    if (!chosen || !chosenValue) {
-                        this.notificationManager.error('Aucune étape sélectionnée');
-                        return;
-                    }
-
-                    this.selectedCodeOperation = chosenValue;
-                    this.availableSteps = steps;
-
-                    // Réessayer le démarrage avec l'étape choisie
-                    const operatorCode = this.operator.code || this.operator.id;
-                    await this.apiService.startOperation(operatorCode, code, { codeOperation: this.selectedCodeOperation });
-                    this.notificationManager.success('Opération démarrée');
-
-                    this.currentLancement = { CodeLancement: code };
-                    this.startTimer();
-                    this.startBtn.disabled = true;
-                    this.pauseBtn.disabled = false;
-                    this.stopBtn.disabled = false;
-                    this.statusDisplay.textContent = 'En cours';
-                    this.lancementInput.disabled = true;
-                    this.isPaused = false;
-                    this.loadOperatorHistory();
-                    return;
-                } catch (e) {
-                    console.error('Erreur fallback sélection étape:', e);
-                    // Continuer vers erreur générique ci-dessous
-                }
-            }
-
             this.notificationManager.error(error.message || 'Erreur de connexion');
         }
     }
@@ -1497,7 +1205,7 @@ class OperateurInterface {
         
         try {
             const operatorCode = this.operator.code || this.operator.id;
-            await this.apiService.pauseOperation(operatorCode, this.currentLancement.CodeLancement, { codeOperation: this.selectedCodeOperation });
+            await this.apiService.pauseOperation(operatorCode, this.currentLancement.CodeLancement);
             
             this.pauseTimer();
             this.startBtn.disabled = false;
@@ -1526,7 +1234,7 @@ class OperateurInterface {
             this.setFinalEndTime();
             
             const operatorCode = this.operator.code || this.operator.id;
-            const result = await this.apiService.stopOperation(operatorCode, this.currentLancement.CodeLancement, { codeOperation: this.selectedCodeOperation });
+            const result = await this.apiService.stopOperation(operatorCode, this.currentLancement.CodeLancement);
             
             this.stopTimer();
             this.resetControls();
@@ -1538,7 +1246,6 @@ class OperateurInterface {
             this.lancementInput.disabled = false;
             this.lancementInput.placeholder = "Saisir un nouveau code de lancement...";
             this.controlsSection.style.display = 'none';
-            this.hideOperationSteps();
             
             // Actualiser l'historique après arrêt
             this.loadOperatorHistory();
@@ -1557,7 +1264,6 @@ class OperateurInterface {
                 this.lancementInput.disabled = false;
                 this.lancementInput.placeholder = "Saisir un nouveau code de lancement...";
                 this.controlsSection.style.display = 'none';
-                this.hideOperationSteps();
                 this.loadOperatorHistory();
             } else {
             this.notificationManager.error(error.message || 'Erreur de connexion');
@@ -1826,7 +1532,7 @@ class OperateurInterface {
             row.innerHTML = `
                 <td>${operation.lancementCode || '-'} ${operation.type === 'pause' ? '<i class="fas fa-pause-circle pause-icon"></i>' : ''}</td>
                 <td>${operation.article || '-'}</td>
-                <td>${this.escapeHtml(this.formatStepLabel(operation))}</td>
+                <td>${operation.phase || 'PRODUCTION'}</td>
                 <td>${operation.startTime || '-'}</td>
                 <td>${operation.endTime || '-'}</td>
                 <td>
@@ -1838,23 +1544,6 @@ class OperateurInterface {
         
         console.log('✅ Historique affiché avec succès:', operations.length, 'opérations');
         console.log('=== FIN displayOperatorHistory ===');
-    }
-
-    formatStepLabel(operation) {
-        const phase = String(operation?.phase || '').trim();
-        const rubrique = String(operation?.codeRubrique || '').trim();
-        const fabrication = String(operation?.fabrication || '').trim();
-        const opCode = String(operation?.operatorCode || operation?.operatorId || '').trim();
-
-        // Si on n'a pas de vraie phase, fallback
-        const phaseLabel = phase && phase.toUpperCase() !== 'PRODUCTION' ? phase : 'PRODUCTION';
-
-        // Si codeRubrique == code opérateur (ancien modèle/fallback), ne pas l'afficher comme rubrique ERP
-        const hasRealRubrique = rubrique && opCode && rubrique !== opCode;
-        const rubPart = hasRealRubrique ? ` (${rubrique})` : '';
-
-        const fabPart = fabrication && fabrication !== '-' ? ` — ${fabrication}` : '';
-        return `${phaseLabel}${fabPart}${rubPart}`;
     }
 
     // Gestion des commentaires
