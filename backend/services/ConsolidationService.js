@@ -124,6 +124,17 @@ class ConsolidationService {
             // 5. Calculer les durées (utiliser le service unifié)
             const durations = DurationCalculationService.calculateDurations(events);
             
+            // IMPORTANT: la "date de travail" doit rester celle des événements (pas la date de consolidation),
+            // sinon le filtre "transféré" côté opérateur (JOIN ABTEMPS.DateCreation = ABHISTO.DateCreation) ne matche pas
+            // quand l'admin transfère un jour différent.
+            const rawDateCreation = debutEvent?.DateCreation || finEvent?.DateCreation || new Date();
+            const opDate = (() => {
+                const d = rawDateCreation instanceof Date ? new Date(rawDateCreation) : new Date(rawDateCreation);
+                if (Number.isNaN(d.getTime())) return new Date();
+                d.setHours(0, 0, 0, 0);
+                return d;
+            })();
+
             // 6. Déterminer Phase et CodeRubrique (clés ERP)
             // - Si les événements contiennent déjà Phase/CodeRubrique (issus de l'ERP), on les utilise.
             // - Sinon, fallback historique : récupérer depuis V_LCTC.
@@ -238,9 +249,18 @@ class ConsolidationService {
                     FROM [SEDI_APP_INDEPENDANTE].[dbo].[ABTEMPS_OPERATEURS]
                     WHERE OperatorCode = @operatorCode 
                       AND LancementCode = @lancementCode
+                      AND ISNULL(LTRIM(RTRIM(Phase)), '') = ISNULL(LTRIM(RTRIM(@phase)), '')
+                      AND ISNULL(LTRIM(RTRIM(CodeRubrique)), '') = ISNULL(LTRIM(RTRIM(@codeRubrique)), '')
+                      AND CAST(DateCreation AS DATE) = CAST(@dateCreation AS DATE)
                 `;
                 
-                const doubleCheck = await executeQuery(doubleCheckQuery, { operatorCode, lancementCode });
+                const doubleCheck = await executeQuery(doubleCheckQuery, {
+                    operatorCode,
+                    lancementCode,
+                    phase,
+                    codeRubrique,
+                    dateCreation: opDate
+                });
                 
                 if (doubleCheck.length > 0) {
                     console.log(`ℹ️ Opération consolidée entre-temps: TempsId=${doubleCheck[0].TempsId}`);
@@ -268,7 +288,7 @@ class ConsolidationService {
                 INSERT INTO [SEDI_APP_INDEPENDANTE].[dbo].[ABTEMPS_OPERATEURS]
                 (OperatorCode, LancementCode, StartTime, EndTime, TotalDuration, PauseDuration, ProductiveDuration, EventsCount, Phase, CodeRubrique, DateCreation, StatutTraitement)
                 OUTPUT INSERTED.TempsId
-                VALUES (@operatorCode, @lancementCode, @startTime, @endTime, @totalDuration, @pauseDuration, @productiveDuration, @eventsCount, @phase, @codeRubrique, CAST(GETDATE() AS DATE), NULL)
+                VALUES (@operatorCode, @lancementCode, @startTime, @endTime, @totalDuration, @pauseDuration, @productiveDuration, @eventsCount, @phase, @codeRubrique, CAST(@dateCreation AS DATE), NULL)
             `;
             
             const insertResult = await executeQuery(insertQuery, {
@@ -281,7 +301,8 @@ class ConsolidationService {
                 productiveDuration: durations.productiveDuration, // en minutes (TotalDuration - PauseDuration)
                 eventsCount: durations.eventsCount,
                 phase,
-                codeRubrique
+                codeRubrique,
+                dateCreation: opDate
             });
             
             const tempsId = insertResult && insertResult[0] ? insertResult[0].TempsId : null;
@@ -316,10 +337,19 @@ class ConsolidationService {
                     FROM [SEDI_APP_INDEPENDANTE].[dbo].[ABTEMPS_OPERATEURS]
                     WHERE OperatorCode = @operatorCode 
                       AND LancementCode = @lancementCode
+                      AND ISNULL(LTRIM(RTRIM(Phase)), '') = ISNULL(LTRIM(RTRIM(@phase)), '')
+                      AND ISNULL(LTRIM(RTRIM(CodeRubrique)), '') = ISNULL(LTRIM(RTRIM(@codeRubrique)), '')
+                      AND CAST(DateCreation AS DATE) = CAST(@dateCreation AS DATE)
                 `;
                 
                 try {
-                    const existing = await executeQuery(existingQuery, { operatorCode, lancementCode });
+                    const existing = await executeQuery(existingQuery, {
+                        operatorCode,
+                        lancementCode,
+                        phase,
+                        codeRubrique,
+                        dateCreation: opDate
+                    });
                     if (existing.length > 0) {
                         return {
                             success: true,
