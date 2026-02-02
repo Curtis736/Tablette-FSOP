@@ -2578,6 +2578,73 @@ router.post('/testing/purge', async (req, res) => {
     }
 });
 
+// ============================================
+// PRODUCTION: Reset historique (DANGEROUS)
+// ============================================
+// But: démarrer une nouvelle phase (prod) sans historique opérateur.
+// Sécurités:
+// - nécessite auth admin (router.use(authenticateAdmin) déjà en place)
+// - nécessite env ALLOW_PRODUCTION_HISTORY_RESET=true
+// - nécessite confirm explicite: "RESET_HISTORY"
+router.post('/maintenance/reset-history', async (req, res) => {
+    try {
+        if (String(process.env.ALLOW_PRODUCTION_HISTORY_RESET || '').toLowerCase() !== 'true') {
+            return res.status(403).json({
+                success: false,
+                error: 'HISTORY_RESET_DISABLED',
+                message: 'Reset historique désactivé. Définissez ALLOW_PRODUCTION_HISTORY_RESET=true côté backend pour l\'autoriser.'
+            });
+        }
+
+        const { confirm, includeSessions = true } = req.body || {};
+        if (confirm !== 'RESET_HISTORY') {
+            return res.status(400).json({
+                success: false,
+                error: 'CONFIRM_REQUIRED',
+                message: 'Pour éviter une suppression accidentelle, envoyez { confirm: "RESET_HISTORY" }.'
+            });
+        }
+
+        // Counts first (audit-friendly)
+        const countHist = await executeQuery(
+            `SELECT COUNT(*) AS c FROM [SEDI_APP_INDEPENDANTE].[dbo].[ABHISTORIQUE_OPERATEURS]`
+        );
+        const countTemps = await executeQuery(
+            `SELECT COUNT(*) AS c FROM [SEDI_APP_INDEPENDANTE].[dbo].[ABTEMPS_OPERATEURS]`
+        );
+        const histC = countHist?.[0]?.c ?? 0;
+        const tempsC = countTemps?.[0]?.c ?? 0;
+
+        let sessionsC = 0;
+        if (includeSessions) {
+            const countSess = await executeQuery(
+                `SELECT COUNT(*) AS c FROM [SEDI_APP_INDEPENDANTE].[dbo].[ABSESSIONS_OPERATEURS]`
+            );
+            sessionsC = countSess?.[0]?.c ?? 0;
+        }
+
+        // Delete (no DROP)
+        await executeQuery(`DELETE FROM [SEDI_APP_INDEPENDANTE].[dbo].[ABHISTORIQUE_OPERATEURS]`);
+        await executeQuery(`DELETE FROM [SEDI_APP_INDEPENDANTE].[dbo].[ABTEMPS_OPERATEURS]`);
+        if (includeSessions) {
+            await executeQuery(`DELETE FROM [SEDI_APP_INDEPENDANTE].[dbo].[ABSESSIONS_OPERATEURS]`);
+        }
+
+        return res.json({
+            success: true,
+            message: 'Historique opérateurs réinitialisé',
+            deleted: {
+                ABHISTORIQUE_OPERATEURS: histC,
+                ABTEMPS_OPERATEURS: tempsC,
+                ABSESSIONS_OPERATEURS: sessionsC
+            }
+        });
+    } catch (error) {
+        console.error('❌ Erreur reset historique:', error);
+        return res.status(500).json({ success: false, error: 'INTERNAL_ERROR', message: error.message });
+    }
+});
+
 // Route pour récupérer les lancements d'un opérateur spécifique
 router.get('/operators/:operatorCode/operations', async (req, res) => {
     try {
