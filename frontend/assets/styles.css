@@ -2152,9 +2152,39 @@ tr:hover {
 .fsop-lots-panel {
     width: 100%;
 }
-.fsop-lots-title {
-    margin: 2px 0 6px 0;
-    color: #333;
+.fsop-lots-details {
+    border: 1px solid rgba(0,0,0,0.10);
+    border-radius: 12px;
+    background: #fff;
+    overflow: hidden;
+}
+.fsop-lots-summary {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 10px;
+    padding: 10px 12px;
+    cursor: pointer;
+    user-select: none;
+    font-size: 13px;
+    color: #222;
+    background: #f7f8fb;
+    border-bottom: 1px solid rgba(0,0,0,0.08);
+}
+.fsop-lots-summary-auto {
+    font-weight: 600;
+    color: #444;
+    white-space: nowrap;
+}
+.fsop-lots-summary-hint {
+    font-size: 12px;
+    color: #667eea;
+    white-space: nowrap;
+}
+.fsop-lots-body {
+    max-height: 220px; /* important: ne pas cacher le reste de la modal */
+    overflow: auto;
+    padding: 10px 12px;
 }
 .fsop-lots-group {
     margin: 6px 0 10px 0;
@@ -2177,9 +2207,9 @@ tr:hover {
 .fsop-lot-chip {
     border: 1px solid rgba(0,0,0,0.15);
     background: #fff;
-    padding: 6px 10px;
+    padding: 4px 8px;
     border-radius: 999px;
-    font-size: 12px;
+    font-size: 11px;
     cursor: pointer;
 }
 .fsop-lot-chip:hover {
@@ -2187,7 +2217,7 @@ tr:hover {
 }
 .fsop-lots-hint {
     margin-top: 8px;
-    font-size: 12px;
+    font-size: 11px;
     color: #555;
 }
 

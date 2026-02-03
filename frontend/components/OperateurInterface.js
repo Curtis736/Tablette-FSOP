@@ -455,9 +455,19 @@ class OperateurInterface {
 
         let html = '<div class="fsop-lots-panel">';
         const prefInfo = this.currentFsopPreferredLot
-            ? ` — auto: <strong>${this.escapeHtml(this.currentFsopPreferredLot)}</strong>${this.currentFsopPreferredRubrique ? ` (rubrique ${this.escapeHtml(this.currentFsopPreferredRubrique)})` : ''}`
-            : '';
-        html += `<div class="fsop-lots-title"><strong>Lots (ERP)</strong> — clique pour copier${prefInfo}</div>`;
+            ? `auto: ${this.escapeHtml(this.currentFsopPreferredLot)}${this.currentFsopPreferredRubrique ? ` (rubrique ${this.escapeHtml(this.currentFsopPreferredRubrique)})` : ''}`
+            : 'auto: —';
+
+        // Repliable pour éviter que la liste prenne toute la hauteur de la modal
+        html += `
+            <details class="fsop-lots-details">
+                <summary class="fsop-lots-summary">
+                    <span><strong>Lots (ERP)</strong></span>
+                    <span class="fsop-lots-summary-auto">${prefInfo}</span>
+                    <span class="fsop-lots-summary-hint">Afficher / Masquer</span>
+                </summary>
+                <div class="fsop-lots-body">
+        `;
 
         groups.forEach((g) => {
             const codeRubrique = g.codeRubrique || '';
@@ -474,7 +484,11 @@ class OperateurInterface {
             html += `</div></div>`;
         });
 
-        html += '<div class="fsop-lots-hint">Astuce: tu peux aussi copier/coller une liste (1 lot par ligne) directement dans la première case “Lot” du tableau, ça remplit automatiquement les lignes suivantes.</div>';
+        html += '<div class="fsop-lots-hint">Astuce: colle une liste (1 lot par ligne) dans la 1ère case “Lot” du tableau → remplissage automatique vers le bas.</div>';
+        html += `
+                </div>
+            </details>
+        `;
         html += '</div>';
 
         this.fsopLotList.innerHTML = html;

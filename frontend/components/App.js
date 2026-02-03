@@ -1,6 +1,6 @@
 // Classe principale de l'application
-// Bump version to bust browser cache when OperateurInterface changes (FSOP titles/lots autofill)
-import OperateurInterface from './OperateurInterface.js?v=20260203-fsop-autolot';
+// Bump version to bust browser cache when OperateurInterface changes (FSOP lots UI/layout)
+import OperateurInterface from './OperateurInterface.js?v=20260203-fsop-lots-ui1';
 // Bump to bust cache when AdminPage merging logic changes (duplicates after transfer, per-step keys, etc.)
 import AdminPage from './AdminPage.js?v=20260128-admin-editlt2';
 import ApiService from '../services/ApiService.js?v=20260128-admin-editlt2';
