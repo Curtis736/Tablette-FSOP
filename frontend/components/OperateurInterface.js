@@ -1,7 +1,7 @@
 // Interface simplifiée pour les opérateurs
 import TimeUtils from '../utils/TimeUtils.js';
 import ScannerManager from '../utils/ScannerManager.js?v=20251021-scanner-fix';
-import FsopForm from './FsopForm.js?v=20260203-fsop-titles2';
+import FsopForm from './FsopForm.js?v=20260203-fsop-titles3';
 
 class OperateurInterface {
     constructor(operator, app) {

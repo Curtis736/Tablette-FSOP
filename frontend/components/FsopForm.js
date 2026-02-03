@@ -349,6 +349,41 @@ class FsopForm {
 
         // Track current CodeOperation (ex: "MO 1336") while iterating blocks, so we can map lots precisely.
         let currentCodeOperation = '';
+        // Auto-numbering fallback for Word-numbered headings where the number is not present in extracted text.
+        // We only apply this to "main step" titles that include MO + ind markers to avoid numbering subtitles.
+        let autoTitleCounter = 0;
+
+        const bumpCounterFromExplicit = (explicit) => {
+            const s = String(explicit || '').trim();
+            const m = s.match(/^(\d{1,2})/);
+            if (!m) return;
+            const n = parseInt(m[1], 10);
+            if (Number.isFinite(n) && n > autoTitleCounter) autoTitleCounter = n;
+        };
+
+        const isMainStepTitleWithoutNumber = (text) => {
+            const s = normalizeCellText(text);
+            if (!s) return false;
+            // Must look like a heading-ish line and include MO marker
+            if (!looksLikeTitleText(s)) return false;
+            // If it already starts with a number, not our case
+            if (/^\d{1,2}\s*[a-z]?\s*[-–.]/i.test(s)) return false;
+            // Heuristic: real main steps in this FSOP contain "MO xxxx ind ___"
+            if (/\bMO\s*\d{3,5}\b/i.test(s) && /\bind\b/i.test(s)) return true;
+            return false;
+        };
+
+        const renderAutoNumberedTitle = (text) => {
+            autoTitleCounter += 1;
+            const mo = extractMoFromText(text);
+            if (mo) currentCodeOperation = mo;
+            return `
+                <div class="fsop-word-title">
+                    <span class="fsop-word-title-number">${this.escapeHtml(String(autoTitleCounter))}.</span>
+                    <span class="fsop-word-title-text">${renderTextWithInputs(text)}</span>
+                </div>
+            `;
+        };
 
         const extractMoFromText = (text) => {
             const t = String(text || '');
@@ -839,6 +874,7 @@ class FsopForm {
                     if (mo) currentCodeOperation = mo;
                     const m = bannerText.match(/^(\d{1,2}[a-z]?)\s*[-–.]\s*(.+)$/i);
                     if (m) {
+                        bumpCounterFromExplicit(m[1]);
                         t += `
                             <div class="fsop-word-title fsop-word-title-from-table">
                                 <span class="fsop-word-title-number">${this.escapeHtml(m[1])}.</span>
@@ -846,7 +882,11 @@ class FsopForm {
                             </div>
                         `;
                     } else {
-                        t += `<div class="fsop-word-subtitle fsop-word-subtitle-from-table">${renderTextWithInputs(bannerText)}</div>`;
+                        if (isMainStepTitleWithoutNumber(bannerText)) {
+                            t += `<div class="fsop-word-title-from-table">${renderAutoNumberedTitle(bannerText)}</div>`;
+                        } else {
+                            t += `<div class="fsop-word-subtitle fsop-word-subtitle-from-table">${renderTextWithInputs(bannerText)}</div>`;
+                        }
                     }
                 });
             }
@@ -896,12 +936,18 @@ class FsopForm {
                     const title = sectionTitleMatch[2];
                     const mo = extractMoFromText(text);
                     if (mo) currentCodeOperation = mo;
+                    bumpCounterFromExplicit(n);
                     html += `
                         <div class="fsop-word-title">
                             <span class="fsop-word-title-number">${this.escapeHtml(n)}.</span>
                             <span class="fsop-word-title-text">${renderTextWithInputs(title)}</span>
                         </div>
                     `;
+                    return;
+                }
+                // Fallback: Word-numbered list headings often don't include the "1., 2., ..." in the paragraph text
+                if (isMainStepTitleWithoutNumber(text)) {
+                    html += renderAutoNumberedTitle(text);
                     return;
                 }
                 if ((/:\s*$/.test(text) && text.length <= 60) || (text.length <= 130 && /\bMO\s*\d{3,5}\b/i.test(text) && /\bind\b/i.test(text))) {
