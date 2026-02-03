@@ -1,7 +1,7 @@
 // Interface simplifiée pour les opérateurs
 import TimeUtils from '../utils/TimeUtils.js';
 import ScannerManager from '../utils/ScannerManager.js?v=20251021-scanner-fix';
-import FsopForm from './FsopForm.js?v=20260203-fsop-autolot';
+import FsopForm from './FsopForm.js?v=20260203-fsop-percomponent1';
 
 class OperateurInterface {
     constructor(operator, app) {
@@ -428,18 +428,16 @@ class OperateurInterface {
         if (rubrique) {
             const match = items.find(it => String(it?.codeRubrique || '').trim() === rubrique);
             const lots = Array.isArray(match?.lots) ? match.lots.filter(Boolean) : [];
-            if (lots.length >= 1) {
+            // Only auto-select if unambiguous (exactly 1 lot for that rubrique)
+            if (lots.length === 1) {
                 result.preferredRubrique = rubrique;
-                // If multiple lots, pick the first (sorted by backend). User can still override.
                 result.preferredLot = String(lots[0]).trim();
                 return result;
             }
         }
 
-        // Fallback: pick the first unique lot if present
-        if (uniqueLots.length >= 1) {
-            result.preferredLot = String(uniqueLots[0]).trim();
-        }
+        // IMPORTANT: do not auto-fill when ambiguous (multiple lots)
+        // User can click/copy from the ERP list if needed.
         return result;
     }
 
@@ -456,7 +454,7 @@ class OperateurInterface {
         let html = '<div class="fsop-lots-panel">';
         const prefInfo = this.currentFsopPreferredLot
             ? `auto: ${this.escapeHtml(this.currentFsopPreferredLot)}${this.currentFsopPreferredRubrique ? ` (rubrique ${this.escapeHtml(this.currentFsopPreferredRubrique)})` : ''}`
-            : 'auto: —';
+            : 'auto: par composant (si non ambigu)';
 
         // Repliable pour éviter que la liste prenne toute la hauteur de la modal
         html += `

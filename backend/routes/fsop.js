@@ -85,6 +85,7 @@ router.get('/lots/:launchNumber', async (req, res) => {
 
         const rows = await executeQuery(`
             SELECT
+                CodeOperation,
                 CodeRubrique,
                 Phase,
                 CodeLot
@@ -95,9 +96,11 @@ router.get('/lots/:launchNumber', async (req, res) => {
         `, { launchNumber });
 
         const byRubrique = new Map(); // CodeRubrique -> { lots:Set, phases:Set }
+        const byOperationRubrique = new Map(); // "MO xxxx|CodeRubrique" -> { lots:Set, phases:Set }
         const uniqueLots = new Set();
 
         for (const r of rows || []) {
+            const codeOperation = String(r.CodeOperation || '').trim();
             const codeRubrique = String(r.CodeRubrique || '').trim();
             const phase = String(r.Phase || '').trim();
             const codeLot = String(r.CodeLot || '').trim();
@@ -107,6 +110,14 @@ router.get('/lots/:launchNumber', async (req, res) => {
             const entry = byRubrique.get(codeRubrique);
             entry.lots.add(codeLot);
             if (phase) entry.phases.add(phase);
+
+            if (codeOperation) {
+                const key = `${codeOperation}|${codeRubrique}`;
+                if (!byOperationRubrique.has(key)) byOperationRubrique.set(key, { lots: new Set(), phases: new Set(), codeOperation, codeRubrique });
+                const e2 = byOperationRubrique.get(key);
+                e2.lots.add(codeLot);
+                if (phase) e2.phases.add(phase);
+            }
         }
 
         const items = [...byRubrique.entries()]
@@ -118,11 +129,28 @@ router.get('/lots/:launchNumber', async (req, res) => {
                 lots: [...entry.lots].sort()
             }));
 
+        const lines = [...byOperationRubrique.values()]
+            .sort((a, b) => {
+                const ao = String(a.codeOperation || '');
+                const bo = String(b.codeOperation || '');
+                if (ao !== bo) return ao.localeCompare(bo);
+                return String(a.codeRubrique || '').localeCompare(String(b.codeRubrique || ''));
+            })
+            .map((e) => ({
+                codeOperation: e.codeOperation,
+                codeRubrique: e.codeRubrique,
+                phases: [...e.phases].sort(),
+                lots: [...e.lots].sort(),
+                // safe autofill hint: only autofill when unique
+                uniqueLot: [...e.lots].size === 1 ? [...e.lots][0] : null
+            }));
+
         return res.json({
             success: true,
             launchNumber,
             uniqueLots: [...uniqueLots].sort(),
             items,
+            lines,
             count: uniqueLots.size
         });
     } catch (error) {

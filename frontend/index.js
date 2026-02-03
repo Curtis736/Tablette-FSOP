@@ -1,5 +1,5 @@
 // Point d'entrée principal de l'application
-import App from './components/App.js?v=20260203-fsop-lots-ui1';
+import App from './components/App.js?v=20260129-fsop-lot-mapping';
 
 // Initialiser l'application
 document.addEventListener('DOMContentLoaded', () => {
