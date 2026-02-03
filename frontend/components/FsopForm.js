@@ -318,10 +318,12 @@ class FsopForm {
             const s = normalizeCellText(t);
             if (!s) return false;
             // Common patterns in FSOP templates
-            // - "1. Montage ..." / "1- Montage ..." / "12. Contrôle ..."
-            if (/^\d{1,2}\s*[-–.]\s*\S+/.test(s)) return true;
-            // - "12. Contrôle ... :" / "Général :" etc.
+            // - "1. Montage ..." / "1- Montage ..." / "12. Contrôle ..." / "11a. Montage ..."
+            if (/^\d{1,2}\s*[a-z]?\s*[-–.]\s*\S+/i.test(s)) return true;
+            // - "Général :" etc.
             if (s.length <= 80 && /:\s*$/.test(s)) return true;
+            // - "Mesure ... : MO 776 ind ___" (colon not at end, but it's still a heading-like line)
+            if (s.length <= 130 && /\bMO\s*\d{3,5}\b/i.test(s) && /\bind\b/i.test(s)) return true;
             return false;
         };
 
@@ -835,7 +837,7 @@ class FsopForm {
                 banners.forEach((bannerText) => {
                     const mo = extractMoFromText(bannerText);
                     if (mo) currentCodeOperation = mo;
-                    const m = bannerText.match(/^(\d{1,2})\s*[-–.]\s*(.+)$/);
+                    const m = bannerText.match(/^(\d{1,2}[a-z]?)\s*[-–.]\s*(.+)$/i);
                     if (m) {
                         t += `
                             <div class="fsop-word-title fsop-word-title-from-table">
@@ -888,7 +890,7 @@ class FsopForm {
                 // Examples:
                 // - "1- Préparation ..." -> main section title
                 // - "Général :" -> sub title
-                const sectionTitleMatch = text.match(/^(\d{1,2})\s*[-–.]\s*(.+)$/);
+                const sectionTitleMatch = text.match(/^(\d{1,2}[a-z]?)\s*[-–.]\s*(.+)$/i);
                 if (sectionTitleMatch) {
                     const n = sectionTitleMatch[1];
                     const title = sectionTitleMatch[2];
@@ -902,7 +904,7 @@ class FsopForm {
                     `;
                     return;
                 }
-                if (/:\s*$/.test(text) && text.length <= 60) {
+                if ((/:\s*$/.test(text) && text.length <= 60) || (text.length <= 130 && /\bMO\s*\d{3,5}\b/i.test(text) && /\bind\b/i.test(text))) {
                     html += `<div class="fsop-word-subtitle">${renderTextWithInputs(text)}</div>`;
                     return;
                 }

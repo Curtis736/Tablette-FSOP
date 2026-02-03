@@ -1,5 +1,5 @@
 // Point d'entrée principal de l'application
-import App from './components/App.js?v=20260203-fsop-percomponent2';
+import App from './components/App.js?v=20260203-fsop-titles1';
 
 // Initialiser l'application
 document.addEventListener('DOMContentLoaded', () => {
