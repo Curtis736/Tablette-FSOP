@@ -330,18 +330,50 @@ class FsopForm {
         const extractTableBanners = (rows) => {
             const safe = Array.isArray(rows) ? rows.slice() : [];
             const banners = [];
+            const isBareSectionNumber = (t) => {
+                const s = normalizeCellText(t);
+                if (!s) return false;
+                return /^\d{1,2}[a-z]?\s*\.?\s*$/i.test(s);
+            };
+            const normalizeSectionNumber = (t) => normalizeCellText(t).replace(/\s+/g, '').replace(/\.$/, '');
 
             // We peel off up to first 3 rows if they look like merged-title rows
             for (let k = 0; k < 3; k++) {
                 if (safe.length === 0) break;
                 const r = safe[0] || [];
                 const nonEmptyCells = (r || []).filter(c => normalizeCellText(c?.text)).filter(Boolean);
-                if (nonEmptyCells.length !== 1) break;
-                const only = nonEmptyCells[0];
-                const text = normalizeCellText(only?.text);
-                if (!looksLikeTitleText(text)) break;
-                banners.push(text);
-                safe.shift();
+                if (nonEmptyCells.length === 1) {
+                    const only = nonEmptyCells[0];
+                    const text = normalizeCellText(only?.text);
+                    if (!looksLikeTitleText(text)) break;
+                    banners.push(text);
+                    safe.shift();
+                    continue;
+                }
+
+                // Also handle the common pattern where Word puts the number in a separate cell:
+                // [ "1" | "Montage du ..." ] (often with merged background/fill)
+                if (nonEmptyCells.length === 2) {
+                    const a = normalizeCellText(nonEmptyCells[0]?.text);
+                    const b = normalizeCellText(nonEmptyCells[1]?.text);
+                    // Determine which is number vs title
+                    let num = '';
+                    let title = '';
+                    if (isBareSectionNumber(a) && looksLikeTitleText(b)) {
+                        num = normalizeSectionNumber(a);
+                        title = b;
+                    } else if (isBareSectionNumber(b) && looksLikeTitleText(a)) {
+                        num = normalizeSectionNumber(b);
+                        title = a;
+                    }
+                    if (num && title) {
+                        banners.push(`${num}- ${title}`);
+                        safe.shift();
+                        continue;
+                    }
+                }
+
+                break;
             }
 
             return { banners, rows: safe };
@@ -420,8 +452,21 @@ class FsopForm {
             // If we peeled everything, fallback to the original rows
             const effectiveRows = remaining.length > 0 ? remaining : safeRows;
 
-            const head = effectiveRows[0] || [];
-            const body = effectiveRows.slice(1);
+            // Decide whether first row is a real "table header" row (Mesures/Date/Opérateur/etc.)
+            const firstRow = effectiveRows[0] || [];
+            const headerKeywords = ['date', 'opérateur', 'operateur', 'mesures', 'heure', 'temps', 'composant', 'lot', 'perte', 'db', 'rl'];
+            const rowLooksLikeHeader = (row) => {
+                const cells = Array.isArray(row) ? row : [];
+                const texts = cells.map(c => normalizeCellText(c?.text).toLowerCase()).filter(Boolean);
+                if (texts.length === 0) return false;
+                const hits = texts.reduce((acc, t) => acc + (headerKeywords.some(k => t === k || t.includes(k)) ? 1 : 0), 0);
+                // require at least 2 header-ish cells (avoid the "Numéro de lancement" block at top)
+                return hits >= 2;
+            };
+            const useThead = rowLooksLikeHeader(firstRow);
+
+            const head = useThead ? firstRow : [];
+            const body = useThead ? effectiveRows.slice(1) : effectiveRows;
 
             // data-table-idx must match backend injectTableData indexing (0-based order of <w:tbl> in doc)
             const tableIdx = Number.isFinite(tableBlockId) ? Math.max(0, tableBlockId - 1) : 0;
@@ -432,9 +477,9 @@ class FsopForm {
                 if (h.includes('heure') || h.includes('time')) return 'time';
                 return 'text';
             };
-            const columnKinds = head.map((c) => inferColumnKind((c?.text || '').trim()));
+            const columnKinds = useThead ? head.map((c) => inferColumnKind((c?.text || '').trim())) : [];
 
-            const tableHeadersText = head.map((c) => normalizeCellText(c?.text)).join(' | ').toLowerCase();
+            const tableHeadersText = useThead ? head.map((c) => normalizeCellText(c?.text)).join(' | ').toLowerCase() : '';
             // Rule requested: DO NOT auto-fill lots in "Collage" tables (even if they have a Lot column)
             const isCollageTable = tableHeadersText.includes('collage');
             const isComposantLotTable = tableHeadersText.includes('composant') && tableHeadersText.includes('lot');
@@ -462,11 +507,13 @@ class FsopForm {
             };
 
             const isLotColumn = (colIdx) => {
+                if (!useThead) return false;
                 const header = normalizeCellText(head?.[colIdx]?.text);
                 return /\blot\b/i.test(header);
             };
 
             const findComponentColIndex = () => {
+                if (!useThead) return 0;
                 for (let i = 0; i < head.length; i++) {
                     const h = normalizeCellText(head?.[i]?.text).toLowerCase();
                     if (h.includes('composant')) return i;
@@ -648,7 +695,7 @@ class FsopForm {
                     }
                     // Body cells:
                     // - Keep the document look (no extra inputs) except for Date/Heure columns which must be fillable with native pickers.
-                    const kind = columnKinds[colIdx] || 'text';
+                    const kind = (useThead ? (columnKinds[colIdx] || 'text') : 'text');
                     const saved = getSavedCellValue(rowIdx, colIdx);
 
                     if (kind === 'date') {
@@ -665,20 +712,41 @@ class FsopForm {
                         return `<input class="fsop-cell-input fsop-cell-input-time" type="time" data-row="${rowIdx}" data-col="${colIdx}"${valueAttr} />`;
                     }
 
-                    // ⚡ FIX: Special handling for "Numéro lancement" column - ALWAYS make it editable
-                    // Use a proper input field instead of contenteditable for better UX
+                    // ⚡ FIX: Special handling for "Numéro lancement" cells:
+                    // - If this cell is the *value* cell (blank/underscores or already has a saved LT), render as input
+                    // - If the label+underscores are in the same cell, replace underscores by an inline input
                     if (isLaunchNumberColumn) {
                         const launchValue = saved || this.formData.placeholders?.['{{LT}}'] || '';
-                        console.log(`🔍 Rendering launch number input at row ${rowIdx}, col ${colIdx} with value: "${launchValue}"`);
-                        return `<input 
-                            type="text" 
-                            class="fsop-cell-input fsop-cell-input-text" 
-                            data-row="${rowIdx}" 
-                            data-col="${colIdx}" 
-                            data-launch-number="true"
-                            value="${this.escapeHtml(launchValue)}" 
-                            style="width: 100%; border: 1px solid #ccc; padding: 4px; background: white;"
-                        />`;
+                        const hasUnderscoreSlot = /_{3,}/.test(cellText);
+                        const isLikelyValueCell = isBlank || !!saved || /^\s*LT\d+/i.test(cellText) || cellText.includes('{{LT}}');
+                        if (hasUnderscoreSlot && !isLikelyValueCell) {
+                            // Inline slot inside a label cell
+                            const parts = cellText.split(/_{3,}/);
+                            const before = parts[0] || '';
+                            const after = parts.slice(1).join('') || '';
+                            return `
+                                <span>${this.escapeHtml(before)}</span>
+                                <input type="text"
+                                    class="fsop-inline-input"
+                                    data-row="${rowIdx}"
+                                    data-col="${colIdx}"
+                                    data-launch-number="true"
+                                    value="${this.escapeHtml(launchValue)}" />
+                                <span>${this.escapeHtml(after)}</span>
+                            `;
+                        }
+                        if (isLikelyValueCell) {
+                            console.log(`🔍 Rendering launch number input at row ${rowIdx}, col ${colIdx} with value: "${launchValue}"`);
+                            return `<input 
+                                type="text" 
+                                class="fsop-cell-input fsop-cell-input-text" 
+                                data-row="${rowIdx}" 
+                                data-col="${colIdx}" 
+                                data-launch-number="true"
+                                value="${this.escapeHtml(launchValue)}" 
+                                style="width: 100%; border: 1px solid #ccc; padding: 4px; background: white;"
+                            />`;
+                        }
                     }
                     
                     // ⚡ FIX: Also check if this is an empty cell that follows "Numéro lancement:" in the same row
@@ -892,11 +960,13 @@ class FsopForm {
             }
 
             t += `<table class="fsop-word-table" data-table-idx="${tableIdx}">`;
-            t += '<thead><tr>';
-            head.forEach((c, colIdx) => {
-                t += renderCell(c, 'th', -1, colIdx, true);
-            });
-            t += '</tr></thead>';
+            if (useThead) {
+                t += '<thead><tr>';
+                head.forEach((c, colIdx) => {
+                    t += renderCell(c, 'th', -1, colIdx, true);
+                });
+                t += '</tr></thead>';
+            }
 
             t += '<tbody>';
             body.forEach((r, rowIdx) => {
