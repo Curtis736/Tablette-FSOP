@@ -680,6 +680,9 @@ class FsopForm {
                             const compText = normalizeCellText(body?.[rowIdx]?.[composantColIdx]?.text || '');
                             const hints = extractParenHints(compText);
                             const allLots = new Set();
+                            const uniqueLotsFallback = Array.isArray(this.formData?.fsopLots?.uniqueLots)
+                                ? this.formData.fsopLots.uniqueLots.map(x => String(x || '').trim()).filter(Boolean)
+                                : [];
                             
                             // Collect all possible lots for this component (from ERP lines)
                             const lines = Array.isArray(this.formData?.fsopLots?.lines) ? this.formData.fsopLots.lines : [];
@@ -696,13 +699,47 @@ class FsopForm {
                                         break;
                                     }
                                 }
-                                if (matched || hints.length === 0) {
+                                // If no hints, do NOT match everything; require at least some overlap with normalized compText
+                                if (!matched && hints.length === 0) {
+                                    const compNk = normalizeKey(compText);
+                                    if (compNk && (normalizeKey(rub).includes(compNk) || compNk.includes(normalizeKey(rub)))) {
+                                        matched = true;
+                                    }
+                                }
+
+                                if (matched) {
                                     const lots = Array.isArray(ln?.lots) ? ln.lots : [];
                                     lots.forEach(l => allLots.add(String(l || '').trim()));
                                 }
                             }
                             
-                            const lotsArray = [...allLots].filter(Boolean).sort();
+                            let lotsArray = [...allLots].filter(Boolean).sort();
+
+                            // Fallback: try grouped `items` (codeRubrique -> lots)
+                            if (lotsArray.length === 0) {
+                                const items = Array.isArray(this.formData?.fsopLots?.items) ? this.formData.fsopLots.items : [];
+                                for (const it of items) {
+                                    const rub = String(it?.codeRubrique || '').trim().toUpperCase();
+                                    let matched = false;
+                                    for (const h of hints) {
+                                        if (normalizeKey(rub) === h.nk) { matched = true; break; }
+                                    }
+                                    if (!matched && hints.length === 0) {
+                                        const compNk = normalizeKey(compText);
+                                        if (compNk && (normalizeKey(rub).includes(compNk) || compNk.includes(normalizeKey(rub)))) matched = true;
+                                    }
+                                    if (matched) {
+                                        const lots = Array.isArray(it?.lots) ? it.lots : [];
+                                        lots.forEach(l => allLots.add(String(l || '').trim()));
+                                    }
+                                }
+                                lotsArray = [...allLots].filter(Boolean).sort();
+                            }
+
+                            // Last resort: use uniqueLots so operator can at least pick something
+                            if (lotsArray.length === 0) {
+                                lotsArray = uniqueLotsFallback;
+                            }
                             const hasUniqueLot = lotsArray.length === 1;
                             
                             // Parse saved value if exists (format: "Voie 940 : lot1\nVoie Ligne : lot2\nVoie 1310 : lot3")
@@ -723,7 +760,7 @@ class FsopForm {
                             
                             if (hasVoie940) {
                                 const saved940 = savedVoies['940'] || (hasUniqueLot ? lotsArray[0] : '');
-                                if (hasUniqueLot) {
+                                if (hasUniqueLot || lotsArray.length === 0) {
                                     multiVoieHtml += `<div class="fsop-voie-row"><label>Voie 940:</label><input type="text" class="fsop-cell-input fsop-cell-input-lot" data-row="${rowIdx}" data-col="${colIdx}" data-voie="940" value="${this.escapeHtml(saved940)}" /></div>`;
                                 } else {
                                     const options = lotsArray.map(l => `<option value="${this.escapeHtml(l)}" ${saved940 === l ? 'selected' : ''}>${this.escapeHtml(l)}</option>`).join('');
@@ -733,7 +770,7 @@ class FsopForm {
                             
                             if (hasVoieLigne) {
                                 const savedLigne = savedVoies['Ligne'] || (hasUniqueLot ? lotsArray[0] : '');
-                                if (hasUniqueLot) {
+                                if (hasUniqueLot || lotsArray.length === 0) {
                                     multiVoieHtml += `<div class="fsop-voie-row"><label>Voie Ligne:</label><input type="text" class="fsop-cell-input fsop-cell-input-lot" data-row="${rowIdx}" data-col="${colIdx}" data-voie="Ligne" value="${this.escapeHtml(savedLigne)}" /></div>`;
                                 } else {
                                     const options = lotsArray.map(l => `<option value="${this.escapeHtml(l)}" ${savedLigne === l ? 'selected' : ''}>${this.escapeHtml(l)}</option>`).join('');
@@ -743,7 +780,7 @@ class FsopForm {
                             
                             if (hasVoie1310) {
                                 const saved1310 = savedVoies['1310'] || (hasUniqueLot ? lotsArray[0] : '');
-                                if (hasUniqueLot) {
+                                if (hasUniqueLot || lotsArray.length === 0) {
                                     multiVoieHtml += `<div class="fsop-voie-row"><label>Voie 1310:</label><input type="text" class="fsop-cell-input fsop-cell-input-lot" data-row="${rowIdx}" data-col="${colIdx}" data-voie="1310" value="${this.escapeHtml(saved1310)}" /></div>`;
                                 } else {
                                     const options = lotsArray.map(l => `<option value="${this.escapeHtml(l)}" ${saved1310 === l ? 'selected' : ''}>${this.escapeHtml(l)}</option>`).join('');

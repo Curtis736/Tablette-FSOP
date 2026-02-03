@@ -1863,6 +1863,10 @@ tr:hover {
     display: flex;
     flex-direction: column;
     gap: 20px;
+    flex: 1;
+    min-height: 0; /* important for flex children to allow scrolling */
+    overflow-y: auto;
+    -webkit-overflow-scrolling: touch;
 }
 
 .scanner-container {
@@ -1983,6 +1987,11 @@ tr:hover {
     justify-content: flex-end;
     gap: 12px;
     flex-wrap: wrap;
+    position: sticky;
+    bottom: 0;
+    z-index: 5;
+    background: #fff;
+    padding: 10px 0;
 }
 
 .fsop-help {
