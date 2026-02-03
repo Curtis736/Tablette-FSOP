@@ -1,6 +1,6 @@
 // Classe principale de l'application
-// Bump version to bust browser cache when OperateurInterface changes (step label merge, hide fabrication column)
-import OperateurInterface from './OperateurInterface.js?v=20260128-operator-label-lancement';
+// Bump version to bust browser cache when OperateurInterface changes (FSOP titles/lots autofill)
+import OperateurInterface from './OperateurInterface.js?v=20260203-fsop-autolot';
 // Bump to bust cache when AdminPage merging logic changes (duplicates after transfer, per-step keys, etc.)
 import AdminPage from './AdminPage.js?v=20260128-admin-editlt2';
 import ApiService from '../services/ApiService.js?v=20260128-admin-editlt2';

@@ -1,7 +1,7 @@
 // Interface simplifiée pour les opérateurs
 import TimeUtils from '../utils/TimeUtils.js';
 import ScannerManager from '../utils/ScannerManager.js?v=20251021-scanner-fix';
-import FsopForm from './FsopForm.js?v=20251021-fsop-form';
+import FsopForm from './FsopForm.js?v=20260203-fsop-autolot';
 
 class OperateurInterface {
     constructor(operator, app) {
@@ -743,6 +743,18 @@ class OperateurInterface {
             this.notificationManager.error('Erreur lors de la validation du numéro de série. Veuillez réessayer.');
             return;
         }
+
+        // Charger les lots ERP maintenant (important: l'opérateur peut cliquer très vite après ouverture)
+        try {
+            await this.loadFsopLotsForLaunch(lt, { force: true });
+        } catch (_) {
+            // ignore: lots are optional, form can still open
+        }
+
+        // Recalculer le lot préféré après chargement (et selon l'étape éventuellement sélectionnée)
+        const pref = this.computePreferredLot(this.currentFsopLots);
+        this.currentFsopPreferredLot = pref.preferredLot;
+        this.currentFsopPreferredRubrique = pref.preferredRubrique;
 
         // Fermer la modal FSOP initiale
         this.closeFsopModal();
