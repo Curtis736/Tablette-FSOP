@@ -2125,13 +2125,14 @@ tr:hover {
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    min-width: 26px;
+    min-width: 34px; /* allow "11a." without cropping */
     height: 22px;
     border-radius: 6px;
     background: #667eea;
     color: #fff;
     font-weight: 800;
     font-size: 12px;
+    padding: 0 8px;
 }
 
 .fsop-word-title-text {

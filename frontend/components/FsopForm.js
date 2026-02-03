@@ -841,7 +841,7 @@ class FsopForm {
                     if (m) {
                         t += `
                             <div class="fsop-word-title fsop-word-title-from-table">
-                                <span class="fsop-word-title-number">${this.escapeHtml(m[1])}</span>
+                                <span class="fsop-word-title-number">${this.escapeHtml(m[1])}.</span>
                                 <span class="fsop-word-title-text">${renderTextWithInputs(m[2])}</span>
                             </div>
                         `;
@@ -898,7 +898,7 @@ class FsopForm {
                     if (mo) currentCodeOperation = mo;
                     html += `
                         <div class="fsop-word-title">
-                            <span class="fsop-word-title-number">${this.escapeHtml(n)}</span>
+                            <span class="fsop-word-title-number">${this.escapeHtml(n)}.</span>
                             <span class="fsop-word-title-text">${renderTextWithInputs(title)}</span>
                         </div>
                     `;
