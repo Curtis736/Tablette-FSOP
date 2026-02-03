@@ -81,6 +81,9 @@ class OperateurInterface {
         this.closeFsopBtn = document.getElementById('closeFsopBtn');
         this.fsopTemplateCodeInput = document.getElementById('fsopTemplateCode');
         this.fsopSerialNumberInput = document.getElementById('fsopSerialNumber');
+        this.generateFsopLotBtn = document.getElementById('generateFsopLotBtn');
+        this.fsopLotGroup = document.getElementById('fsopLotGroup');
+        this.fsopLotList = document.getElementById('fsopLotList');
         this.openFsopWordBtn = document.getElementById('openFsopWordBtn');
         this.openFsopFormBtn = document.getElementById('openFsopFormBtn');
         this.fsopFormModal = document.getElementById('fsopFormModal');
@@ -95,6 +98,9 @@ class OperateurInterface {
         // Instance du formulaire FSOP
         this.fsopForm = null;
         this.currentFsopData = null;
+        this.currentFsopLots = null; // mémorise les lots récupérés depuis l'ERP pour le LT courant
+        this.currentFsopPreferredLot = null;
+        this.currentFsopPreferredRubrique = null;
         
         // Initialiser le gestionnaire de scanner
         this.scannerManager = new ScannerManager();
@@ -211,6 +217,10 @@ class OperateurInterface {
             this.openFsopFormBtn.addEventListener('click', () => this.handleOpenFsopForm());
         }
 
+        if (this.generateFsopLotBtn) {
+            this.generateFsopLotBtn.addEventListener('click', () => this.handleGenerateFsopLots());
+        }
+
         if (this.closeFsopFormBtn) {
             this.closeFsopFormBtn.addEventListener('click', () => this.closeFsopFormModal());
         }
@@ -317,6 +327,9 @@ class OperateurInterface {
         }
 
         this.fsopModal.style.display = 'flex';
+
+        // Charger les lots ERP en arrière-plan (n'affiche rien si erreur)
+        this.loadFsopLotsForLaunch(lt).catch(() => {});
         
         // Réattacher les listeners si l'élément n'était pas trouvé au démarrage
         if (!this.fsopSerialNumberInput) {
@@ -350,6 +363,151 @@ class OperateurInterface {
     closeFsopModal() {
         if (!this.fsopModal) return;
         this.fsopModal.style.display = 'none';
+    }
+
+    async handleGenerateFsopLots() {
+        const lt = this.getCurrentLaunchNumberForFsop();
+        if (!lt) {
+            this.notificationManager.warning('Saisissez un LT valide avant de générer les lots');
+            return;
+        }
+        await this.loadFsopLotsForLaunch(lt, { force: true });
+    }
+
+    async loadFsopLotsForLaunch(launchNumber, opts = {}) {
+        const { force = false } = opts;
+        if (!force && this.currentFsopLots && this.currentFsopLots.launchNumber === launchNumber) {
+            this.renderFsopLots(this.currentFsopLots);
+            return;
+        }
+
+        try {
+            const lotsPayload = await this.apiService.getFsopLots(launchNumber);
+            // Expected: { success:true, launchNumber, byRubrique:[{codeRubrique, phases, lots}] }
+            this.currentFsopLots = lotsPayload;
+            const pref = this.computePreferredLot(lotsPayload);
+            this.currentFsopPreferredLot = pref.preferredLot;
+            this.currentFsopPreferredRubrique = pref.preferredRubrique;
+            this.renderFsopLots(lotsPayload);
+        } catch (err) {
+            console.warn('⚠️ Impossible de récupérer les lots FSOP:', err?.message || err);
+            this.currentFsopLots = null;
+            this.currentFsopPreferredLot = null;
+            this.currentFsopPreferredRubrique = null;
+            if (this.fsopLotGroup) this.fsopLotGroup.style.display = 'none';
+        }
+    }
+
+    getSelectedCodeRubriqueForOperation() {
+        // Best-effort: if the operator UI has a step selector, prefer its CodeRubrique.
+        const sel = document.getElementById('operationStepSelect');
+        if (!sel) return null;
+        const raw = String(sel.value || '').trim();
+        if (!raw) return null;
+        // StepId format we use elsewhere: "Phase|CodeRubrique"
+        const parts = raw.split('|').map(s => s.trim()).filter(Boolean);
+        if (parts.length >= 2) return parts[1] || null;
+        // fallback: sometimes value could be just CodeRubrique
+        if (/^\d{3}$/.test(raw)) return raw;
+        return null;
+    }
+
+    computePreferredLot(payload) {
+        const result = { preferredLot: null, preferredRubrique: null };
+        if (!payload || payload.success === false) return result;
+
+        const uniqueLots = Array.isArray(payload.uniqueLots) ? payload.uniqueLots.filter(Boolean) : [];
+        const items = Array.isArray(payload.items) ? payload.items : [];
+
+        if (uniqueLots.length === 1) {
+            result.preferredLot = String(uniqueLots[0]).trim();
+            return result;
+        }
+
+        const rubrique = this.getSelectedCodeRubriqueForOperation();
+        if (rubrique) {
+            const match = items.find(it => String(it?.codeRubrique || '').trim() === rubrique);
+            const lots = Array.isArray(match?.lots) ? match.lots.filter(Boolean) : [];
+            if (lots.length >= 1) {
+                result.preferredRubrique = rubrique;
+                // If multiple lots, pick the first (sorted by backend). User can still override.
+                result.preferredLot = String(lots[0]).trim();
+                return result;
+            }
+        }
+
+        // Fallback: pick the first unique lot if present
+        if (uniqueLots.length >= 1) {
+            result.preferredLot = String(uniqueLots[0]).trim();
+        }
+        return result;
+    }
+
+    renderFsopLots(payload) {
+        if (!this.fsopLotGroup || !this.fsopLotList) return;
+        // Backend: { success, launchNumber, uniqueLots, items:[{codeRubrique, phases, lots}] }
+        const groups = Array.isArray(payload?.items) ? payload.items : [];
+        if (!payload || payload.success === false || groups.length === 0) {
+            this.fsopLotGroup.style.display = 'none';
+            this.fsopLotList.innerHTML = '';
+            return;
+        }
+
+        let html = '<div class="fsop-lots-panel">';
+        const prefInfo = this.currentFsopPreferredLot
+            ? ` — auto: <strong>${this.escapeHtml(this.currentFsopPreferredLot)}</strong>${this.currentFsopPreferredRubrique ? ` (rubrique ${this.escapeHtml(this.currentFsopPreferredRubrique)})` : ''}`
+            : '';
+        html += `<div class="fsop-lots-title"><strong>Lots (ERP)</strong> — clique pour copier${prefInfo}</div>`;
+
+        groups.forEach((g) => {
+            const codeRubrique = g.codeRubrique || '';
+            const phases = Array.isArray(g.phases) ? g.phases.join(', ') : '';
+            const lots = Array.isArray(g.lots) ? g.lots : [];
+            html += `<div class="fsop-lots-group">`;
+            html += `<div class="fsop-lots-group-header"><span class="fsop-lots-rubrique">${this.escapeHtml(codeRubrique)}</span>${phases ? ` <span class="fsop-lots-phases">(${this.escapeHtml(phases)})</span>` : ''}</div>`;
+            html += `<div class="fsop-lots-chips">`;
+            lots.forEach((lot) => {
+                const safe = String(lot || '').trim();
+                if (!safe) return;
+                html += `<button type="button" class="fsop-lot-chip" data-lot="${this.escapeHtml(safe)}">${this.escapeHtml(safe)}</button>`;
+            });
+            html += `</div></div>`;
+        });
+
+        html += '<div class="fsop-lots-hint">Astuce: tu peux aussi copier/coller une liste (1 lot par ligne) directement dans la première case “Lot” du tableau, ça remplit automatiquement les lignes suivantes.</div>';
+        html += '</div>';
+
+        this.fsopLotList.innerHTML = html;
+        this.fsopLotGroup.style.display = 'flex';
+
+        // Copy-on-click behavior
+        this.fsopLotList.querySelectorAll('button.fsop-lot-chip[data-lot]').forEach((btn) => {
+            btn.addEventListener('click', async () => {
+                const lot = btn.getAttribute('data-lot') || '';
+                if (!lot) return;
+                try {
+                    await navigator.clipboard.writeText(lot);
+                    this.notificationManager.success(`Lot copié: ${lot}`, 1500);
+                } catch (_) {
+                    // fallback
+                    const ta = document.createElement('textarea');
+                    ta.value = lot;
+                    ta.style.position = 'fixed';
+                    ta.style.left = '-9999px';
+                    document.body.appendChild(ta);
+                    ta.select();
+                    document.execCommand('copy');
+                    ta.remove();
+                    this.notificationManager.success(`Lot copié: ${lot}`, 1500);
+                }
+            });
+        });
+    }
+
+    escapeHtml(text) {
+        const div = document.createElement('div');
+        div.textContent = text ?? '';
+        return div.innerHTML;
     }
 
     parseFilenameFromContentDisposition(contentDisposition) {
@@ -619,6 +777,9 @@ class OperateurInterface {
                 },
                 launchNumber: lt, // Also pass as separate field for direct access
                 serialNumber: serialNumber, // Also pass as separate field for direct access
+                fsopLots: this.currentFsopLots || null,
+                preferredLot: this.currentFsopPreferredLot || null,
+                preferredRubrique: this.currentFsopPreferredRubrique || null,
                 tables: {},
                 passFail: {},
                 checkboxes: {}

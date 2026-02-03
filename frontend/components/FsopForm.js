@@ -67,7 +67,10 @@ class FsopForm {
             checkboxes: { ...initialData.checkboxes },
             textFields: { ...initialData.textFields },
             reference: initialData.reference || this.structure.reference?.value || this.structure.reference?.placeholder || '',
-            taggedMeasures: { ...initialData.taggedMeasures }
+            taggedMeasures: { ...initialData.taggedMeasures },
+            fsopLots: initialData.fsopLots || null,
+            preferredLot: initialData.preferredLot || null,
+            preferredRubrique: initialData.preferredRubrique || null
         };
         
         // ⚡ FIX: S'assurer que le numéro de lancement est toujours dans placeholders pour {{LT}}
@@ -309,14 +312,54 @@ class FsopForm {
             `;
         };
 
+        const normalizeCellText = (t) => String(t || '').replace(/\s+/g, ' ').trim();
+
+        const looksLikeTitleText = (t) => {
+            const s = normalizeCellText(t);
+            if (!s) return false;
+            // Common patterns in FSOP templates
+            // - "1. Montage ..." / "1- Montage ..." / "12. Contrôle ..."
+            if (/^\d{1,2}\s*[-–.]\s*\S+/.test(s)) return true;
+            // - "12. Contrôle ... :" / "Général :" etc.
+            if (s.length <= 80 && /:\s*$/.test(s)) return true;
+            return false;
+        };
+
+        const extractTableBanners = (rows) => {
+            const safe = Array.isArray(rows) ? rows.slice() : [];
+            const banners = [];
+
+            // We peel off up to first 3 rows if they look like merged-title rows
+            for (let k = 0; k < 3; k++) {
+                if (safe.length === 0) break;
+                const r = safe[0] || [];
+                const nonEmptyCells = (r || []).filter(c => normalizeCellText(c?.text)).filter(Boolean);
+                if (nonEmptyCells.length !== 1) break;
+                const only = nonEmptyCells[0];
+                const text = normalizeCellText(only?.text);
+                if (!looksLikeTitleText(text)) break;
+                banners.push(text);
+                safe.shift();
+            }
+
+            return { banners, rows: safe };
+        };
+
         const renderTable = (rows, tableBlockId) => {
             const safeRows = rows || [];
             if (safeRows.length === 0) {
                 return '<table class="fsop-word-table"></table>';
             }
 
-            const head = safeRows[0] || [];
-            const body = safeRows.slice(1);
+            const peeled = extractTableBanners(safeRows);
+            const banners = peeled.banners;
+            const remaining = peeled.rows;
+
+            // If we peeled everything, fallback to the original rows
+            const effectiveRows = remaining.length > 0 ? remaining : safeRows;
+
+            const head = effectiveRows[0] || [];
+            const body = effectiveRows.slice(1);
 
             // data-table-idx must match backend injectTableData indexing (0-based order of <w:tbl> in doc)
             const tableIdx = Number.isFinite(tableBlockId) ? Math.max(0, tableBlockId - 1) : 0;
@@ -328,6 +371,21 @@ class FsopForm {
                 return 'text';
             };
             const columnKinds = head.map((c) => inferColumnKind((c?.text || '').trim()));
+
+            const isLotColumn = (colIdx) => {
+                const header = normalizeCellText(head?.[colIdx]?.text);
+                return /\blot\b/i.test(header);
+            };
+
+            const getAutoLot = () => {
+                const pref = String(this.formData?.preferredLot || '').trim();
+                if (pref) return pref;
+                const uniqueLots = Array.isArray(this.formData?.fsopLots?.uniqueLots)
+                    ? this.formData.fsopLots.uniqueLots.map(x => String(x || '').trim()).filter(Boolean)
+                    : [];
+                if (uniqueLots.length === 1) return uniqueLots[0];
+                return '';
+            };
 
             const getSavedCellValue = (rowIdx, colIdx) => {
                 // Word-like tables are stored by numeric table index (as string in JSON).
@@ -485,6 +543,15 @@ class FsopForm {
                         }
                     }
                     
+                    // Special handling: Lot column should always be easy to fill (use input instead of contenteditable)
+                    if (isLotColumn(colIdx) && !isHeader) {
+                        const savedLot = String(saved || '').trim();
+                        const autoLot = getAutoLot();
+                        const finalLot = savedLot || autoLot || '';
+                        const valueAttr = finalLot ? ` value="${this.escapeHtml(String(finalLot))}"` : '';
+                        return `<input class="fsop-cell-input fsop-cell-input-text fsop-cell-input-lot" type="text" data-row="${rowIdx}" data-col="${colIdx}" placeholder="Lot" ${valueAttr} />`;
+                    }
+
                     // For other columns: make empty cells editable, keep filled cells as text (to avoid perturbing reading)
                     if (isBlank) {
                         // ⚡ FIX: If this is the first table (tableIdx === 0) and first data row (rowIdx === 0) and second column (colIdx === 1),
@@ -516,7 +583,24 @@ class FsopForm {
                 return `<${tagName} ${attrs.join(' ')}>${content}</${tagName}>`;
             };
 
-            let t = `<table class="fsop-word-table" data-table-idx="${tableIdx}">`;
+            let t = '';
+            if (banners.length > 0) {
+                banners.forEach((bannerText) => {
+                    const m = bannerText.match(/^(\d{1,2})\s*[-–.]\s*(.+)$/);
+                    if (m) {
+                        t += `
+                            <div class="fsop-word-title fsop-word-title-from-table">
+                                <span class="fsop-word-title-number">${this.escapeHtml(m[1])}</span>
+                                <span class="fsop-word-title-text">${renderTextWithInputs(m[2])}</span>
+                            </div>
+                        `;
+                    } else {
+                        t += `<div class="fsop-word-subtitle fsop-word-subtitle-from-table">${renderTextWithInputs(bannerText)}</div>`;
+                    }
+                });
+            }
+
+            t += `<table class="fsop-word-table" data-table-idx="${tableIdx}">`;
             t += '<thead><tr>';
             head.forEach((c, colIdx) => {
                 t += renderCell(c, 'th', -1, colIdx, true);
@@ -1048,6 +1132,39 @@ class FsopForm {
                 e.preventDefault();
                 const text = (e.clipboardData || window.clipboardData)?.getData('text') || '';
                 document.execCommand('insertText', false, text);
+            });
+        });
+
+        // Word-like LOT inputs: support multi-line paste to fill down the column
+        this.container.querySelectorAll('input.fsop-cell-input-lot[data-row][data-col]').forEach((input) => {
+            input.addEventListener('paste', (e) => {
+                const text = (e.clipboardData || window.clipboardData)?.getData('text') || '';
+                const lines = text
+                    .split(/\r?\n/)
+                    .map(l => l.trim())
+                    .filter(Boolean);
+
+                // If it's a single value, let browser paste normally
+                if (lines.length <= 1) {
+                    return;
+                }
+
+                e.preventDefault();
+
+                const table = input.closest('table.fsop-word-table[data-table-idx]');
+                if (!table) return;
+                const col = parseInt(input.getAttribute('data-col') || '0', 10);
+                const startRow = parseInt(input.getAttribute('data-row') || '0', 10);
+                if (!Number.isFinite(col) || !Number.isFinite(startRow)) return;
+
+                // Fill current + next rows (same column)
+                for (let i = 0; i < lines.length; i++) {
+                    const r = startRow + i;
+                    const target = table.querySelector(`input.fsop-cell-input-lot[data-row="${r}"][data-col="${col}"]`);
+                    if (!target) break;
+                    target.value = lines[i];
+                    target.dispatchEvent(new Event('input', { bubbles: true }));
+                }
             });
         });
 
