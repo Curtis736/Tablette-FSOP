@@ -664,39 +664,44 @@ class FsopForm {
                 const isBlank = !cellText || /^_{3,}$/.test(cellText);
                 
                 // ⚡ FIX: Detect if this column is for "Numéro lancement" by checking:
-                // 1. If any header cell in this column contains "Numéro lancement"
-                // 2. If any cell in ANY data row contains "Numéro lancement:" (with colon)
-                // 3. If the cell text itself contains "Numéro lancement" or "{{LT}}"
-                // 4. If the cell is in a column where the previous cell (same row) contains "Numéro lancement:"
+                // 1. If any header cell in this column contains "Numéro lancement" or "Numéro de cœur"
+                // 2. If any cell in ANY data row contains "Numéro lancement:" or "Numéro de cœur" (with colon)
+                // 3. If the cell text itself contains "Numéro lancement", "Numéro de cœur", or "{{LT}}"
+                // 4. If the cell is in a column where the previous cell (same row) contains "Numéro lancement:" or "Numéro de cœur"
                 const checkIfLaunchNumberColumn = () => {
                     // Check header cells in this column
-                    if (head[colIdx] && /numéro\s*lancement/i.test(String(head[colIdx]?.text || ''))) {
+                    const headerText = String(head[colIdx]?.text || '').toLowerCase();
+                    if (headerText && (/numéro\s*lancement/i.test(headerText) || /numéro\s*de\s*c[oô]eur/i.test(headerText))) {
                         return true;
                     }
-                    // Check ALL data rows for "Numéro lancement:" label
+                    // Check ALL data rows for "Numéro lancement:" or "Numéro de cœur" label
                     for (let i = 0; i < body.length; i++) {
                         if (body[i] && body[i][colIdx]) {
                             const cell = body[i][colIdx];
-                            if (/numéro\s*lancement/i.test(String(cell?.text || ''))) {
+                            const cellTextLower = String(cell?.text || '').toLowerCase();
+                            if (/numéro\s*lancement/i.test(cellTextLower) || /numéro\s*de\s*c[oô]eur/i.test(cellTextLower)) {
                                 return true;
                             }
                         }
-                        // Also check if previous column in same row has "Numéro lancement:"
+                        // Also check if previous column in same row has "Numéro lancement:" or "Numéro de cœur"
                         if (colIdx > 0 && body[i] && body[i][colIdx - 1]) {
                             const prevCell = body[i][colIdx - 1];
-                            if (/numéro\s*lancement\s*:?/i.test(String(prevCell?.text || ''))) {
+                            const prevTextLower = String(prevCell?.text || '').toLowerCase();
+                            if (/numéro\s*lancement\s*:?/i.test(prevTextLower) || /numéro\s*de\s*c[oô]eur/i.test(prevTextLower)) {
                                 return true;
                             }
                         }
                     }
                     // Check current cell
-                    if (/numéro\s*lancement/i.test(cellText) || cellText.includes('{{LT}}')) {
+                    const cellTextLower = cellText.toLowerCase();
+                    if (/numéro\s*lancement/i.test(cellTextLower) || /numéro\s*de\s*c[oô]eur/i.test(cellTextLower) || cellText.includes('{{LT}}')) {
                         return true;
                     }
-                    // Check if previous cell in same row has "Numéro lancement:"
+                    // Check if previous cell in same row has "Numéro lancement:" or "Numéro de cœur"
                     if (!isHeader && rowIdx >= 0 && body[rowIdx] && colIdx > 0 && body[rowIdx][colIdx - 1]) {
                         const prevCell = body[rowIdx][colIdx - 1];
-                        if (/numéro\s*lancement\s*:?/i.test(String(prevCell?.text || ''))) {
+                        const prevTextLower = String(prevCell?.text || '').toLowerCase();
+                        if (/numéro\s*lancement\s*:?/i.test(prevTextLower) || /numéro\s*de\s*c[oô]eur/i.test(prevTextLower)) {
                             return true;
                         }
                     }
@@ -802,14 +807,15 @@ class FsopForm {
                         }
                     }
                     
-                    // ⚡ FIX: Also check if this is an empty cell that follows "Numéro lancement:" in the same row
-                    // This handles the case where "Numéro lancement:" is in col 0 and the input should be in col 1
+                    // ⚡ FIX: Also check if this is an empty cell that follows "Numéro lancement:" or "Numéro de cœur" in the same row
+                    // This handles the case where "Numéro lancement:" or "Numéro de cœur + Numéro de lancement" is in col 0 and the input should be in col 1
                     if (isBlank && !isHeader && rowIdx >= 0 && body[rowIdx] && colIdx > 0) {
                         const prevCell = body[rowIdx][colIdx - 1];
-                        if (prevCell && /numéro\s*lancement\s*:?\s*$/i.test(String(prevCell?.text || '').trim())) {
-                            // This is the cell right after "Numéro lancement:" - make it an input
+                        const prevText = String(prevCell?.text || '').trim().toLowerCase();
+                        if (prevCell && (/numéro\s*lancement\s*:?\s*$/i.test(prevText) || /numéro\s*de\s*c[oô]eur/i.test(prevText))) {
+                            // This is the cell right after "Numéro lancement:" or "Numéro de cœur + Numéro de lancement" - make it an input
                             const launchValue = saved || this.formData.placeholders?.['{{LT}}'] || '';
-                            console.log(`🔍 Rendering launch number input (detected from prev cell) at row ${rowIdx}, col ${colIdx} with value: "${launchValue}"`);
+                            console.log(`🔍 Rendering launch number input (detected from prev cell: "${prevText}") at row ${rowIdx}, col ${colIdx} with value: "${launchValue}"`);
                             return `<input 
                                 type="text" 
                                 class="fsop-cell-input fsop-cell-input-text" 
@@ -820,6 +826,22 @@ class FsopForm {
                                 style="width: 100%; border: 1px solid #ccc; padding: 4px; background: white;"
                             />`;
                         }
+                    }
+                    
+                    // ⚡ FIX: Also check if this cell itself contains "Numéro de cœur + Numéro de lancement" and is empty/blank
+                    // In this case, render it as an input directly
+                    if (isBlank && !isHeader && /numéro\s*de\s*c[oô]eur.*numéro\s*lancement/i.test(cellText)) {
+                        const launchValue = saved || this.formData.placeholders?.['{{LT}}'] || '';
+                        console.log(`🔍 Rendering launch number input (cell contains "Numéro de cœur + Numéro de lancement") at row ${rowIdx}, col ${colIdx} with value: "${launchValue}"`);
+                        return `<input 
+                            type="text" 
+                            class="fsop-cell-input fsop-cell-input-text" 
+                            data-row="${rowIdx}" 
+                            data-col="${colIdx}" 
+                            data-launch-number="true"
+                            value="${this.escapeHtml(launchValue)}" 
+                            style="width: 100%; border: 1px solid #ccc; padding: 4px; background: white;"
+                        />`;
                     }
                     
                     // Special handling: Lot column should always be easy to fill (use input instead of contenteditable)
