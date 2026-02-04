@@ -1,7 +1,7 @@
 // Interface simplifiée pour les opérateurs
 import TimeUtils from '../utils/TimeUtils.js';
 import ScannerManager from '../utils/ScannerManager.js?v=20251021-scanner-fix';
-import FsopForm from './FsopForm.js?v=20260203-ind-operator';
+import FsopForm from './FsopForm.js?v=20260203-ind-operator-fix';
 
 class OperateurInterface {
     constructor(operator, app) {
@@ -414,6 +414,30 @@ class OperateurInterface {
     }
 
     /**
+     * Calcule les initiales d'un opérateur
+     * @param {Object} op - Opérateur avec nom, code, id
+     * @returns {string} Initiales calculées
+     */
+    calculateOperatorInitials(op) {
+        const nom = String(op.nom || '').trim();
+        const words = nom.split(/\s+/).filter(w => w.length > 0);
+        let initials = '';
+        
+        if (words.length === 0) {
+            // Fallback: use code if no name
+            initials = String(op.code || op.id || '').substring(0, 2).toUpperCase();
+        } else if (words.length === 1) {
+            // Single word: use first 2 letters
+            initials = words[0].substring(0, 2).toUpperCase();
+        } else {
+            // Multiple words: first letter of first + first letter of last
+            initials = (words[0][0] + words[words.length - 1][0]).toUpperCase();
+        }
+        
+        return initials;
+    }
+
+    /**
      * Charge les opérateurs et calcule leurs initiales pour les menus déroulants FSOP
      * @returns {Promise<Array>} Liste d'options { initials, label }
      */
@@ -426,43 +450,87 @@ class OperateurInterface {
         try {
             const operators = await this.apiService.getAllOperators();
             
-            // Calculate initials: first letter of first word + first letter of last word
-            const operatorOptions = operators.map(op => {
+            // Create a map to avoid duplicates
+            const operatorMap = new Map();
+            
+            // Add all operators from API
+            operators.forEach(op => {
+                const code = String(op.code || op.id || '').trim();
+                if (!code) return;
+                
+                const initials = this.calculateOperatorInitials(op);
                 const nom = String(op.nom || '').trim();
-                const words = nom.split(/\s+/).filter(w => w.length > 0);
-                let initials = '';
+                const label = `${initials} — ${nom} (${code})`;
                 
-                if (words.length === 0) {
-                    // Fallback: use code if no name
-                    initials = String(op.code || op.id || '').substring(0, 2).toUpperCase();
-                } else if (words.length === 1) {
-                    // Single word: use first 2 letters
-                    initials = words[0].substring(0, 2).toUpperCase();
-                } else {
-                    // Multiple words: first letter of first + first letter of last
-                    initials = (words[0][0] + words[words.length - 1][0]).toUpperCase();
-                }
-                
-                // Label format: "HO — Hassane OUHSSAINE (929)"
-                const label = `${initials} — ${nom} (${op.code || op.id || ''})`;
-                
-                return {
+                operatorMap.set(code, {
                     initials: initials,
                     label: label,
-                    code: op.code || op.id,
+                    code: code,
                     nom: nom
-                };
+                });
             });
             
-            // Sort by initials
+            // IMPORTANT: Always include the currently connected operator, even if not in API list
+            if (this.operator) {
+                const currentCode = String(this.operator.code || this.operator.id || '').trim();
+                const currentNom = String(this.operator.nom || this.operator.name || '').trim();
+                
+                if (currentCode && !operatorMap.has(currentCode)) {
+                    // Current operator not in list, add it
+                    const initials = this.calculateOperatorInitials(this.operator);
+                    const label = `${initials} — ${currentNom} (${currentCode})`;
+                    
+                    operatorMap.set(currentCode, {
+                        initials: initials,
+                        label: label,
+                        code: currentCode,
+                        nom: currentNom
+                    });
+                } else if (currentCode && operatorMap.has(currentCode)) {
+                    // Current operator is in list, but ensure it uses the correct name from this.operator
+                    const existing = operatorMap.get(currentCode);
+                    if (currentNom && currentNom !== existing.nom) {
+                        // Update with current operator's name (might be more complete)
+                        const initials = this.calculateOperatorInitials(this.operator);
+                        const label = `${initials} — ${currentNom} (${currentCode})`;
+                        operatorMap.set(currentCode, {
+                            initials: initials,
+                            label: label,
+                            code: currentCode,
+                            nom: currentNom
+                        });
+                    }
+                }
+            }
+            
+            // Convert map to array and sort by initials
+            const operatorOptions = Array.from(operatorMap.values());
             operatorOptions.sort((a, b) => a.initials.localeCompare(b.initials));
             
             // Cache the result
             this.cachedOperators = operatorOptions;
             
+            console.log(`✅ ${operatorOptions.length} opérateurs chargés pour FSOP (incluant opérateur connecté: ${this.operator?.code || this.operator?.id || 'N/A'})`);
+            
             return operatorOptions;
         } catch (error) {
             console.error('Erreur lors du chargement des opérateurs:', error);
+            
+            // Fallback: if API fails, at least return the current operator
+            if (this.operator) {
+                const initials = this.calculateOperatorInitials(this.operator);
+                const nom = String(this.operator.nom || this.operator.name || '').trim();
+                const code = String(this.operator.code || this.operator.id || '').trim();
+                const label = `${initials} — ${nom} (${code})`;
+                
+                return [{
+                    initials: initials,
+                    label: label,
+                    code: code,
+                    nom: nom
+                }];
+            }
+            
             // Return empty array on error (form can still work without operator dropdown)
             return [];
         }
