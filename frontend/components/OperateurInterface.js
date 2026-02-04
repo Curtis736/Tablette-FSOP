@@ -1,7 +1,7 @@
 // Interface simplifiée pour les opérateurs
 import TimeUtils from '../utils/TimeUtils.js';
 import ScannerManager from '../utils/ScannerManager.js?v=20251021-scanner-fix';
-import FsopForm from './FsopForm.js?v=20260203-fsop-titles4';
+import FsopForm from './FsopForm.js?v=20260203-ind-operator';
 
 class OperateurInterface {
     constructor(operator, app) {
@@ -17,6 +17,7 @@ class OperateurInterface {
         this.totalPausedTime = 0;
         this.pauseStartTime = null;
         this.pendingForceReplace = false; // Flag pour forcer le remplacement après confirmation
+        this.cachedOperators = null; // Cache pour la liste des opérateurs
         
         // Debouncing pour éviter les clics répétés
         this.lastActionTime = 0;
@@ -412,6 +413,61 @@ class OperateurInterface {
         return null;
     }
 
+    /**
+     * Charge les opérateurs et calcule leurs initiales pour les menus déroulants FSOP
+     * @returns {Promise<Array>} Liste d'options { initials, label }
+     */
+    async loadOperatorsForFsop() {
+        // Use cache if available
+        if (this.cachedOperators) {
+            return this.cachedOperators;
+        }
+
+        try {
+            const operators = await this.apiService.getAllOperators();
+            
+            // Calculate initials: first letter of first word + first letter of last word
+            const operatorOptions = operators.map(op => {
+                const nom = String(op.nom || '').trim();
+                const words = nom.split(/\s+/).filter(w => w.length > 0);
+                let initials = '';
+                
+                if (words.length === 0) {
+                    // Fallback: use code if no name
+                    initials = String(op.code || op.id || '').substring(0, 2).toUpperCase();
+                } else if (words.length === 1) {
+                    // Single word: use first 2 letters
+                    initials = words[0].substring(0, 2).toUpperCase();
+                } else {
+                    // Multiple words: first letter of first + first letter of last
+                    initials = (words[0][0] + words[words.length - 1][0]).toUpperCase();
+                }
+                
+                // Label format: "HO — Hassane OUHSSAINE (929)"
+                const label = `${initials} — ${nom} (${op.code || op.id || ''})`;
+                
+                return {
+                    initials: initials,
+                    label: label,
+                    code: op.code || op.id,
+                    nom: nom
+                };
+            });
+            
+            // Sort by initials
+            operatorOptions.sort((a, b) => a.initials.localeCompare(b.initials));
+            
+            // Cache the result
+            this.cachedOperators = operatorOptions;
+            
+            return operatorOptions;
+        } catch (error) {
+            console.error('Erreur lors du chargement des opérateurs:', error);
+            // Return empty array on error (form can still work without operator dropdown)
+            return [];
+        }
+    }
+
     computePreferredLot(payload) {
         const result = { preferredLot: null, preferredRubrique: null };
         if (!payload || payload.success === false) return result;
@@ -793,6 +849,9 @@ class OperateurInterface {
             // Charger la structure du template
             await this.fsopForm.loadStructure(templateCode);
 
+            // Charger les opérateurs pour les menus déroulants
+            const operatorOptions = await this.loadOperatorsForFsop();
+
             // Pré-remplir avec LT et SN
             const initialData = {
                 placeholders: {
@@ -804,6 +863,7 @@ class OperateurInterface {
                 fsopLots: this.currentFsopLots || null,
                 preferredLot: this.currentFsopPreferredLot || null,
                 preferredRubrique: this.currentFsopPreferredRubrique || null,
+                operatorOptions: operatorOptions, // Pass operator options for dropdowns
                 tables: {},
                 passFail: {},
                 checkboxes: {}

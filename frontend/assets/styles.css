@@ -2253,6 +2253,67 @@ tr:hover {
     min-width: 40px;
 }
 
+/* Input for "ind __" field (1 character, uppercase) */
+.fsop-ind-input {
+    width: 24px;
+    min-width: 24px;
+    max-width: 24px;
+    text-align: center;
+    font-weight: 600;
+    text-transform: uppercase;
+    border: 1px solid #ccc;
+    border-radius: 4px;
+    padding: 2px 4px;
+    background: #fff;
+    font-size: 13px;
+}
+
+.fsop-ind-input:focus {
+    outline: none;
+    border-color: #667eea;
+    box-shadow: 0 0 0 2px rgba(102, 126, 234, 0.2);
+}
+
+/* Operator dropdown cell */
+.fsop-operator-cell {
+    width: 100%;
+    position: relative;
+}
+
+.fsop-operator-select {
+    width: 100%;
+    border: 1px solid #ccc;
+    border-radius: 4px;
+    padding: 4px 8px;
+    background: #fff;
+    font-size: 13px;
+    cursor: pointer;
+    min-height: 28px;
+}
+
+.fsop-operator-select:focus {
+    outline: none;
+    border-color: #667eea;
+    box-shadow: 0 0 0 2px rgba(102, 126, 234, 0.2);
+}
+
+.fsop-operator-other-input {
+    width: 100%;
+    border: 1px solid #ccc;
+    border-radius: 4px;
+    padding: 4px 8px;
+    background: #fff;
+    font-size: 13px;
+    text-transform: uppercase;
+    min-height: 28px;
+}
+
+.fsop-operator-other-input:focus {
+    outline: none;
+    border-color: #667eea;
+    box-shadow: 0 0 0 2px rgba(102, 126, 234, 0.2);
+}
+
 .fsop-blank-input {
     min-width: 140px;
 }

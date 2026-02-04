@@ -63,6 +63,7 @@ class FsopForm {
         this.formData = {
             placeholders: { ...initialData.placeholders },
             tables: { ...initialData.tables },
+            wordlikeTables: { ...initialData.wordlikeTables },
             passFail: { ...initialData.passFail },
             checkboxes: { ...initialData.checkboxes },
             textFields: { ...initialData.textFields },
@@ -70,7 +71,8 @@ class FsopForm {
             taggedMeasures: { ...initialData.taggedMeasures },
             fsopLots: initialData.fsopLots || null,
             preferredLot: initialData.preferredLot || null,
-            preferredRubrique: initialData.preferredRubrique || null
+            preferredRubrique: initialData.preferredRubrique || null,
+            operatorOptions: initialData.operatorOptions || []
         };
         
         // ⚡ FIX: S'assurer que le numéro de lancement est toujours dans placeholders pour {{LT}}
@@ -271,6 +273,17 @@ class FsopForm {
                            (tag === 'LT' ? (this.formData.placeholders?.['{{LT}}'] || '') : '');
                 return `<input class="fsop-inline-input" type="text" data-placeholder="${placeholder}" value="${this.escapeHtml(val)}" />`;
             });
+            
+            // Detect "ind __" or "ind ___" patterns (with 2+ underscores) and replace with editable 1-char input
+            // Pattern: "MO #### ind __" or "MO #### ind ___" etc.
+            out = out.replace(/\bMO\s*(\d{3,5})\s+ind\s+_{2,}/gi, (match, moNumber) => {
+                const placeholderKey = `{{IND_MO${moNumber}}}`;
+                const currentValue = this.formData.placeholders?.[placeholderKey] || '';
+                // Extract the text before "ind __" to preserve it
+                const beforeInd = match.replace(/\s+ind\s+_{2,}$/i, '');
+                return `${beforeInd} ind <input class="fsop-ind-input" type="text" maxlength="1" data-placeholder="${placeholderKey}" value="${this.escapeHtml(currentValue)}" style="text-transform: uppercase;" />`;
+            });
+            
             return out;
         };
 
@@ -475,6 +488,7 @@ class FsopForm {
                 const h = String(headerText || '').toLowerCase();
                 if (h.includes('date')) return 'date';
                 if (h.includes('heure') || h.includes('time')) return 'time';
+                if (h.includes('opérateur') || h.includes('operateur')) return 'operator';
                 return 'text';
             };
             const columnKinds = useThead ? head.map((c) => inferColumnKind((c?.text || '').trim())) : [];
@@ -595,7 +609,10 @@ class FsopForm {
             const getSavedCellValue = (rowIdx, colIdx) => {
                 // Word-like tables are stored by numeric table index (as string in JSON).
                 const key = String(tableIdx);
+                // Check wordlikeTables first (for Word-like rendering), then fallback to tables
                 return (
+                    this.formData?.wordlikeTables?.[key]?.[rowIdx]?.[colIdx] ??
+                    this.formData?.wordlikeTables?.[tableIdx]?.[rowIdx]?.[colIdx] ??
                     this.formData?.tables?.[key]?.[rowIdx]?.[colIdx] ??
                     this.formData?.tables?.[tableIdx]?.[rowIdx]?.[colIdx] ??
                     ''
@@ -712,6 +729,42 @@ class FsopForm {
                         return `<input class="fsop-cell-input fsop-cell-input-time" type="time" data-row="${rowIdx}" data-col="${colIdx}"${valueAttr} />`;
                     }
 
+                    // Special handling for "Opérateur" columns: render as dropdown with "Autre..." option
+                    if (kind === 'operator') {
+                        const savedOperator = String(saved || '').trim();
+                        const operatorOptions = Array.isArray(this.formData.operatorOptions) ? this.formData.operatorOptions : [];
+                        const isOtherValue = savedOperator && !operatorOptions.some(opt => opt.initials === savedOperator);
+                        
+                        // Build options HTML
+                        let optionsHtml = '<option value="">-- Choisir --</option>';
+                        operatorOptions.forEach(opt => {
+                            const selected = savedOperator === opt.initials ? 'selected' : '';
+                            optionsHtml += `<option value="${this.escapeHtml(opt.initials)}" ${selected}>${this.escapeHtml(opt.label)}</option>`;
+                        });
+                        optionsHtml += '<option value="__OTHER__" ' + (isOtherValue ? 'selected' : '') + '>Autre…</option>';
+                        
+                        // If saved value is "other" (not in list), show input; otherwise show select
+                        if (isOtherValue) {
+                            return `
+                                <div class="fsop-operator-cell">
+                                    <select class="fsop-operator-select" data-row="${rowIdx}" data-col="${colIdx}" style="display: none;">
+                                        ${optionsHtml}
+                                    </select>
+                                    <input type="text" class="fsop-operator-other-input fsop-cell-input" data-row="${rowIdx}" data-col="${colIdx}" value="${this.escapeHtml(savedOperator)}" placeholder="Initiales opérateur" />
+                                </div>
+                            `;
+                        } else {
+                            return `
+                                <div class="fsop-operator-cell">
+                                    <select class="fsop-operator-select fsop-cell-input" data-row="${rowIdx}" data-col="${colIdx}">
+                                        ${optionsHtml}
+                                    </select>
+                                    <input type="text" class="fsop-operator-other-input fsop-cell-input" data-row="${rowIdx}" data-col="${colIdx}" style="display: none;" placeholder="Initiales opérateur" />
+                                </div>
+                            `;
+                        }
+                    }
+
                     // ⚡ FIX: Special handling for "Numéro lancement" cells:
                     // - If this cell is the *value* cell (blank/underscores or already has a saved LT), render as input
                     // - If the label+underscores are in the same cell, replace underscores by an inline input
@@ -736,16 +789,16 @@ class FsopForm {
                             `;
                         }
                         if (isLikelyValueCell) {
-                            console.log(`🔍 Rendering launch number input at row ${rowIdx}, col ${colIdx} with value: "${launchValue}"`);
-                            return `<input 
-                                type="text" 
-                                class="fsop-cell-input fsop-cell-input-text" 
-                                data-row="${rowIdx}" 
-                                data-col="${colIdx}" 
-                                data-launch-number="true"
-                                value="${this.escapeHtml(launchValue)}" 
-                                style="width: 100%; border: 1px solid #ccc; padding: 4px; background: white;"
-                            />`;
+                        console.log(`🔍 Rendering launch number input at row ${rowIdx}, col ${colIdx} with value: "${launchValue}"`);
+                        return `<input 
+                            type="text" 
+                            class="fsop-cell-input fsop-cell-input-text" 
+                            data-row="${rowIdx}" 
+                            data-col="${colIdx}" 
+                            data-launch-number="true"
+                            value="${this.escapeHtml(launchValue)}" 
+                            style="width: 100%; border: 1px solid #ccc; padding: 4px; background: white;"
+                        />`;
                         }
                     }
                     
@@ -903,7 +956,7 @@ class FsopForm {
                         const valueAttr = finalLot ? ` value="${this.escapeHtml(String(finalLot))}"` : '';
                         return `<input class="fsop-cell-input fsop-cell-input-text fsop-cell-input-lot" type="text" data-row="${rowIdx}" data-col="${colIdx}" placeholder="Lot" ${valueAttr} />`;
                     }
-
+                    
                     // For other columns: make empty cells editable, keep filled cells as text (to avoid perturbing reading)
                     if (isBlank) {
                         // ⚡ FIX: If this is the first table (tableIdx === 0) and first data row (rowIdx === 0) and second column (colIdx === 1),
@@ -961,11 +1014,11 @@ class FsopForm {
 
             t += `<table class="fsop-word-table" data-table-idx="${tableIdx}">`;
             if (useThead) {
-                t += '<thead><tr>';
-                head.forEach((c, colIdx) => {
-                    t += renderCell(c, 'th', -1, colIdx, true);
-                });
-                t += '</tr></thead>';
+            t += '<thead><tr>';
+            head.forEach((c, colIdx) => {
+                t += renderCell(c, 'th', -1, colIdx, true);
+            });
+            t += '</tr></thead>';
             }
 
             t += '<tbody>';
@@ -1481,6 +1534,60 @@ class FsopForm {
             });
         });
 
+        // Operator select/input handling
+        this.container.querySelectorAll('.fsop-operator-select').forEach(select => {
+            select.addEventListener('change', (e) => {
+                const rowIdx = parseInt(e.target.getAttribute('data-row'), 10);
+                const colIdx = parseInt(e.target.getAttribute('data-col'), 10);
+                const value = e.target.value;
+                const cell = e.target.closest('.fsop-operator-cell');
+                const otherInput = cell?.querySelector('.fsop-operator-other-input');
+                
+                if (value === '__OTHER__') {
+                    // Show input, hide select
+                    e.target.style.display = 'none';
+                    if (otherInput) {
+                        otherInput.style.display = 'block';
+                        otherInput.focus();
+                    }
+                } else {
+                    // Hide input, show select, save value
+                    if (otherInput) {
+                        otherInput.style.display = 'none';
+                        otherInput.value = '';
+                    }
+                    // Save to wordlikeTables
+                    const table = e.target.closest('table[data-table-idx]');
+                    if (table) {
+                        const tableIdx = table.getAttribute('data-table-idx');
+                        if (!this.formData.wordlikeTables) this.formData.wordlikeTables = {};
+                        if (!this.formData.wordlikeTables[tableIdx]) this.formData.wordlikeTables[tableIdx] = {};
+                        if (!this.formData.wordlikeTables[tableIdx][rowIdx]) this.formData.wordlikeTables[tableIdx][rowIdx] = {};
+                        this.formData.wordlikeTables[tableIdx][rowIdx][colIdx] = value;
+                    }
+                }
+            });
+        });
+
+        // Operator "other" input handling
+        this.container.querySelectorAll('.fsop-operator-other-input').forEach(input => {
+            input.addEventListener('input', (e) => {
+                const rowIdx = parseInt(e.target.getAttribute('data-row'), 10);
+                const colIdx = parseInt(e.target.getAttribute('data-col'), 10);
+                const value = e.target.value.trim().toUpperCase();
+                
+                // Save to wordlikeTables
+                const table = e.target.closest('table[data-table-idx]');
+                if (table) {
+                    const tableIdx = table.getAttribute('data-table-idx');
+                    if (!this.formData.wordlikeTables) this.formData.wordlikeTables = {};
+                    if (!this.formData.wordlikeTables[tableIdx]) this.formData.wordlikeTables[tableIdx] = {};
+                    if (!this.formData.wordlikeTables[tableIdx][rowIdx]) this.formData.wordlikeTables[tableIdx][rowIdx] = {};
+                    this.formData.wordlikeTables[tableIdx][rowIdx][colIdx] = value;
+                }
+            });
+        });
+
         // Add row buttons
         this.container.querySelectorAll('.fsop-add-row-btn').forEach(btn => {
             btn.addEventListener('click', (e) => {
@@ -1769,6 +1876,26 @@ class FsopForm {
                                 const [yyyy, mm, dd] = value.split('-');
                                 value = `${dd}/${mm}/${yyyy}`;
                             }
+                            wordlikeTables[tableIdx][rowIdx][colIdx] = value;
+                        }
+                    });
+                    // Also collect operator select/input values
+                    const operatorSelects = Array.from(tr.querySelectorAll('.fsop-operator-select[data-col]'));
+                    const operatorOtherInputs = Array.from(tr.querySelectorAll('.fsop-operator-other-input[data-col]'));
+                    operatorSelects.forEach((selectEl) => {
+                        const colIdx = parseInt(selectEl.getAttribute('data-col') || '0', 10);
+                        if (!Number.isFinite(colIdx)) return;
+                        const value = String(selectEl.value || '').trim();
+                        // Only save if not "__OTHER__" (that case is handled by the input)
+                        if (value && value !== '__OTHER__') {
+                            wordlikeTables[tableIdx][rowIdx][colIdx] = value;
+                        }
+                    });
+                    operatorOtherInputs.forEach((inputEl) => {
+                        const colIdx = parseInt(inputEl.getAttribute('data-col') || '0', 10);
+                        if (!Number.isFinite(colIdx)) return;
+                        const value = String(inputEl.value || '').trim().toUpperCase();
+                        if (value) {
                             wordlikeTables[tableIdx][rowIdx][colIdx] = value;
                         }
                     });
