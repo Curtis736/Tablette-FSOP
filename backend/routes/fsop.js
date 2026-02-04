@@ -750,7 +750,14 @@ router.post('/save', async (req, res) => {
         const launchNumber = normalizeLaunchNumber(req.body?.launchNumber);
         const templateCode = normalizeTemplateCode(req.body?.templateCode);
         const serialNumber = normalizeSerialNumber(req.body?.serialNumber);
-        const formData = req.body?.formData || {}; // { placeholders: {}, tables: {}, passFail: {} }
+        const formData = req.body?.formData || {}; // { placeholders: {}, tables: {}, wordlikeTables: {}, passFail: {} }
+        
+        // Merge wordlikeTables into tables (wordlikeTables use numeric table indices as keys)
+        if (formData.wordlikeTables && typeof formData.wordlikeTables === 'object') {
+            if (!formData.tables) formData.tables = {};
+            // Merge wordlikeTables into tables (they use string keys like "0", "1", etc.)
+            Object.assign(formData.tables, formData.wordlikeTables);
+        }
 
         if (!launchNumber || !templateCode || !serialNumber) {
             return res.status(400).json({ error: 'INPUT_INVALID' });

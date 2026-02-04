@@ -593,12 +593,35 @@ function injectTableData(xml, tableData) {
                                     }
                                 );
                             } else {
-                                // If no text run found, add one (shouldn't happen in valid Word docs)
-                                console.warn(`⚠️ No text run found in cell ${targetCellIndex}, adding one`);
-                                updatedCellXml = updatedCellXml.replace(
-                                    /<\/w:tc>/,
-                                    `<w:t>${escapedValue}</w:t></w:tc>`
-                                );
+                                // If no text run found, add one properly within a paragraph and run structure
+                                // Word XML structure: <w:tc><w:p><w:r><w:t>text</w:t></w:r></w:p></w:tc>
+                                console.warn(`⚠️ No text run found in cell ${targetCellIndex}, adding one with proper structure`);
+                                
+                                // Check if there's a paragraph structure
+                                if (updatedCellXml.includes('<w:p')) {
+                                    // Insert into existing paragraph
+                                    updatedCellXml = updatedCellXml.replace(
+                                        /(<w:p[^>]*>)([\s\S]*?)(<\/w:p>)/,
+                                        (match, openP, content, closeP) => {
+                                            // Check if there's already a run
+                                            if (content.includes('<w:r')) {
+                                                // Insert text run into existing run
+                                                return `${openP}${content.replace(/<w:r[^>]*>/, `$&<w:t>${escapedValue}</w:t>`)}${closeP}`;
+                                            } else {
+                                                // Add run with text
+                                                return `${openP}${content}<w:r><w:t>${escapedValue}</w:t></w:r>${closeP}`;
+                                            }
+                                        }
+                                    );
+                                } else {
+                                    // No paragraph, add complete structure
+                                    updatedCellXml = updatedCellXml.replace(
+                                        /(<w:tc[^>]*>)([\s\S]*?)(<\/w:tc>)/,
+                                        (match, openTc, content, closeTc) => {
+                                            return `${openTc}${content}<w:p><w:r><w:t>${escapedValue}</w:t></w:r></w:p>${closeTc}`;
+                                        }
+                                    );
+                                }
                             }
                             
                             cellReplacements.set(targetCellIndex, {
