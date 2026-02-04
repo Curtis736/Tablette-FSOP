@@ -828,11 +828,67 @@ class FsopForm {
                         }
                     }
                     
-                    // ⚡ FIX: Also check if this cell itself contains "Numéro de cœur + Numéro de lancement" and is empty/blank
-                    // In this case, render it as an input directly
-                    if (isBlank && !isHeader && /numéro\s*de\s*c[oô]eur.*numéro\s*lancement/i.test(cellText)) {
+                    // ⚡ FIX: Check if this cell or adjacent cells contain "Numéro de cœur" or "Numéro lancement"
+                    // Strategy: If cell contains label, render label + input. If cell is empty but previous/next has label, render input.
+                    const cellTextLower = cellText.toLowerCase();
+                    const hasCoeurLancement = /numéro\s*de\s*c[oô]eur/i.test(cellTextLower) || /numéro\s*lancement/i.test(cellTextLower);
+                    
+                    // Check adjacent cells in same row for the label
+                    let adjacentHasLabel = false;
+                    if (!isHeader && rowIdx >= 0 && body[rowIdx]) {
+                        // Check previous cell
+                        if (colIdx > 0 && body[rowIdx][colIdx - 1]) {
+                            const prevText = String(body[rowIdx][colIdx - 1]?.text || '').toLowerCase();
+                            if (/numéro\s*de\s*c[oô]eur/i.test(prevText) || /numéro\s*lancement/i.test(prevText)) {
+                                adjacentHasLabel = true;
+                            }
+                        }
+                        // Check next cell
+                        if (!adjacentHasLabel && body[rowIdx][colIdx + 1]) {
+                            const nextText = String(body[rowIdx][colIdx + 1]?.text || '').toLowerCase();
+                            if (/numéro\s*de\s*c[oô]eur/i.test(nextText) || /numéro\s*lancement/i.test(nextText)) {
+                                adjacentHasLabel = true;
+                            }
+                        }
+                    }
+                    
+                    if ((hasCoeurLancement || adjacentHasLabel || isLaunchNumberColumn) && !isHeader) {
                         const launchValue = saved || this.formData.placeholders?.['{{LT}}'] || '';
-                        console.log(`🔍 Rendering launch number input (cell contains "Numéro de cœur + Numéro de lancement") at row ${rowIdx}, col ${colIdx} with value: "${launchValue}"`);
+                        // If cell contains the label, render as label + input inline
+                        if (cellText && !isBlank && hasCoeurLancement) {
+                            // Cell contains label, render label + input inline
+                            console.log(`🔍 Rendering launch number input (cell contains label: "${cellText}") at row ${rowIdx}, col ${colIdx} with value: "${launchValue}"`);
+                            return `
+                                <span style="margin-right: 8px;">${this.escapeHtml(cellText)}</span>
+                                <input 
+                                    type="text" 
+                                    class="fsop-cell-input fsop-cell-input-text" 
+                                    data-row="${rowIdx}" 
+                                    data-col="${colIdx}" 
+                                    data-launch-number="true"
+                                    value="${this.escapeHtml(launchValue)}" 
+                                    style="flex: 1; border: 1px solid #ccc; padding: 4px; background: white; min-width: 120px;"
+                                />
+                            `;
+                        } else if (isBlank || adjacentHasLabel || isLaunchNumberColumn) {
+                            // Cell is empty or adjacent has label, render just input
+                            console.log(`🔍 Rendering launch number input (empty/adjacent cell) at row ${rowIdx}, col ${colIdx} with value: "${launchValue}"`);
+                            return `<input 
+                                type="text" 
+                                class="fsop-cell-input fsop-cell-input-text" 
+                                data-row="${rowIdx}" 
+                                data-col="${colIdx}" 
+                                data-launch-number="true"
+                                value="${this.escapeHtml(launchValue)}" 
+                                style="width: 100%; border: 1px solid #ccc; padding: 4px; background: white;"
+                            />`;
+                        }
+                    }
+                    
+                    // ⚡ FALLBACK: For first table, first row, if col 0 or 1 and we have a launch number, make it an input
+                    if (tableIdx === 0 && rowIdx === 0 && (colIdx === 0 || colIdx === 1) && this.formData.placeholders?.['{{LT}}'] && isBlank) {
+                        const launchValue = this.formData.placeholders['{{LT}}'] || '';
+                        console.log(`🔍 Fallback: Rendering launch number input at first table, row 0, col ${colIdx} with value: "${launchValue}"`);
                         return `<input 
                             type="text" 
                             class="fsop-cell-input fsop-cell-input-text" 
