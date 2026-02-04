@@ -586,7 +586,30 @@ router.post('/open', async (req, res) => {
             });
         }
 
+        // Try to load saved form data from JSON if exists
+        const jsonFileName = `FSOP_${templateCode}_${serialNumber}_${launchNumber}.json`;
+        const jsonPath = path.join(fsopDir, jsonFileName);
+        let savedFormData = null;
+        try {
+            if (await safeIsFile(jsonPath)) {
+                const jsonContent = await fs.readFile(jsonPath, 'utf8');
+                const jsonData = JSON.parse(jsonContent);
+                savedFormData = jsonData.formData || null;
+                console.log(`✅ Données sauvegardées chargées depuis: ${jsonPath}`);
+            } else {
+                console.log(`ℹ️ Aucun fichier JSON trouvé: ${jsonPath}`);
+            }
+        } catch (jsonError) {
+            console.warn(`⚠️ Erreur lors du chargement du JSON (non bloquant):`, jsonError.message);
+            // Don't fail if JSON doesn't exist or is corrupted
+        }
+
         console.log(`📥 Envoi du fichier au client...`);
+        // Return both the file download and saved form data
+        if (savedFormData) {
+            // If we have saved data, return it in response headers (custom header)
+            res.setHeader('X-FSOP-Saved-Data', encodeURIComponent(JSON.stringify(savedFormData)));
+        }
         return res.download(destPath, destName);
     } catch (error) {
         console.error('❌ FSOP open error:', error);
@@ -595,6 +618,73 @@ router.post('/open', async (req, res) => {
             error: 'INTERNAL_ERROR',
             message: error.message,
             details: process.env.NODE_ENV === 'development' ? error.stack : undefined
+        });
+    }
+});
+
+router.post('/load-data', async (req, res) => {
+    try {
+        const launchNumber = normalizeLaunchNumber(req.body?.launchNumber);
+        const templateCode = normalizeTemplateCode(req.body?.templateCode);
+        const serialNumber = normalizeSerialNumber(req.body?.serialNumber);
+
+        if (!launchNumber || !templateCode || !serialNumber) {
+            return res.status(400).json({ error: 'INPUT_INVALID' });
+        }
+
+        const traceRoot = process.env.TRACEABILITY_DIR;
+        if (!traceRoot || !(await safeIsDirectory(traceRoot))) {
+            return res.status(503).json({ 
+                error: 'TRACEABILITY_UNAVAILABLE',
+                message: 'Répertoire de traçabilité non configuré ou inaccessible'
+            });
+        }
+
+        const rootLt = await resolveLtRoot(traceRoot, launchNumber);
+        if (!rootLt) {
+            return res.status(422).json({ 
+                error: 'LT_DIR_NOT_FOUND',
+                launchNumber: launchNumber
+            });
+        }
+
+        const fsopDir = path.join(rootLt, 'FSOP');
+        const jsonFileName = `FSOP_${templateCode}_${serialNumber}_${launchNumber}.json`;
+        const jsonPath = path.join(fsopDir, jsonFileName);
+
+        try {
+            if (await safeIsFile(jsonPath)) {
+                const jsonContent = await fs.readFile(jsonPath, 'utf8');
+                const jsonData = JSON.parse(jsonContent);
+                console.log(`✅ Données chargées depuis: ${jsonPath}`);
+                return res.json({
+                    success: true,
+                    hasData: true,
+                    formData: jsonData.formData || {},
+                    savedAt: jsonData.savedAt
+                });
+            } else {
+                console.log(`ℹ️ Aucun fichier JSON trouvé: ${jsonPath}`);
+                return res.json({
+                    success: true,
+                    hasData: false,
+                    formData: null
+                });
+            }
+        } catch (jsonError) {
+            console.warn(`⚠️ Erreur lors du chargement du JSON:`, jsonError.message);
+            return res.json({
+                success: true,
+                hasData: false,
+                formData: null,
+                error: jsonError.message
+            });
+        }
+    } catch (error) {
+        console.error('❌ FSOP load-data error:', error);
+        return res.status(500).json({ 
+            error: 'INTERNAL_ERROR',
+            message: error.message
         });
     }
 });
@@ -967,6 +1057,24 @@ router.post('/save', async (req, res) => {
             }
         } else {
             console.log(`ℹ️ Aucune mesure taguée fournie, pas de mise à jour Excel`);
+        }
+
+        // Save form data as JSON for future loading
+        const jsonFileName = `FSOP_${templateCode}_${serialNumber}_${launchNumber}.json`;
+        const jsonPath = path.join(fsopDir, jsonFileName);
+        try {
+            const jsonData = {
+                launchNumber: launchNumber,
+                templateCode: templateCode,
+                serialNumber: serialNumber,
+                formData: formData,
+                savedAt: new Date().toISOString()
+            };
+            await fs.writeFile(jsonPath, JSON.stringify(jsonData, null, 2), 'utf8');
+            console.log(`✅ Données du formulaire sauvegardées: ${jsonPath}`);
+        } catch (jsonError) {
+            console.warn(`⚠️ Impossible de sauvegarder le JSON (non bloquant):`, jsonError.message);
+            // Don't fail the save if JSON write fails
         }
 
         return res.json({

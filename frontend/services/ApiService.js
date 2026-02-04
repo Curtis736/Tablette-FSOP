@@ -504,6 +504,14 @@ class ApiService {
             };
         }
     }
+
+    async loadFsopData(launchNumber, templateCode, serialNumber) {
+        return this.post('/fsop/load-data', {
+            launchNumber,
+            templateCode,
+            serialNumber
+        });
+    }
 }
 
 export default ApiService;

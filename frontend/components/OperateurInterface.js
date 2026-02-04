@@ -920,11 +920,26 @@ class OperateurInterface {
             // Charger les opérateurs pour les menus déroulants
             const operatorOptions = await this.loadOperatorsForFsop();
 
-            // Pré-remplir avec LT et SN
+            // Essayer de charger les données sauvegardées si elles existent
+            let savedFormData = null;
+            try {
+                const loadDataResponse = await this.apiService.loadFsopData(lt, templateCode, serialNumber);
+                if (loadDataResponse.success && loadDataResponse.hasData && loadDataResponse.formData) {
+                    savedFormData = loadDataResponse.formData;
+                    console.log('✅ Données sauvegardées chargées pour continuer le formulaire');
+                    this.notificationManager.info('Formulaire existant chargé - vous pouvez continuer', 3000);
+                }
+            } catch (loadError) {
+                console.warn('⚠️ Impossible de charger les données sauvegardées (non bloquant):', loadError);
+                // Continue without saved data
+            }
+
+            // Pré-remplir avec LT et SN, et fusionner avec les données sauvegardées si disponibles
             const initialData = {
                 placeholders: {
                     '{{LT}}': lt,
-                    '{{SN}}': serialNumber
+                    '{{SN}}': serialNumber,
+                    ...(savedFormData?.placeholders || {})
                 },
                 launchNumber: lt, // Also pass as separate field for direct access
                 serialNumber: serialNumber, // Also pass as separate field for direct access
@@ -932,9 +947,12 @@ class OperateurInterface {
                 preferredLot: this.currentFsopPreferredLot || null,
                 preferredRubrique: this.currentFsopPreferredRubrique || null,
                 operatorOptions: operatorOptions, // Pass operator options for dropdowns
-                tables: {},
-                passFail: {},
-                checkboxes: {}
+                tables: savedFormData?.tables || {},
+                wordlikeTables: savedFormData?.wordlikeTables || {},
+                passFail: savedFormData?.passFail || {},
+                checkboxes: savedFormData?.checkboxes || {},
+                textFields: savedFormData?.textFields || {},
+                reference: savedFormData?.reference || ''
             };
 
             // Rendre le formulaire
