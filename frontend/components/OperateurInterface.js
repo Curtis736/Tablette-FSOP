@@ -1584,7 +1584,11 @@ class OperateurInterface {
             
             if (this.isPaused) {
                 // Reprendre l'opération en pause
-                await this.apiService.resumeOperation(operatorCode, code);
+                await this.apiService.resumeOperation(
+                    operatorCode,
+                    code,
+                    selectedStep ? { codeOperation: selectedStep } : {}
+                );
                 this.notificationManager.success('Opération reprise');
             } else {
                 // Démarrer nouvelle opération
@@ -1634,7 +1638,12 @@ class OperateurInterface {
         
         try {
             const operatorCode = this.operator.code || this.operator.id;
-            await this.apiService.pauseOperation(operatorCode, this.currentLancement.CodeLancement);
+            const selectedStep = this.operationStepSelect ? String(this.operationStepSelect.value || '').trim() : '';
+            await this.apiService.pauseOperation(
+                operatorCode,
+                this.currentLancement.CodeLancement,
+                selectedStep ? { codeOperation: selectedStep } : {}
+            );
             
             this.pauseTimer();
             this.startBtn.disabled = false;
@@ -1663,7 +1672,12 @@ class OperateurInterface {
             this.setFinalEndTime();
             
             const operatorCode = this.operator.code || this.operator.id;
-            const result = await this.apiService.stopOperation(operatorCode, this.currentLancement.CodeLancement);
+            const selectedStep = this.operationStepSelect ? String(this.operationStepSelect.value || '').trim() : '';
+            const result = await this.apiService.stopOperation(
+                operatorCode,
+                this.currentLancement.CodeLancement,
+                selectedStep ? { codeOperation: selectedStep } : {}
+            );
             
             this.stopTimer();
             this.resetControls();

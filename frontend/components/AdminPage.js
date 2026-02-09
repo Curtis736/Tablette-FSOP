@@ -707,10 +707,10 @@ class AdminPage {
                 .filter(Boolean)
         );
         
-        // Utiliser les stats du backend pour totalOperators, mais fallback sur les données locales
-        // (évite d'afficher 0 quand une opération est EN COURS)
+        // totalOperators: utiliser le max(back, local) pour éviter les incohérences
+        // (ex: backend pas à jour mais tableau affiche déjà plusieurs opérateurs en cours)
         const stats = {
-            totalOperators: (this.stats?.totalOperators || 0) || activeOperatorCodes.size,
+            totalOperators: Math.max((this.stats?.totalOperators || 0), activeOperatorCodes.size),
             activeLancements: activeLt.size,
             pausedLancements: pausedLt.size,
             completedLancements: completedLt.size

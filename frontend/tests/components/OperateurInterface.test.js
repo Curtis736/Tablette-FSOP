@@ -350,7 +350,7 @@ describe('OperateurInterface', () => {
             
             await operInterface.handleStart();
             
-            expect(mockApiService.resumeOperation).toHaveBeenCalledWith('OP001', 'LT1234567');
+            expect(mockApiService.resumeOperation).toHaveBeenCalledWith('OP001', 'LT1234567', {});
             expect(operInterface.isPaused).toBe(false);
         });
 
@@ -379,7 +379,7 @@ describe('OperateurInterface', () => {
             
             await operInterface.handlePause();
             
-            expect(mockApiService.pauseOperation).toHaveBeenCalledWith('OP001', 'LT1234567');
+            expect(mockApiService.pauseOperation).toHaveBeenCalledWith('OP001', 'LT1234567', {});
             expect(operInterface.pauseTimer).toHaveBeenCalled();
             expect(operInterface.isPaused).toBe(true);
             expect(mockNotificationManager.info).toHaveBeenCalled();
@@ -411,7 +411,7 @@ describe('OperateurInterface', () => {
             
             await operInterface.handleStop();
             
-            expect(mockApiService.stopOperation).toHaveBeenCalledWith('OP001', 'LT1234567');
+            expect(mockApiService.stopOperation).toHaveBeenCalledWith('OP001', 'LT1234567', {});
             expect(operInterface.setFinalEndTime).toHaveBeenCalled();
             expect(operInterface.stopTimer).toHaveBeenCalled();
             expect(operInterface.resetControls).toHaveBeenCalled();
