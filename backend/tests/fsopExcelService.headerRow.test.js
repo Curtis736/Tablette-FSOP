@@ -36,5 +36,24 @@ describe('fsopExcelService header row detection', () => {
         const colIdx = svc.__test.findColumnByName(ws, 'IL_940', idx);
         expect(colIdx).toBe(4);
     });
+
+    it('detects header on row 4 when row 2 has title and row 4 has measure tags', () => {
+        const ws = makeWorksheet([
+            ['', '', '', ''],
+            ['Suivi des S/N', 'Plan : 25.004', '', ''],
+            ['', '', '', ''],
+            ['Lancement', 'Commande', 'N° de S/N', '**IL_940_A** <= 1', '**IL_1310_A** <= 3'],
+            ['LT2500750', 'AR25/00071', '1000', '', '']
+        ]);
+
+        const idx = svc.__test.detectHeaderRowIndex(ws, 10);
+        expect(idx).toBe(4); // Devrait détecter la ligne 4 car elle contient des tags de mesures
+
+        const rowIdx = svc.__test.findRowBySerialNumber(ws, '1000', idx);
+        expect(rowIdx).toBe(5);
+
+        const colIdx = svc.__test.findColumnByName(ws, 'IL_940_A', idx);
+        expect(colIdx).toBe(4);
+    });
 });
 

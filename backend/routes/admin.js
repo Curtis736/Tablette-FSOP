@@ -1316,10 +1316,10 @@ router.put('/operations/:id', async (req, res) => {
             }
             // Format attendu: LT + 7 ou 8 chiffres
             if (!/^LT\d{7,8}$/.test(normalized)) {
-                return res.status(400).json({
-                    success: false,
+            return res.status(400).json({ 
+                success: false, 
                     error: 'Format de lancement invalide (attendu: LT1234567 ou LT12345678)'
-                });
+            });
             }
             requestedLancementCode = normalized;
         }
@@ -1518,10 +1518,10 @@ router.put('/operations/:id', async (req, res) => {
         `;
         
         if (updateFields.length > 0) {
-            console.log(`🔧 Requête de mise à jour:`, updateQuery);
-            console.log(`🔧 Paramètres:`, params);
+        console.log(`🔧 Requête de mise à jour:`, updateQuery);
+        console.log(`🔧 Paramètres:`, params);
             console.log(`🔒 Opération appartenant à l'opérateur: ${baseOperatorCode}`);
-            await executeQuery(updateQuery, params);
+        await executeQuery(updateQuery, params);
         }
 
         // Mettre à jour / créer l'événement FIN si on a reçu endTime et que la ligne modifiée n'est pas FIN
@@ -1848,7 +1848,7 @@ router.delete('/operations/:id', async (req, res) => {
         }
         
         const { CodeLanctImprod, OperatorCode, Phase, CodeRubrique } = lancementInfo[0];
-
+        
         // Compatibilité:
         // - Nouveau modèle: OperatorCode est renseigné, CodeRubrique = vrai code rubrique ERP
         // - Ancien modèle: OperatorCode parfois NULL et CodeRubrique contenait le code opérateur
@@ -1867,19 +1867,19 @@ router.delete('/operations/:id', async (req, res) => {
 
         if (isLegacy) {
             console.log(`🗑️ Suppression (legacy) des événements pour ${CodeLanctImprod} (opérateur via CodeRubrique=${operatorCodeToUse})`);
-
+        
             // Ancien modèle: supprimer tous les événements du lancement pour cet opérateur (stocké dans CodeRubrique)
             const deleteLegacyQuery = `
-                DELETE FROM [SEDI_APP_INDEPENDANTE].[dbo].[ABHISTORIQUE_OPERATEURS]
+            DELETE FROM [SEDI_APP_INDEPENDANTE].[dbo].[ABHISTORIQUE_OPERATEURS]
                 WHERE CodeLanctImprod = @lancementCode
                   AND OperatorCode IS NULL
                   AND CodeRubrique = @operatorCode
-            `;
-
+        `;
+        
             await executeQuery(deleteLegacyQuery, {
-                lancementCode: CodeLanctImprod,
-                operatorCode: operatorCodeToUse
-            });
+            lancementCode: CodeLanctImprod, 
+            operatorCode: operatorCodeToUse 
+        });
         } else {
             console.log(`🗑️ Suppression (par étape) pour ${CodeLanctImprod} (opérateur=${operatorCodeToUse}, phase=${Phase || 'NULL'}, rubrique=${CodeRubrique || 'NULL'})`);
 

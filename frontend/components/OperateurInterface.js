@@ -50,6 +50,8 @@ class OperateurInterface {
         this.controlsSection = document.getElementById('controlsSection');
         this.selectedLancement = document.getElementById('selectedLancement');
         this.lancementDetails = document.getElementById('lancementDetails');
+        this.operationStepGroup = document.getElementById('operationStepGroup');
+        this.operationStepSelect = document.getElementById('operationStepSelect');
         this.startBtn = document.getElementById('startBtn');
         this.pauseBtn = document.getElementById('pauseBtn');
         this.stopBtn = document.getElementById('stopBtn');
@@ -133,8 +135,10 @@ class OperateurInterface {
         
         // Focus automatique après un léger délai pour garantir le rendu DOM
         setTimeout(() => {
-            this.lancementInput.focus();
-            this.setLancementCaretAfterPrefix();
+            if (this.lancementInput && typeof this.lancementInput.focus === 'function') {
+                this.lancementInput.focus();
+                this.setLancementCaretAfterPrefix();
+            }
         }, 150);
         
         // À chaque prise de focus ou clic, replacer le curseur après le préfixe
@@ -411,6 +415,67 @@ class OperateurInterface {
         // fallback: sometimes value could be just CodeRubrique
         if (/^\d{3}$/.test(raw)) return raw;
         return null;
+    }
+
+    hideOperationSteps() {
+        if (this.operationStepGroup) this.operationStepGroup.style.display = 'none';
+        if (this.operationStepSelect) {
+            this.operationStepSelect.innerHTML = '<option value="">Choisir une étape (Phase)</option>';
+        }
+    }
+
+    renderOperationSteps(payload) {
+        const steps = Array.isArray(payload?.steps) ? payload.steps : [];
+        if (!this.operationStepGroup || !this.operationStepSelect) return;
+        if (!steps.length) {
+            this.hideOperationSteps();
+            return;
+        }
+
+        // Dédoublonner par StepId (Phase|CodeRubrique)
+        const byId = new Map();
+        for (const s of steps) {
+            const id = String(s?.StepId || '').trim();
+            if (!id) continue;
+            if (byId.has(id)) continue;
+            const label = String(s?.Label || '').trim() || id;
+            byId.set(id, { id, label });
+        }
+
+        const items = Array.from(byId.values());
+        if (items.length <= 1) {
+            this.hideOperationSteps();
+            return;
+        }
+
+        // Trier par phase (numérique si possible)
+        items.sort((a, b) => {
+            const pa = Number(String(a.id.split('|')[0] || '').trim());
+            const pb = Number(String(b.id.split('|')[0] || '').trim());
+            if (Number.isFinite(pa) && Number.isFinite(pb) && pa !== pb) return pa - pb;
+            return a.label.localeCompare(b.label);
+        });
+
+        this.operationStepSelect.innerHTML =
+            '<option value="">Choisir une étape (Phase)</option>' +
+            items.map(it => `<option value="${this.escapeHtml(it.id)}">${this.escapeHtml(it.label)}</option>`).join('');
+
+        this.operationStepGroup.style.display = 'block';
+    }
+
+    async loadOperationStepsForLaunch(lancementCode) {
+        const code = String(lancementCode || '').trim().toUpperCase();
+        if (!/^LT\d{7,8}$/.test(code)) {
+            this.hideOperationSteps();
+            return;
+        }
+        try {
+            const payload = await this.apiService.getLancementSteps(code);
+            this.renderOperationSteps(payload);
+        } catch (e) {
+            // Non bloquant: si l'API ne répond pas, on cache juste le select
+            this.hideOperationSteps();
+        }
     }
 
     /**
@@ -1319,8 +1384,9 @@ class OperateurInterface {
 
     handleLancementInput() {
         const code = this.enforceNumericLancementInput();
+        const digitsLength = this.getSanitizedDigitsFromValue(code).length;
         
-        if (code.length > 0) {
+        if (digitsLength > 0) {
             // Afficher les contrôles dès qu'un code est saisi
             this.controlsSection.style.display = 'block';
             this.selectedLancement.textContent = code;
@@ -1335,8 +1401,8 @@ class OperateurInterface {
                 this.startBtn.innerHTML = '<i class="fas fa-play"></i> Démarrer';
             }
             
-            // Valider automatiquement le lancement si le code est complet (LT + 7 chiffres)
-            if (code.length === 10 && code.startsWith('LT')) {
+            // Valider automatiquement le lancement si le code est complet (LT + 7/8 chiffres)
+            if (/^LT\d{7,8}$/.test(code)) {
                 this.validateAndSelectLancement();
             }
         } else {
@@ -1385,6 +1451,9 @@ class OperateurInterface {
             
             // Recharger les commentaires pour ce lancement
             await this.loadComments();
+
+            // Charger les étapes (phases) si plusieurs disponibles
+            await this.loadOperationStepsForLaunch(code);
             
             // Activer le bouton démarrer seulement si validation réussie
             if (!this.isRunning) {
@@ -1396,6 +1465,7 @@ class OperateurInterface {
             // Gérer les différents types d'erreurs
             console.error('Erreur validation lancement:', error);
             this.currentLancement = null;
+            this.hideOperationSteps();
             
             if (error.status === 409) {
                 // Conflit : lancement déjà en cours par un autre opérateur
@@ -1500,6 +1570,13 @@ class OperateurInterface {
 
         try {
             const operatorCode = this.operator.code || this.operator.id;
+            const stepGroupVisible = this.operationStepGroup && this.operationStepGroup.style.display !== 'none';
+            const selectedStep = this.operationStepSelect ? String(this.operationStepSelect.value || '').trim() : '';
+
+            if (stepGroupVisible && !selectedStep && !this.isPaused) {
+                this.notificationManager.warning('Choisissez une phase avant de démarrer');
+                return;
+            }
             
             if (this.isPaused) {
                 // Reprendre l'opération en pause
@@ -1507,11 +1584,18 @@ class OperateurInterface {
                 this.notificationManager.success('Opération reprise');
             } else {
                 // Démarrer nouvelle opération
-                await this.apiService.startOperation(operatorCode, code);
+                if (selectedStep) {
+                    await this.apiService.startOperation(operatorCode, code, { codeOperation: selectedStep });
+                } else {
+                    await this.apiService.startOperation(operatorCode, code);
+                }
                 this.notificationManager.success('Opération démarrée');
             }
             
             this.currentLancement = { CodeLancement: code };
+            // Important pour les tests et l'UI: certaines fonctions peuvent être mockées
+            // (startTimer), donc on fixe l'état ici.
+            this.isRunning = true;
             this.startTimer();
             this.startBtn.disabled = true;
             this.pauseBtn.disabled = false;
@@ -1525,6 +1609,17 @@ class OperateurInterface {
             
         } catch (error) {
             console.error('Erreur:', error);
+            // Si le backend demande un choix d'étape (Phase), afficher le sélecteur
+            if (error?.errorCode === 'CODE_OPERATION_REQUIRED' && error?.errorData?.steps) {
+                this.renderOperationSteps(error.errorData);
+                this.notificationManager.warning('Plusieurs phases disponibles: choisissez une phase puis relancez Démarrer');
+                return;
+            }
+            if (error?.errorCode === 'INVALID_CODE_OPERATION' && error?.errorData?.steps) {
+                this.renderOperationSteps(error.errorData);
+                this.notificationManager.warning('Phase invalide: choisissez une phase dans la liste');
+                return;
+            }
             this.notificationManager.error(error.message || 'Erreur de connexion');
         }
     }
@@ -2130,6 +2225,7 @@ class OperateurInterface {
             }
         } catch (error) {
             console.error('Erreur lors de l\'ouverture du scanner:', error);
+            this.notificationManager.error(error?.message || 'Erreur d\'accès à la caméra');
             this.scannerStatus.innerHTML = `
                 <div style="text-align: center; padding: 1rem;">
                     <i class="fas fa-exclamation-triangle" style="font-size: 2rem; color: #dc3545; margin-bottom: 0.5rem; display: block;"></i>

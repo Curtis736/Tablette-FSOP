@@ -109,7 +109,14 @@ class ApiService {
             if (!response.ok) {
                 // Gestion spéciale pour l'erreur 429
                 if (response.status === 429) {
-                    console.warn(`⚠️ Rate limit atteint pour ${endpoint}, attente de 3 secondes...`);
+                    const method = (config.method || 'GET').toUpperCase();
+                    const retryAfterHeader = response.headers?.get?.('Retry-After');
+                    const retryAfterSeconds = retryAfterHeader ? Number(retryAfterHeader) : null;
+                    const waitMs = Number.isFinite(retryAfterSeconds) && retryAfterSeconds > 0
+                        ? Math.min(retryAfterSeconds * 1000, 30000)
+                        : 3000;
+                    
+                    console.warn(`⚠️ Rate limit atteint pour ${endpoint} (${method}), attente de ${Math.round(waitMs/1000)}s...`);
                     
                     // Essayer de récupérer le message d'erreur du serveur
                     let errorMessage = 'Trop de requêtes, veuillez patienter';
@@ -119,19 +126,36 @@ class ApiService {
                     } catch (e) {
                         // Ignorer si on ne peut pas parser le JSON
                     }
-                    
-                    await new Promise(resolve => setTimeout(resolve, 3000));
-                    
-                    // Retry une fois
-                    console.log(`🔄 Retry pour ${endpoint}...`);
-                    const retryResponse = await fetch(url, config);
-                    if (!retryResponse.ok) {
-                        if (retryResponse.status === 429) {
-                            throw new Error(errorMessage);
-                        }
-                        throw new Error(`HTTP ${retryResponse.status}: ${retryResponse.statusText}`);
+
+                    // ⚠️ Ne PAS retry automatiquement sur le login (évite les boucles et le spam)
+                    if (endpoint === '/auth/login') {
+                        const e = new Error(errorMessage);
+                        e.errorCode = 'RATE_LIMIT';
+                        e.retryAfterSeconds = retryAfterSeconds || Math.ceil(waitMs / 1000);
+                        throw e;
                     }
-                    return await retryResponse.json();
+
+                    // Retry uniquement pour les requêtes idempotentes (GET/HEAD)
+                    if (method === 'GET' || method === 'HEAD') {
+                        await new Promise(resolve => setTimeout(resolve, waitMs));
+                        console.log(`🔄 Retry pour ${endpoint}...`);
+                        const retryResponse = await fetch(url, config);
+                        if (!retryResponse.ok) {
+                            if (retryResponse.status === 429) {
+                                const e = new Error(errorMessage);
+                                e.errorCode = 'RATE_LIMIT';
+                                e.retryAfterSeconds = retryAfterSeconds || Math.ceil(waitMs / 1000);
+                                throw e;
+                            }
+                            throw new Error(`HTTP ${retryResponse.status}: ${retryResponse.statusText}`);
+                        }
+                        return await retryResponse.json();
+                    }
+
+                    const e = new Error(errorMessage);
+                    e.errorCode = 'RATE_LIMIT';
+                    e.retryAfterSeconds = retryAfterSeconds || Math.ceil(waitMs / 1000);
+                    throw e;
                 }
                 
                 const errorData = await response.json().catch(() => ({}));

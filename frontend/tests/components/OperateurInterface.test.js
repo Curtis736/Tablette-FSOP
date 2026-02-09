@@ -524,6 +524,7 @@ describe('OperateurInterface', () => {
     describe('closeScanner', () => {
         beforeEach(() => {
             operInterface = new OperateurInterface(mockOperator, mockApp);
+            operInterface.scannerManager.stop = vi.fn();
             mockElements.barcodeScannerModal.style.display = 'flex';
         });
 

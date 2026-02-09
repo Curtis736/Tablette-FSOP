@@ -65,10 +65,12 @@ app.use(helmet({
     contentSecurityPolicy: false // Disable CSP for now to avoid CORS conflicts
 }));
 
-// Rate limiting optimisé pour 20 connexions simultanées
-const limiter = rateLimit({
+// Rate limiting global:
+// - En atelier, plusieurs tablettes peuvent partager la même IP (NAT) => il faut un plafond plus haut
+// - Les routes /api/admin et /api/auth/login ont leur propre limiter dédié
+const apiLimiter = rateLimit({
     windowMs: 15 * 60 * 1000, // 15 minutes
-    max: process.env.NODE_ENV === 'production' ? 200 : 2000, // 200 en prod, 2000 en dev
+    max: process.env.NODE_ENV === 'production' ? 1000 : 20000,
     message: {
         error: 'Trop de requêtes, veuillez patienter',
         retryAfter: Math.ceil(15 * 60 * 1000 / 1000) // en secondes
@@ -76,14 +78,17 @@ const limiter = rateLimit({
     standardHeaders: true,
     legacyHeaders: false,
     skip: (req) => {
-        // Skip rate limiting pour les requêtes de santé et les opérations critiques
-        return req.path === '/api/health' || 
+        // Skip rate limiting pour les requêtes de santé, admin (limiter dédié),
+        // login (limiter dédié) et opérations critiques
+        return req.path === '/api/health' ||
+               req.path.startsWith('/api/admin') ||
+               req.path === '/api/auth/login' ||
                req.path.startsWith('/api/operators/start') ||
                req.path.startsWith('/api/operators/stop') ||
                req.path.startsWith('/api/operators/pause');
     }
 });
-app.use(limiter);
+app.use(apiLimiter);
 
 // ⚡ OPTIMISATION : Compression HTTP pour réduire la taille des réponses JSON
 app.use(compression({
@@ -127,7 +132,20 @@ const adminLimiter = rateLimit({
     }
 });
 
+// Rate limiting spécifique pour la connexion admin (anti brute-force, mais sans bloquer le reste de l'appli)
+const adminLoginLimiter = rateLimit({
+    windowMs: 5 * 60 * 1000, // 5 minutes
+    max: process.env.NODE_ENV === 'production' ? 30 : 200,
+    message: {
+        error: 'Trop de tentatives de connexion, veuillez patienter',
+        retryAfter: 300
+    },
+    standardHeaders: true,
+    legacyHeaders: false
+});
+
 // Routes
+app.use('/api/auth/login', adminLoginLimiter);
 app.use('/api/auth', authRoutes);
 app.use('/api/operators', operatorRoutes);
 app.use('/api/lancements', lancementRoutes);

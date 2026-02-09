@@ -421,8 +421,8 @@ class MonitoringService {
                     updateParams.date = dateOnly;
                 } else {
                     // Fallback: assume full datetime string
-                    updateFields.push('StartTime = @startTime');
-                    updateParams.startTime = corrections.StartTime;
+                updateFields.push('StartTime = @startTime');
+                updateParams.startTime = corrections.StartTime;
                 }
             }
             
@@ -434,8 +434,8 @@ class MonitoringService {
                     updateParams.date = dateOnly;
                 } else {
                     // Fallback: assume full datetime string
-                    updateFields.push('EndTime = @endTime');
-                    updateParams.endTime = corrections.EndTime;
+                updateFields.push('EndTime = @endTime');
+                updateParams.endTime = corrections.EndTime;
                 }
             }
 

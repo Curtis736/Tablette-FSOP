@@ -1356,7 +1356,7 @@ router.get('/:operatorCode/operations',
             const codeRubrique = operation.codeRubrique || null;
             const fabKey = `${operation.lancementCode}_${String(phase || '').trim()}_${String(codeRubrique || '').trim()}`;
             const fabrication = fabricationMap.get(fabKey) || operation.codeOperation || operation.fabrication || '-';
-
+            
             return {
                 id: operation.id,
                 operatorCode: operation.operatorId || operation.operatorCode,

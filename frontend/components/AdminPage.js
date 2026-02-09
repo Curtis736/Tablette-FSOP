@@ -960,7 +960,7 @@ class AdminPage {
             
             const lancementCode = prompt('Code lancement :');
             if (!lancementCode) return;
-
+            
             // Étape (Phase + CodeRubrique) : ne demander que s'il y a plusieurs étapes
             let codeOperation = null;
             try {

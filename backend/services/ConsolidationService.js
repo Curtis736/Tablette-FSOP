@@ -151,46 +151,46 @@ class ConsolidationService {
             );
             
             if (!hasErpKeysFromEvents) {
-                try {
-                    const vlctcQuery = `
-                        SELECT TOP 1 Phase, CodeRubrique
-                        FROM [SEDI_APP_INDEPENDANTE].[dbo].[V_LCTC]
-                        WHERE CodeLancement = @lancementCode
-                    `;
-                    
-                    const vlctcResult = await executeQuery(vlctcQuery, { lancementCode });
-                    
-                    if (vlctcResult && vlctcResult.length > 0) {
-                        // Prendre les valeurs EXACTEMENT telles quelles depuis V_LCTC (sans transformation)
-                        phase = vlctcResult[0].Phase;
-                        codeRubrique = vlctcResult[0].CodeRubrique;
-                        console.log(`✅ Phase et CodeRubrique récupérés depuis V_LCTC: Phase=${phase}, CodeRubrique=${codeRubrique}`);
-                    } else {
-                        console.warn(`⚠️ Lancement ${lancementCode} non trouvé dans V_LCTC`);
-                        console.warn(`⚠️ Raisons possibles: TypeRubrique <> 'O' (composant), LancementSolde <> 'N' (soldé), ou lancement inexistant dans SEDI_ERP`);
-                        console.warn(`⚠️ Cette opération ne peut pas être consolidée car Phase et CodeRubrique sont requis (clés ERP)`);
-                        return {
-                            success: false,
-                            skipped: true,
-                            skipReason: 'VLCTC_MISSING',
-                            tempsId: null,
-                            error: null,
-                            message: `Lancement ${lancementCode} ignoré: absent de V_LCTC (souvent normal si composant TypeRubrique <> 'O' ou lancement soldé LancementSolde <> 'N').`,
-                            warnings: [
-                                'Impossible de récupérer Phase et CodeRubrique depuis V_LCTC',
-                                'C\'est normal si le lancement est un composant (TypeRubrique <> \'O\') ou s\'il est soldé',
-                                'Ces opérations ne doivent pas être consolidées selon les spécifications ERP'
-                            ]
-                        };
-                    }
-                } catch (error) {
-                    console.error(`❌ Erreur lors de la récupération de Phase/CodeRubrique depuis V_LCTC:`, error);
+            try {
+                const vlctcQuery = `
+                    SELECT TOP 1 Phase, CodeRubrique
+                    FROM [SEDI_APP_INDEPENDANTE].[dbo].[V_LCTC]
+                    WHERE CodeLancement = @lancementCode
+                `;
+                
+                const vlctcResult = await executeQuery(vlctcQuery, { lancementCode });
+                
+                if (vlctcResult && vlctcResult.length > 0) {
+                    // Prendre les valeurs EXACTEMENT telles quelles depuis V_LCTC (sans transformation)
+                    phase = vlctcResult[0].Phase;
+                    codeRubrique = vlctcResult[0].CodeRubrique;
+                    console.log(`✅ Phase et CodeRubrique récupérés depuis V_LCTC: Phase=${phase}, CodeRubrique=${codeRubrique}`);
+                } else {
+                    console.warn(`⚠️ Lancement ${lancementCode} non trouvé dans V_LCTC`);
+                    console.warn(`⚠️ Raisons possibles: TypeRubrique <> 'O' (composant), LancementSolde <> 'N' (soldé), ou lancement inexistant dans SEDI_ERP`);
+                    console.warn(`⚠️ Cette opération ne peut pas être consolidée car Phase et CodeRubrique sont requis (clés ERP)`);
                     return {
                         success: false,
+                            skipped: true,
+                            skipReason: 'VLCTC_MISSING',
                         tempsId: null,
-                        error: `Erreur lors de la récupération de Phase/CodeRubrique depuis V_LCTC: ${error.message}`,
-                        warnings: ['Erreur lors de la récupération depuis V_LCTC']
+                            error: null,
+                            message: `Lancement ${lancementCode} ignoré: absent de V_LCTC (souvent normal si composant TypeRubrique <> 'O' ou lancement soldé LancementSolde <> 'N').`,
+                        warnings: [
+                            'Impossible de récupérer Phase et CodeRubrique depuis V_LCTC',
+                            'C\'est normal si le lancement est un composant (TypeRubrique <> \'O\') ou s\'il est soldé',
+                            'Ces opérations ne doivent pas être consolidées selon les spécifications ERP'
+                        ]
                     };
+                }
+            } catch (error) {
+                console.error(`❌ Erreur lors de la récupération de Phase/CodeRubrique depuis V_LCTC:`, error);
+                return {
+                    success: false,
+                    tempsId: null,
+                    error: `Erreur lors de la récupération de Phase/CodeRubrique depuis V_LCTC: ${error.message}`,
+                    warnings: ['Erreur lors de la récupération depuis V_LCTC']
+                };
                 }
             } else {
                 console.log(`✅ Phase/CodeRubrique déjà présents dans les événements: Phase=${phase}, CodeRubrique=${codeRubrique}`);
