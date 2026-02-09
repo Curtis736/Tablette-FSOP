@@ -1505,21 +1505,38 @@ class OperateurInterface {
         try {
             const operatorCode = this.operator.code || this.operator.id;
             console.log(`🔍 Vérification opération en cours pour opérateur: ${operatorCode}`);
-            const currentOp = await this.apiService.getCurrentOperation(operatorCode);
+            const resp = await this.apiService.getCurrentOperation(operatorCode);
+            const payload = resp?.data ?? resp; // compat selon format ApiService
+            const current = payload?.data ?? payload; // backend renvoie { success, data }
             
-            if (currentOp && currentOp.CodeLancement) {
+            const lancementCode = current?.lancementCode || current?.CodeLancement || current?.CodeLanctImprod || null;
+            if (lancementCode) {
                 // Il y a une opération en cours
-                this.currentLancement = currentOp;
-                this.lancementInput.value = currentOp.CodeLancement;
-                this.selectedLancement.textContent = currentOp.CodeLancement;
+                this.currentLancement = { CodeLancement: lancementCode };
+                this.lancementInput.value = lancementCode;
+                this.selectedLancement.textContent = lancementCode;
                 this.controlsSection.style.display = 'block';
+
+                // Charger les étapes et pré-sélectionner l'étape si fournie
+                try {
+                    await this.loadOperationStepsForLaunch(lancementCode);
+                    const stepId = String(current?.stepId || '').trim();
+                    if (stepId && this.operationStepSelect) {
+                        this.operationStepSelect.value = stepId;
+                    }
+                } catch (e) {
+                    // Non bloquant
+                }
                 
-                if (currentOp.Statut === 'DEBUT') {
+                const lastEvent = current?.lastEvent || current?.Ident || current?.Statut || null;
+                const status = String(current?.status || current?.Statut || '').toUpperCase();
+
+                if (String(lastEvent).toUpperCase() === 'DEBUT' || status === 'EN_COURS') {
                     // Opération en cours
-                    this.resumeRunningOperation(currentOp);
-                } else if (currentOp.Statut === 'PAUSE') {
+                    this.resumeRunningOperation(current);
+                } else if (String(lastEvent).toUpperCase() === 'PAUSE' || status === 'EN_PAUSE') {
                     // Opération en pause
-                    this.resumePausedOperation(currentOp);
+                    this.resumePausedOperation(current);
                 }
             }
         } catch (error) {
@@ -1529,17 +1546,21 @@ class OperateurInterface {
 
     resumeRunningOperation(operation) {
         this.isRunning = true;
-        this.startTime = new Date(operation.DateTravail);
+        // Utiliser dateCreation (timestamp serveur) si dispo, sinon démarrer maintenant
+        const dc = operation?.dateCreation || operation?.DateCreation || null;
+        this.startTime = dc ? new Date(dc) : new Date();
         
         this.startBtn.disabled = true;
         this.stopBtn.disabled = false;
         this.statusDisplay.textContent = 'En cours';
         
         this.lancementDetails.innerHTML = `
-            <strong>Lancement: ${operation.CodeLancement}</strong><br>
-            <small>Opération en cours depuis ${new Date(operation.DateTravail).toLocaleTimeString('fr-FR', { timeZone: 'Europe/Paris', hour: '2-digit', minute: '2-digit' })}</small>
+            <strong>Lancement: ${operation.lancementCode || operation.CodeLancement}</strong><br>
+            <small>Opération en cours depuis ${this.startTime.toLocaleTimeString('fr-FR', { timeZone: 'Europe/Paris', hour: '2-digit', minute: '2-digit' })}</small>
         `;
         
+        // Éviter plusieurs intervals en parallèle
+        if (this.timerInterval) clearInterval(this.timerInterval);
         this.timerInterval = setInterval(() => this.updateTimer(), 1000);
         this.lancementInput.disabled = true;
         
@@ -1550,16 +1571,20 @@ class OperateurInterface {
     resumePausedOperation(operation) {
         this.isRunning = false;
         this.isPaused = true;
-        this.currentLancement = { CodeLancement: operation.CodeLancement };
+        const lancementCode = operation?.lancementCode || operation?.CodeLancement;
+        this.currentLancement = { CodeLancement: lancementCode };
         
         this.startBtn.disabled = false;
         this.startBtn.innerHTML = '<i class="fas fa-play"></i> Reprendre';
         this.stopBtn.disabled = false;
         this.statusDisplay.textContent = 'En pause';
+
+        const dc = operation?.dateCreation || operation?.DateCreation || null;
+        const pauseSince = dc ? new Date(dc) : new Date();
         
         this.lancementDetails.innerHTML = `
-            <strong>Lancement: ${operation.CodeLancement}</strong><br>
-            <small>Opération en pause depuis ${new Date(operation.DateTravail).toLocaleTimeString('fr-FR', { timeZone: 'Europe/Paris', hour: '2-digit', minute: '2-digit' })}</small>
+            <strong>Lancement: ${lancementCode}</strong><br>
+            <small>Opération en pause depuis ${pauseSince.toLocaleTimeString('fr-FR', { timeZone: 'Europe/Paris', hour: '2-digit', minute: '2-digit' })}</small>
         `;
         
         this.lancementInput.disabled = true;

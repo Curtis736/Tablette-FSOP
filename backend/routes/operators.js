@@ -1474,6 +1474,8 @@ router.get('/current/:operatorCode', authenticateOperator, async (req, res) => {
                 h.Statut,
                 h.HeureDebut,
                 h.DateCreation,
+                COALESCE(h.Phase, 'PRODUCTION') AS Phase,
+                h.CodeRubrique,
                 l.DesignationLct1 as Article
             FROM [SEDI_APP_INDEPENDANTE].[dbo].[ABHISTORIQUE_OPERATEURS] h
             LEFT JOIN [SEDI_ERP].[dbo].[LCTE] l ON l.CodeLancement = h.CodeLanctImprod
@@ -1504,11 +1506,16 @@ router.get('/current/:operatorCode', authenticateOperator, async (req, res) => {
         res.json({
             success: true,
             data: {
+                // Nouveau format (camelCase)
                 lancementCode: operation.CodeLanctImprod,
                 article: operation.Article || 'N/A',
                 status: operation.Statut,
                 startTime: operation.HeureDebut ? formatDateTime(operation.HeureDebut) : null,
-                lastEvent: operation.Ident
+                dateCreation: operation.DateCreation || null,
+                lastEvent: operation.Ident,
+                phase: operation.Phase || 'PRODUCTION',
+                codeRubrique: operation.CodeRubrique || null,
+                stepId: `${String(operation.Phase || 'PRODUCTION').trim()}|${String(operation.CodeRubrique || '').trim()}`
             }
         });
         
