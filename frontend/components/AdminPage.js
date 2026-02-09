@@ -669,6 +669,11 @@ class AdminPage {
                 '';
             return String(raw || '').trim();
         };
+
+        const getLancementCode = (op) => {
+            const raw = op?.LancementCode ?? op?.lancementCode ?? op?.CodeLancement ?? '';
+            return String(raw || '').trim().toUpperCase();
+        };
         
         // Compter les opérations par statut depuis les données réelles
         const activeOps = allOps.filter(op => {
@@ -690,6 +695,11 @@ class AdminPage {
             return status === 'TERMINE' || statusLabel.includes('TERMIN') || hasEndTime;
         });
 
+        // Compter les "lancements" par LT unique (sinon ça double quand plusieurs opérateurs travaillent sur le même LT)
+        const activeLt = new Set(activeOps.map(getLancementCode).filter(Boolean));
+        const pausedLt = new Set(pausedOps.map(getLancementCode).filter(Boolean));
+        const completedLt = new Set(completedOps.map(getLancementCode).filter(Boolean));
+
         // Opérateurs "actifs" = ont au moins une opération EN_COURS / EN_PAUSE affichée
         const activeOperatorCodes = new Set(
             [...activeOps, ...pausedOps]
@@ -701,9 +711,9 @@ class AdminPage {
         // (évite d'afficher 0 quand une opération est EN COURS)
         const stats = {
             totalOperators: (this.stats?.totalOperators || 0) || activeOperatorCodes.size,
-            activeLancements: activeOps.length,
-            pausedLancements: pausedOps.length,
-            completedLancements: completedOps.length
+            activeLancements: activeLt.size,
+            pausedLancements: pausedLt.size,
+            completedLancements: completedLt.size
         };
         
         // Mettre à jour les éléments DOM
@@ -1197,7 +1207,80 @@ class AdminPage {
         }
         
         // Utiliser les opérations filtrées pour l'affichage
-        const operationsToDisplay = filteredOperations;
+        // ✅ L'utilisateur veut 1 ligne par opérateur (un opérateur peut travailler sur le même LT qu'un autre)
+        // On regroupe donc par OperatorCode et on choisit l'opération la plus pertinente.
+        const getOperatorCode = (op) => String(op?.OperatorCode || op?.operatorCode || op?.operatorId || '').trim();
+        const getLancementCode = (op) => String(op?.LancementCode || op?.lancementCode || '').trim().toUpperCase();
+        const getRowId = (op) => {
+            const tempsId = op?.TempsId ?? null;
+            const eventId = op?.EventId ?? op?.id ?? null;
+            const v = tempsId || eventId;
+            const n = v ? Number(v) : 0;
+            return Number.isFinite(n) ? n : 0;
+        };
+        const getStatusCode = (op) => {
+            const sc = (op?.StatusCode || op?.statusCode || '').toString().trim().toUpperCase();
+            if (sc) return sc;
+            const statusLabel = (op?.Status || op?.status || '').toString().trim().toUpperCase();
+            if (statusLabel.includes('EN COURS')) return 'EN_COURS';
+            if (statusLabel.includes('PAUSE')) return 'EN_PAUSE';
+            if (statusLabel.includes('TERMIN')) return 'TERMINE';
+            // fallback: si EndTime existe, considérer terminé
+            const end = this.formatDateTime(op?.EndTime ?? op?.endTime);
+            if (end && end !== '-' && String(end).trim() !== '' && end !== 'N/A') return 'TERMINE';
+            return '';
+        };
+        const statusRank = (code) => {
+            if (code === 'EN_COURS') return 300;
+            if (code === 'EN_PAUSE' || code === 'PAUSE') return 200;
+            if (code === 'TERMINE') return 100;
+            return 0;
+        };
+        const scoreForOperatorPick = (op) => {
+            let score = 0;
+            const st = getStatusCode(op);
+            score += statusRank(st);
+            if (op?.TempsId) score += 10; // consolidé
+            const start = this.formatDateTime(op?.StartTime ?? op?.startTime);
+            if (start && start !== '-' && start !== '00:00') score += 5;
+            score += Math.min(getRowId(op), 1_000_000) / 1_000_000; // tie-break stable
+            return score;
+        };
+
+        const groups = new Map(); // operatorCode -> ops[]
+        filteredOperations.forEach(op => {
+            const k = getOperatorCode(op) || '(unknown)';
+            if (!groups.has(k)) groups.set(k, []);
+            groups.get(k).push(op);
+        });
+
+        const operationsToDisplay = Array.from(groups.values()).map(list => {
+            // Choisir la meilleure op du groupe
+            let best = list[0];
+            let bestScore = scoreForOperatorPick(best);
+            for (let i = 1; i < list.length; i++) {
+                const s = scoreForOperatorPick(list[i]);
+                if (s > bestScore) {
+                    best = list[i];
+                    bestScore = s;
+                }
+            }
+            // Injecter un indicateur "autres ops" (pour info)
+            if (list.length > 1) {
+                best = { ...best, _otherOpsCount: list.length - 1 };
+            }
+            return best;
+        });
+
+        // Pré-calcul: détecter les LT avec plusieurs opérateurs (pour afficher un badge clair)
+        const ltToOperators = new Map(); // LT -> Set(operatorCode)
+        operationsToDisplay.forEach(op => {
+            const lt = String(op.LancementCode || op.lancementCode || '').trim().toUpperCase();
+            if (!lt) return;
+            const opCode = getOperatorCode(op);
+            if (!ltToOperators.has(lt)) ltToOperators.set(lt, new Set());
+            if (opCode) ltToOperators.get(lt).add(opCode);
+        });
         
         console.log('🔄 CREATION DES LIGNES POUR', operationsToDisplay.length, 'OPERATIONS');
         console.log('📋 DONNEES COMPLETES DES OPERATIONS:', operationsToDisplay);
@@ -1278,7 +1361,28 @@ class AdminPage {
             
             row.innerHTML = `
                 <td>${operation.OperatorName || operation.OperatorCode || '-'}</td>
-                <td>${operation.LancementCode || '-'}</td>
+                <td>
+                    <div style="display:flex; flex-direction:column; gap:4px;">
+                        <div>
+                            ${operation.LancementCode || '-'}
+                            ${
+                                operation._otherOpsCount
+                                    ? ` <span class="badge badge-secondary" style="margin-left:6px;">+${operation._otherOpsCount}</span>`
+                                    : ''
+                            }
+                        </div>
+                        ${
+                            (() => {
+                                const lt = String(operation.LancementCode || '').trim().toUpperCase();
+                                const n = lt ? (ltToOperators.get(lt)?.size || 0) : 0;
+                                if (n > 1) {
+                                    return `<span class="badge badge-secondary" style="width:max-content;">👥 ${n} opérateurs</span>`;
+                                }
+                                return '';
+                            })()
+                        }
+                    </div>
+                </td>
                 <td>${operation.LancementName || '-'}</td>
                 <td>${operation.Phase || operation.phase || '-'}</td>
                 <td>${operation.CodeRubrique || operation.codeRubrique || '-'}</td>

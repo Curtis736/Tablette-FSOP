@@ -245,7 +245,8 @@ describe('AdminPage', () => {
         id: i + 1,
         statusCode: 'EN_COURS',
         StatusCode: 'EN_COURS',
-        operatorCode: `OP${String(i + 1).padStart(3, '0')}`
+        operatorCode: `OP${String(i + 1).padStart(3, '0')}`,
+        LancementCode: `LT${String(i + 1).padStart(7, '0')}`
       }));
       adminPage.updateStats();
       expect(adminPage.totalOperators.textContent).toBe('10');
