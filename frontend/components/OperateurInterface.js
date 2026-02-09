@@ -1597,10 +1597,9 @@ class OperateurInterface {
             }
             
             this.currentLancement = { CodeLancement: code };
-            // Important pour les tests et l'UI: certaines fonctions peuvent être mockées
-            // (startTimer), donc on fixe l'état ici.
-            this.isRunning = true;
             this.startTimer();
+            // startTimer peut être mocké en tests: forcer l'état ici pour cohérence UI/tests
+            this.isRunning = true;
             this.startBtn.disabled = true;
             this.pauseBtn.disabled = false;
             this.stopBtn.disabled = false;
@@ -1702,7 +1701,8 @@ class OperateurInterface {
     }
 
     startTimer() {
-        if (!this.isRunning) {
+        // Toujours initialiser startTime si manquant (sinon le timer reste bloqué)
+        if (!this.startTime) {
             this.startTime = new Date();
         }
         this.isRunning = true;
@@ -1713,6 +1713,10 @@ class OperateurInterface {
             this.pauseStartTime = null;
         }
         
+        // Éviter plusieurs intervals en parallèle
+        if (this.timerInterval) {
+            clearInterval(this.timerInterval);
+        }
         this.timerInterval = setInterval(() => this.updateTimer(), 1000);
     }
 
