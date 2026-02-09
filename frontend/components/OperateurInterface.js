@@ -118,10 +118,14 @@ class OperateurInterface {
         console.log('endTimeDisplay trouvé:', !!this.endTimeDisplay);
         
         // Modifier le placeholder pour indiquer la saisie manuelle
-        this.lancementInput.placeholder = "Saisir le code de lancement...";
+        if (this.lancementInput) {
+            this.lancementInput.placeholder = "Saisir le code de lancement...";
+        }
         
         // Cacher la liste des lancements
-        this.lancementList.style.display = 'none';
+        if (this.lancementList) {
+            this.lancementList.style.display = 'none';
+        }
     }
 
     initializeLancementInput() {
@@ -160,16 +164,16 @@ class OperateurInterface {
         }
         
         // Contrôles de lancement
-        this.startBtn.addEventListener('click', () => this.handleStart());
-        this.pauseBtn.addEventListener('click', () => this.handlePause());
-        this.stopBtn.addEventListener('click', () => this.handleStop());
+        if (this.startBtn) this.startBtn.addEventListener('click', () => this.handleStart());
+        if (this.pauseBtn) this.pauseBtn.addEventListener('click', () => this.handlePause());
+        if (this.stopBtn) this.stopBtn.addEventListener('click', () => this.handleStop());
         
         // Bouton actualiser historique
-        this.refreshHistoryBtn.addEventListener('click', () => this.loadOperatorHistory());
+        if (this.refreshHistoryBtn) this.refreshHistoryBtn.addEventListener('click', () => this.loadOperatorHistory());
         
         // Gestion des commentaires
-        this.commentInput.addEventListener('input', () => this.handleCommentInput());
-        this.addCommentBtn.addEventListener('click', () => this.handleAddComment());
+        if (this.commentInput) this.commentInput.addEventListener('input', () => this.handleCommentInput());
+        if (this.addCommentBtn) this.addCommentBtn.addEventListener('click', () => this.handleAddComment());
         
         // Gestion du scanner
         if (this.scanBarcodeBtn) {

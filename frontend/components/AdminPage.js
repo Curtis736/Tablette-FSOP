@@ -313,10 +313,14 @@ class AdminPage {
                 return { date: today };
             })();
             
-            // Créer des promesses avec timeout
-            const timeoutPromise = new Promise((_, reject) => 
-                setTimeout(() => reject(new Error('Timeout: La requête a pris trop de temps')), 30000)
-            );
+            // Créer une promesse avec timeout (⚠️ toujours clearTimeout sinon rejection non gérée plus tard)
+            let timeoutId = null;
+            const timeoutPromise = new Promise((_, reject) => {
+                timeoutId = setTimeout(() => reject(new Error('Timeout: La requête a pris trop de temps')), 30000);
+            });
+            // Important: attacher un handler immédiatement pour éviter les "Unhandled Rejection"
+            // même si le timeout se déclenche après coup (ou dans des environnements de test).
+            const timeoutPromiseHandled = timeoutPromise.catch((e) => { throw e; });
             
             // Charger les données en parallèle avec timeout
             const dataPromises = Promise.all([
@@ -325,10 +329,15 @@ class AdminPage {
                 this.apiService.getAllOperators() // Charger aussi la liste globale
             ]);
             
-            const [adminData, operatorsData, allOperatorsData] = await Promise.race([
-                dataPromises,
-                timeoutPromise
-            ]);
+            let adminData, operatorsData, allOperatorsData;
+            try {
+                [adminData, operatorsData, allOperatorsData] = await Promise.race([
+                    dataPromises,
+                    timeoutPromiseHandled
+                ]);
+            } finally {
+                if (timeoutId) clearTimeout(timeoutId);
+            }
             
             // Les données sont déjà parsées par ApiService
             const data = adminData;
@@ -648,6 +657,18 @@ class AdminPage {
         // Calculer les statistiques depuis les opérations affichées dans le tableau
         // Cela garantit la cohérence entre le tableau et les statistiques
         const allOps = this.operations || [];
+
+        const getOperatorCode = (op) => {
+            // Best-effort selon les différentes sources (admin ops vs monitoring)
+            const raw =
+                op?.operatorCode ??
+                op?.OperatorCode ??
+                op?.CodeOperateur ??
+                op?.code ??
+                op?.CodeRessource ??
+                '';
+            return String(raw || '').trim();
+        };
         
         // Compter les opérations par statut depuis les données réelles
         const activeOps = allOps.filter(op => {
@@ -668,10 +689,18 @@ class AdminPage {
             const hasEndTime = op.EndTime && op.EndTime !== '-' && op.EndTime !== 'N/A' && op.EndTime.trim() !== '';
             return status === 'TERMINE' || statusLabel.includes('TERMIN') || hasEndTime;
         });
+
+        // Opérateurs "actifs" = ont au moins une opération EN_COURS / EN_PAUSE affichée
+        const activeOperatorCodes = new Set(
+            [...activeOps, ...pausedOps]
+                .map(getOperatorCode)
+                .filter(Boolean)
+        );
         
-        // Utiliser les stats du backend pour totalOperators, mais calculer les autres depuis les données locales
+        // Utiliser les stats du backend pour totalOperators, mais fallback sur les données locales
+        // (évite d'afficher 0 quand une opération est EN COURS)
         const stats = {
-            totalOperators: this.stats?.totalOperators || 0,
+            totalOperators: (this.stats?.totalOperators || 0) || activeOperatorCodes.size,
             activeLancements: activeOps.length,
             pausedLancements: pausedOps.length,
             completedLancements: completedOps.length
@@ -2987,7 +3016,9 @@ class AdminPage {
         const url = URL.createObjectURL(blob);
         link.setAttribute('href', url);
         link.setAttribute('download', filename);
-        link.style.visibility = 'hidden';
+        if (link.style) {
+            link.style.visibility = 'hidden';
+        }
         document.body.appendChild(link);
         link.click();
         document.body.removeChild(link);

@@ -1,5 +1,5 @@
 // Gestionnaire de notifications
-class NotificationManager {
+export class NotificationManager {
     constructor() {
         this.notifications = [];
         this.container = null;

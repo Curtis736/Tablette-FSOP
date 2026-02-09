@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
-import NotificationManager from '../../utils/NotificationManager.js';
+import { NotificationManager } from '../../utils/NotificationManager.js';
 
 describe('NotificationManager', () => {
   let manager;

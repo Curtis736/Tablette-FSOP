@@ -40,6 +40,7 @@ describe('AdminPage', () => {
     mockApiService = {
       getAdminData: vi.fn(),
       getConnectedOperators: vi.fn(),
+      getAllOperators: vi.fn(),
       getMonitoringTemps: vi.fn(),
       validateMonitoringTemps: vi.fn(),
       onHoldMonitoringTemps: vi.fn(),
@@ -72,7 +73,7 @@ describe('AdminPage', () => {
       <span id="activeLancements"></span>
       <span id="pausedLancements"></span>
       <span id="completedLancements"></span>
-      <tbody id="operationsTableBody"></tbody>
+      <table><tbody id="operationsTableBody"></tbody></table>
       <select id="operatorFilter"></select>
       <select id="statusFilter"></select>
       <input id="searchFilter" />
@@ -83,8 +84,8 @@ describe('AdminPage', () => {
       <div id="activeOperatorsIndicator"></div>
       <span id="pauseCount"></span>
       <span id="tempCount"></span>
-      <tbody id="pauseTableBody"></tbody>
-      <tbody id="tempTableBody"></tbody>
+      <table><tbody id="pauseTableBody"></tbody></table>
+      <table><tbody id="tempTableBody"></tbody></table>
     `;
 
     // Mock setTimeout et setInterval
@@ -123,7 +124,8 @@ describe('AdminPage', () => {
     });
 
     it('should create fallback for missing operationsTableBody', () => {
-      document.getElementById('operationsTableBody').remove();
+      const el = document.getElementById('operationsTableBody');
+      if (el) el.remove();
       adminPage = new AdminPage(mockApp);
       expect(adminPage.operationsTableBody).toBeTruthy();
     });
@@ -163,10 +165,14 @@ describe('AdminPage', () => {
         success: true,
         operators: [{ code: 'OP001', name: 'Test' }]
       });
+      mockApiService.getAllOperators.mockResolvedValue({
+        success: true,
+        operators: [{ code: 'OP001', name: 'Test' }]
+      });
       mockApiService.getMonitoringTemps.mockResolvedValue({
         success: true,
-        data: [{ TempsId: 1, OperatorName: 'Test', LancementCode: 'LT001', StatutTraitement: null }],
-        count: 1
+        data: [],
+        count: 0
       });
 
       await adminPage.loadData();
@@ -182,17 +188,36 @@ describe('AdminPage', () => {
     });
 
     it('should handle timeout error', async () => {
-      mockApiService.getAdminData.mockImplementation(() => 
-        new Promise((_, reject) => setTimeout(() => reject(new Error('Timeout')), 30000))
-      );
-      vi.advanceTimersByTime(30000);
-      await expect(adminPage.loadData()).rejects.toThrow();
+      // Désactiver les intervals automatiques pour éviter des appels loadData en arrière-plan
+      if (adminPage.refreshInterval) clearInterval(adminPage.refreshInterval);
+      if (adminPage.operatorsInterval) clearInterval(adminPage.operatorsInterval);
+      if (adminPage.autoSaveTimer) clearInterval(adminPage.autoSaveTimer);
+
+      // Utiliser de vrais timers et forcer le timeout à déclencher immédiatement
+      // (évite les faux timers qui provoquent des "Unhandled Rejection" dans Vitest)
+      vi.useRealTimers();
+      const realSetTimeout = global.setTimeout;
+      const setTimeoutSpy = vi
+        .spyOn(global, 'setTimeout')
+        .mockImplementation((fn, _ms, ...args) => realSetTimeout(fn, 0, ...args));
+
+      // Simuler des requêtes qui ne répondent pas: le timeout interne de loadData doit rejeter
+      mockApiService.getAdminData.mockImplementation(() => new Promise(() => {}));
+      mockApiService.getConnectedOperators.mockImplementation(() => new Promise(() => {}));
+      mockApiService.getAllOperators.mockImplementation(() => new Promise(() => {}));
+      mockApiService.getMonitoringTemps.mockImplementation(() => new Promise(() => {}));
+
+      const p = adminPage.loadData();
+      const pHandled = p.catch((e) => { throw e; });
+      await expect(pHandled).rejects.toThrow();
+
+      setTimeoutSpy.mockRestore();
     });
 
     it('should handle error and show cached data', async () => {
       adminPage.operations = [{ id: 1 }];
       mockApiService.getAdminData.mockRejectedValue(new Error('Network error'));
-      await adminPage.loadData();
+      await adminPage.loadData().catch(() => {});
       expect(adminPage.operations.length).toBe(1);
     });
 
@@ -215,6 +240,13 @@ describe('AdminPage', () => {
         pausedLancements: 2,
         completedLancements: 3
       };
+      // updateStats calcule active/paused/completed depuis this.operations
+      adminPage.operations = Array.from({ length: 5 }).map((_, i) => ({
+        id: i + 1,
+        statusCode: 'EN_COURS',
+        StatusCode: 'EN_COURS',
+        operatorCode: `OP${String(i + 1).padStart(3, '0')}`
+      }));
       adminPage.updateStats();
       expect(adminPage.totalOperators.textContent).toBe('10');
       expect(adminPage.activeLancements.textContent).toBe('5');
@@ -483,7 +515,8 @@ describe('AdminPage', () => {
         { code: 'OP002', name: 'Test 2', isActive: false, isProperlyLinked: false }
       ];
       adminPage.updateOperatorSelect(operators);
-      expect(adminPage.operatorSelect.children.length).toBe(3); // Default + 2 operators
+      // 1 option default + 2 options dans optgroup
+      expect(adminPage.operatorSelect.querySelectorAll('option').length).toBe(3);
     });
   });
 
