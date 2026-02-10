@@ -1626,9 +1626,22 @@ class OperateurInterface {
 
     resumeRunningOperation(operation) {
         this.isRunning = true;
-        // Utiliser dateCreation (timestamp serveur) si dispo, sinon démarrer maintenant
-        const dc = operation?.dateCreation || operation?.DateCreation || null;
-        this.startTime = dc ? new Date(dc) : new Date();
+        // Utiliser un timestamp complet si dispo (sinon la date seule donne des heures fantômes comme 01:00)
+        const startedAt = operation?.startedAt || null;
+        if (startedAt) {
+            this.startTime = new Date(startedAt);
+        } else {
+            // Fallback: tenter de combiner dateCreation + startTime "HH:mm"
+            const dc = operation?.dateCreation || operation?.DateCreation || null;
+            const st = operation?.startTime || operation?.HeureDebut || null;
+            if (dc && st && typeof st === 'string' && /^\d{2}:\d{2}(:\d{2})?$/.test(st)) {
+                const d = new Date(dc);
+                const datePart = isNaN(d.getTime()) ? null : d.toISOString().slice(0, 10);
+                this.startTime = datePart ? new Date(`${datePart}T${st}`) : new Date();
+            } else {
+                this.startTime = dc ? new Date(dc) : new Date();
+            }
+        }
         
         this.startBtn.disabled = true;
         this.stopBtn.disabled = false;
@@ -1659,8 +1672,9 @@ class OperateurInterface {
         this.stopBtn.disabled = false;
         this.statusDisplay.textContent = 'En pause';
 
-        const dc = operation?.dateCreation || operation?.DateCreation || null;
-        const pauseSince = dc ? new Date(dc) : new Date();
+        // Si le backend fournit startedAt/heure de pause complète, l'utiliser; sinon fallback sur dateCreation.
+        const pausedAt = operation?.startedAt || operation?.dateCreation || operation?.DateCreation || null;
+        const pauseSince = pausedAt ? new Date(pausedAt) : new Date();
         
         this.lancementDetails.innerHTML = `
             <strong>Lancement: ${lancementCode}</strong><br>

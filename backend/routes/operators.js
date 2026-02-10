@@ -1538,7 +1538,10 @@ router.get('/current/:operatorCode', authenticateOperator, async (req, res) => {
         
         console.log(`🔍 Recherche d'opération en cours pour l'opérateur ${operatorCode}...`);
         
-        // Chercher la dernière opération non terminée
+        // Chercher le DERNIER événement de l'opérateur aujourd'hui, puis déduire l'état.
+        // ⚠️ Important: on ne doit pas filtrer sur Statut IN ('EN_COURS','EN_PAUSE'),
+        // sinon on peut "ressortir" un vieux DEBUT (EN_COURS) alors qu'un FIN existe après,
+        // ce qui crée le bug UI: écran "En cours" alors que l'historique est "Terminé".
         // 🔒 FILTRE : Exclure les lancements transférés (StatutTraitement = 'T')
         const query = `
             SELECT TOP 1
@@ -1547,6 +1550,7 @@ router.get('/current/:operatorCode', authenticateOperator, async (req, res) => {
                 h.Statut,
                 h.HeureDebut,
                 h.DateCreation,
+                h.CreatedAt,
                 COALESCE(h.Phase, 'PRODUCTION') AS Phase,
                 h.CodeRubrique,
                 l.DesignationLct1 as Article
@@ -1560,7 +1564,6 @@ router.get('/current/:operatorCode', authenticateOperator, async (req, res) => {
                 AND ISNULL(LTRIM(RTRIM(t.Phase)), '') = ISNULL(LTRIM(RTRIM(COALESCE(h.Phase, 'PRODUCTION'))), '')
                 AND ISNULL(LTRIM(RTRIM(t.CodeRubrique)), '') = ISNULL(LTRIM(RTRIM(h.CodeRubrique)), '')
             WHERE h.OperatorCode = @operatorCode
-              AND h.Statut IN ('EN_COURS', 'EN_PAUSE')
               AND (t.StatutTraitement IS NULL OR t.StatutTraitement != 'T')
             ORDER BY h.DateCreation DESC, h.NoEnreg DESC
         `;
@@ -1575,6 +1578,28 @@ router.get('/current/:operatorCode', authenticateOperator, async (req, res) => {
         }
         
         const operation = result[0];
+        const lastEvent = String(operation.Ident || '').toUpperCase();
+        const lastStatus = String(operation.Statut || '').toUpperCase();
+
+        // Si le dernier event est FIN/terminé => pas d'opération en cours
+        if (lastEvent === 'FIN' || lastStatus === 'TERMINE' || lastStatus === 'TERMINÉ') {
+            return res.json({ success: true, data: null });
+        }
+
+        // Timestamp fiable pour le timer côté tablette:
+        // - préférer CreatedAt si présent (datetime complet),
+        // - sinon reconstruire un datetime à partir de DateCreation (date) + HeureDebut (time).
+        // NOTE: DateCreation est un DATE (pas d'heure), d'où les affichages 01:00 si on parse côté JS.
+        let startedAt = operation.CreatedAt || null;
+        if (!startedAt && operation.DateCreation && operation.HeureDebut) {
+            // Construire une string ISO-like: YYYY-MM-DDTHH:mm:ss (sans timezone) pour un parse stable
+            const d = new Date(operation.DateCreation);
+            const datePart = d.toISOString().slice(0, 10);
+            const timeStr = String(operation.HeureDebut).length >= 5 ? String(operation.HeureDebut) : null;
+            if (datePart && timeStr) {
+                startedAt = `${datePart}T${timeStr}`;
+            }
+        }
         
         res.json({
             success: true,
@@ -1584,6 +1609,7 @@ router.get('/current/:operatorCode', authenticateOperator, async (req, res) => {
                 article: operation.Article || 'N/A',
                 status: operation.Statut,
                 startTime: operation.HeureDebut ? formatDateTime(operation.HeureDebut) : null,
+                startedAt,
                 dateCreation: operation.DateCreation || null,
                 lastEvent: operation.Ident,
                 phase: operation.Phase || 'PRODUCTION',
