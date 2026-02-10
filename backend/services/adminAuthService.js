@@ -11,15 +11,12 @@ const tokens = new Map(); // token -> { username, expiresAt }
 
 function getAdminCredentials() {
   const username = process.env.ADMIN_USERNAME || 'admin';
-  const password = process.env.ADMIN_PASSWORD;
+  const password = (process.env.ADMIN_PASSWORD && String(process.env.ADMIN_PASSWORD).trim() !== '')
+    ? process.env.ADMIN_PASSWORD
+    : 'admin';
 
-  // En production, on exige un mot de passe non vide (sinon admin désactivé).
-  if (process.env.NODE_ENV === 'production' && (!password || String(password).trim() === '')) {
-    return { enabled: false, username, password: '' };
-  }
-
-  // En dev, fallback sur "admin" pour ne pas bloquer l'équipe.
-  return { enabled: true, username, password: password || 'admin' };
+  // ⚠️ Demande métier: toujours autoriser un fallback admin/admin (même en production)
+  return { enabled: true, username, password };
 }
 
 function issueToken(username) {
