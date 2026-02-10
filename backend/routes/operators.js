@@ -882,6 +882,35 @@ router.post('/start', async (req, res) => {
         const phase = context?.Phase || 'PRODUCTION';
         const codeRubrique = context?.CodeRubrique || operatorId;
 
+        // ✅ Autoriser plusieurs "cycles" dans la journée (DEBUT...FIN, puis redémarrage),
+        // mais empêcher de démarrer si la DERNIÈRE action pour cette étape est déjà active.
+        // (Sinon on crée des DEBUT doublons et ensuite /stop peut se retrouver incohérent.)
+        const lastEventCheck = `
+            SELECT TOP 1 Ident, Statut
+            FROM [SEDI_APP_INDEPENDANTE].[dbo].[ABHISTORIQUE_OPERATEURS]
+            WHERE CodeLanctImprod = @lancementCode
+              AND OperatorCode = @operatorId
+              AND Phase = @phase
+              AND CodeRubrique = @codeRubrique
+              AND CAST(DateCreation AS DATE) = CAST(GETDATE() AS DATE)
+            ORDER BY DateCreation DESC, NoEnreg DESC
+        `;
+        const lastEventRows = await executeQuery(lastEventCheck, { operatorId, lancementCode, phase, codeRubrique });
+        const last = lastEventRows && lastEventRows[0] ? lastEventRows[0] : null;
+        const lastIdent = String(last?.Ident || '').toUpperCase();
+        const lastStatut = String(last?.Statut || '').toUpperCase();
+        if (lastIdent && lastIdent !== 'FIN' && (lastStatut === 'EN_COURS' || lastStatut === 'EN_PAUSE' || lastIdent === 'DEBUT' || lastIdent === 'PAUSE' || lastIdent === 'REPRISE')) {
+            return res.status(409).json({
+                success: false,
+                error: 'OPERATION_ALREADY_ACTIVE',
+                message: `Cette étape est déjà active (${lastIdent || lastStatut}). Terminez-la avant de redémarrer.`,
+                lastEvent: lastIdent,
+                status: lastStatut,
+                phase,
+                codeRubrique
+            });
+        }
+
         // ✅ AUTORISATION : Plusieurs opérateurs peuvent travailler sur le même lancement simultanément
         // La vérification de conflit a été désactivée pour permettre la collaboration multi-opérateurs
         // Ancienne vérification commentée :
@@ -1258,19 +1287,24 @@ router.post('/stop', async (req, res) => {
 
         // phase/codeRubrique déjà résolus plus haut
 
-        // Vérifier qu'il n'y a pas déjà un événement FIN pour CETTE étape (Phase + CodeRubrique) aujourd'hui
-        const finCheck = `
-            SELECT TOP 1 Ident
+        // ✅ Autoriser plusieurs cycles dans la journée:
+        // On ne bloque que si la DERNIÈRE action de l'étape est déjà FIN.
+        // (L'ancien check bloquait dès qu'il existait un FIN quelconque dans la journée.)
+        const lastEventCheck = `
+            SELECT TOP 1 Ident, Statut
             FROM [SEDI_APP_INDEPENDANTE].[dbo].[ABHISTORIQUE_OPERATEURS]
             WHERE CodeLanctImprod = @lancementCode
               AND OperatorCode = @operatorId
-              AND Ident = 'FIN'
               AND Phase = @phase
               AND CodeRubrique = @codeRubrique
               AND CAST(DateCreation AS DATE) = CAST(GETDATE() AS DATE)
+            ORDER BY DateCreation DESC, NoEnreg DESC
         `;
-        const finExists = await executeQuery(finCheck, { operatorId, lancementCode, phase, codeRubrique });
-        if (finExists.length > 0) {
+        const lastEventRows = await executeQuery(lastEventCheck, { operatorId, lancementCode, phase, codeRubrique });
+        const last = lastEventRows && lastEventRows[0] ? lastEventRows[0] : null;
+        const lastIdent = String(last?.Ident || '').toUpperCase();
+        const lastStatut = String(last?.Statut || '').toUpperCase();
+        if (lastIdent === 'FIN' || lastStatut === 'TERMINE' || lastStatut === 'TERMINÉ') {
             return res.status(403).json({
                 success: false,
                 error: `Cette étape est déjà terminée.`,
