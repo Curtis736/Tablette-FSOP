@@ -4212,36 +4212,40 @@ router.post('/monitoring/:tempsId/transmit', async (req, res) => {
     try {
         const { tempsId } = req.params;
         const { triggerEdiJob = false, codeTache = null } = req.body;
-        
-        const result = await MonitoringService.markAsTransmitted(parseInt(tempsId));
-        
-        if (result.success) {
-            // Si demandé, déclencher l'EDI_JOB après la transmission
-            let ediJobResult = null;
-            if (triggerEdiJob) {
-                try {
-                    ediJobResult = await EdiJobService.executeEdiJobForTransmittedRecords([parseInt(tempsId)], codeTache);
-                } catch (ediError) {
-                    console.error('❌ Erreur lors du déclenchement de l\'EDI_JOB:', ediError);
-                    ediJobResult = {
-                        success: false,
-                        error: ediError.message
-                    };
-                }
-            }
-            
-            res.json({
-                success: true,
-                message: result.message,
-                data: result,
-                ediJob: ediJobResult
-            });
-        } else {
-            res.status(400).json({
-                success: false,
-                error: result.error
-            });
+
+        // Nouveau flux:
+        // 1) Valider en 'O' (si nécessaire)
+        // 2) Exécuter EDI_JOB (si demandé)
+        // 3) Marquer en 'T' uniquement si EDI_JOB OK (sinon laisser en 'O' pour retry)
+        const idNum = parseInt(tempsId, 10);
+        const validate = await MonitoringService.validateRecord(idNum);
+        if (!validate.success) {
+            return res.status(400).json({ success: false, error: validate.error });
         }
+
+        let ediJobResult = null;
+        if (triggerEdiJob) {
+            ediJobResult = await EdiJobService.executeEdiJobForTransmittedRecords([idNum], codeTache);
+            if (!ediJobResult.success) {
+                return res.status(500).json({
+                    success: false,
+                    error: 'EDI_JOB_FAILED',
+                    details: ediJobResult.error || 'EDI_JOB a échoué'
+                });
+            }
+        }
+
+        const mark = await MonitoringService.markAsTransmitted(idNum);
+        if (!mark.success) {
+            return res.status(400).json({ success: false, error: mark.error });
+        }
+
+        return res.json({
+            success: true,
+            message: 'Enregistrement transmis',
+            data: { validated: validate, transmitted: mark },
+            ediJob: ediJobResult
+        });
         
     } catch (error) {
         console.error('❌ Erreur lors du marquage comme transmis:', error);
@@ -4318,34 +4322,33 @@ router.post('/monitoring/validate-and-transmit-batch', async (req, res) => {
             });
         }
         
-        if (result.success) {
-            // Déclencher automatiquement l'EDI_JOB après la transmission (par défaut)
-            let ediJobResult = null;
-            if (triggerEdiJob) {
-                try {
-                    ediJobResult = await EdiJobService.executeEdiJobForTransmittedRecords(tempsIds, codeTache);
-                    console.log(`✅ EDI_JOB exécuté pour ${tempsIds.length} enregistrements transmis`);
-                } catch (ediError) {
-                    console.error('❌ Erreur lors du déclenchement de l\'EDI_JOB:', ediError);
-                    ediJobResult = {
-                        success: false,
-                        error: ediError.message
-                    };
-                }
+        // Déclencher l'EDI_JOB après validation (les lignes sont en 'O', donc visibles via V_REMONTE_TEMPS)
+        let ediJobResult = null;
+        if (triggerEdiJob) {
+            try {
+                const idsForJob = result.validatedIds || tempsIds;
+                ediJobResult = await EdiJobService.executeEdiJobForTransmittedRecords(idsForJob, codeTache);
+                console.log(`✅ EDI_JOB exécuté pour ${idsForJob.length} enregistrements validés`);
+            } catch (ediError) {
+                console.error('❌ Erreur lors du déclenchement de l\'EDI_JOB:', ediError);
+                ediJobResult = { success: false, error: ediError.message };
             }
-            
-            res.json({
-                success: true,
-                message: result.message,
-                count: result.count,
-                ediJob: ediJobResult
-            });
-        } else {
-            res.status(400).json({
-                success: false,
-                error: result.error
-            });
         }
+
+        // Marquer comme transmis uniquement si l'EDI_JOB est OK
+        let markResult = null;
+        if (!triggerEdiJob || (ediJobResult && ediJobResult.success)) {
+            const idsToMark = result.validatedIds || tempsIds;
+            markResult = await MonitoringService.markBatchAsTransmitted(idsToMark);
+        }
+
+        return res.json({
+            success: !triggerEdiJob || (ediJobResult && ediJobResult.success),
+            message: result.message,
+            count: result.count,
+            ediJob: ediJobResult,
+            marked: markResult
+        });
         
     } catch (error) {
         console.error('❌ Erreur lors de la validation/transmission par lot:', error);

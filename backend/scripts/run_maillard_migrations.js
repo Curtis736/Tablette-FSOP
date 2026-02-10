@@ -141,7 +141,7 @@ async function runMigrations() {
             console.log('✅ V_REMONTE_TEMPS fonctionne correctement');
             console.log(`   Exemple: LancementCode=${vremonteResult[0].LancementCode}, DureeExecution=${vremonteResult[0].DureeExecution} heures`);
         } else {
-            console.log('⚠️  V_REMONTE_TEMPS ne retourne aucun résultat (normal si aucun enregistrement avec StatutTraitement = NULL)');
+            console.log('⚠️  V_REMONTE_TEMPS ne retourne aucun résultat (normal si aucun enregistrement avec StatutTraitement = \'O\')');
         }
         
         console.log('');
@@ -159,11 +159,11 @@ async function runMigrations() {
         console.log('   - DateConsultation depuis TableAlphaUtil2');
         console.log('');
         console.log('✅ V_REMONTE_TEMPS créée:');
-        console.log('   - Filtre: StatutTraitement IS NULL (seulement les enregistrements non traités)');
+        console.log('   - Filtre: StatutTraitement = \'O\' (seulement les enregistrements validés)');
         console.log('   - Filtre: ProductiveDuration > 0 (SILOG n\'accepte pas les temps à 0)');
         console.log('   - DureeExecution en heures (ProductiveDuration / 60)');
         console.log('');
-        console.log('⚠️  IMPORTANT: Le code Node.js a été modifié pour filtrer sur StatutTraitement IS NULL');
+        console.log('⚠️  IMPORTANT: La vue filtre sur StatutTraitement = \'O\' (validé)');
         console.log('⚠️  IMPORTANT: Vérifier que les requêtes V_LCTC dans le code fonctionnent avec TypeRubrique=\'O\'');
         
         process.exit(0);

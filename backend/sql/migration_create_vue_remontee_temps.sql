@@ -3,7 +3,7 @@
 -- Base: SEDI_APP_INDEPENDANTE
 -- 
 -- Spécification Franck MAILLARD:
--- Pour la remontée des temps dans l'ERP, ne prendre que StatutTraitement = NULL
+-- Pour la remonttée des temps dans l'ERP, ne prendre que StatutTraitement = 'O' (Validé)
 -- Format attendu: DateCreation, LancementCode, Phase, CodeRubrique, DureeExecution
 
 USE [SEDI_APP_INDEPENDANTE];
@@ -22,7 +22,7 @@ END
 GO
 
 -- Créer la vue pour la remontée des temps
--- IMPORTANT: Selon Franck MAILLARD, ne prendre que StatutTraitement = NULL
+-- IMPORTANT: Selon Franck MAILLARD, ne prendre que StatutTraitement = 'O' (Validé)
 CREATE VIEW [dbo].[V_REMONTE_TEMPS]
 AS
 SELECT 
@@ -40,12 +40,12 @@ SELECT
     ProductiveDuration,
     TempsId
 FROM [SEDI_APP_INDEPENDANTE].[dbo].[ABTEMPS_OPERATEURS]
-WHERE StatutTraitement IS NULL
+WHERE StatutTraitement = 'O'
   AND ProductiveDuration > 0;  -- SILOG n'accepte pas les temps à 0
 GO
 
 PRINT '✅ Vue V_REMONTE_TEMPS créée';
-PRINT '   - Filtre: StatutTraitement IS NULL (seulement les enregistrements non traités)';
+PRINT '   - Filtre: StatutTraitement = ''O'' (seulement les enregistrements validés)';
 PRINT '   - Filtre: ProductiveDuration > 0 (SILOG n''accepte pas les temps à 0)';
 PRINT '   - DureeExecution en heures (ProductiveDuration / 60)';
 GO

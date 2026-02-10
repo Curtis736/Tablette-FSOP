@@ -811,13 +811,15 @@ class MonitoringService {
             const fixedIds = [];
             
             // 1. Vérifier que les enregistrements existent et récupérer leurs données
-            // IMPORTANT: Selon Franck MAILLARD, ne prendre que StatutTraitement = NULL pour la remontée des temps
+            // IMPORTANT:
+            // - La vue V_REMONTE_TEMPS (côté SILOG) doit remonter uniquement les lignes VALIDÉES (StatutTraitement='O').
+            // - On accepte donc ici les lignes en StatutTraitement NULL (à valider) ou 'O' (déjà validées).
+            // - On exclut 'A' (en attente) et 'T' (déjà transmis).
             const { executeQuery } = require('../config/database');
             const checkQuery = `
                 SELECT TempsId, OperatorCode, LancementCode, StartTime, EndTime, StatutTraitement, ProductiveDuration
                 FROM [SEDI_APP_INDEPENDANTE].[dbo].[ABTEMPS_OPERATEURS]
                 WHERE TempsId IN (${tempsIds.map((_, i) => `@id${i}`).join(', ')})
-                  AND StatutTraitement IS NULL
             `;
             const checkParams = {};
             tempsIds.forEach((id, i) => {
@@ -835,6 +837,21 @@ class MonitoringService {
             // 2. Réparer les heures si elles sont à 00:00 (problème historique) puis valider chaque enregistrement
             for (const record of existingRecords) {
                 const tempsId = record.TempsId;
+
+                // Filtrer selon StatutTraitement
+                const stt = record.StatutTraitement;
+                if (stt === 'T') {
+                    invalidIds.push({ tempsId, errors: [`Enregistrement déjà transmis (StatutTraitement='T').`] });
+                    continue;
+                }
+                if (stt === 'A') {
+                    invalidIds.push({ tempsId, errors: [`Enregistrement en attente (StatutTraitement='A').`] });
+                    continue;
+                }
+                if (!(stt === null || stt === undefined || stt === 'O')) {
+                    invalidIds.push({ tempsId, errors: [`StatutTraitement invalide: ${stt}`] });
+                    continue;
+                }
 
                 // Réparer si StartTime/EndTime tombent à minuit (souvent DateCreation sans heure)
                 try {
@@ -869,16 +886,8 @@ class MonitoringService {
                     continue;
                 }
                 
-                // IMPORTANT: Selon Franck MAILLARD, ne prendre que StatutTraitement = NULL pour la remontée des temps
-                // Les enregistrements avec StatutTraitement != NULL (déjà traités ou transmis) sont exclus
-                if (record.StatutTraitement !== null && record.StatutTraitement !== undefined) {
-                    console.log(`ℹ️ Enregistrement ${tempsId} déjà traité (StatutTraitement=${record.StatutTraitement}), sera ignoré`);
-                    invalidIds.push({
-                        tempsId,
-                        errors: [`Enregistrement déjà traité (StatutTraitement=${record.StatutTraitement}). Seuls les enregistrements avec StatutTraitement = NULL peuvent être transmis.`]
-                    });
-                    continue;
-                }
+                // NOTE: On accepte aussi les enregistrements déjà validés ('O') pour permettre une ré-exécution
+                // (idempotence côté SILOG via ETEMPS.VarNumUtil2 / tempsId).
                 
                 // Validation optionnelle (vérifier cohérence des durées, etc.)
                 const validation = await OperationValidationService.validateTransferData(tempsId);
@@ -929,7 +938,8 @@ class MonitoringService {
                 console.warn(`⚠️ ${invalidIds.length} enregistrement(s) invalide(s) ignoré(s)`);
             }
             
-            // 2. Valider tous les enregistrements valides (StatutTraitement = 'O')
+            // 3. Valider tous les enregistrements valides (StatutTraitement = 'O')
+            // ⚠️ Ne pas marquer 'T' ici: l'EDI_JOB doit d'abord consommer les lignes validées via V_REMONTE_TEMPS.
             const validateQuery = `
                 UPDATE [SEDI_APP_INDEPENDANTE].[dbo].[ABTEMPS_OPERATEURS]
                 SET StatutTraitement = 'O'
@@ -943,21 +953,11 @@ class MonitoringService {
             
             await executeNonQuery(validateQuery, validateParams);
             
-            // 3. Marquer comme transmis
-            const transmitQuery = `
-                UPDATE [SEDI_APP_INDEPENDANTE].[dbo].[ABTEMPS_OPERATEURS]
-                SET StatutTraitement = 'T'
-                WHERE TempsId IN (${validIds.map((_, i) => `@id${i}`).join(', ')})
-            `;
-            
-            const result = await executeNonQuery(transmitQuery, validateParams);
-            
-            console.log(`✅ ${result.rowsAffected} enregistrements validés et marqués comme transmis`);
-            
             return {
                 success: true,
-                message: `${result.rowsAffected} enregistrements validés et marqués comme transmis`,
-                count: result.rowsAffected,
+                message: `${validIds.length} enregistrements validés`,
+                count: validIds.length,
+                validatedIds: validIds,
                 fixedCount: fixedIds.length,
                 invalidCount: invalidIds.length,
                 invalidIds: invalidIds.length > 0 ? invalidIds : undefined
@@ -969,6 +969,34 @@ class MonitoringService {
                 success: false,
                 error: error.message
             };
+        }
+    }
+
+    /**
+     * Marquer un lot comme transmis (StatutTraitement='T') après succès EDI_JOB.
+     * Ne bascule en 'T' que les lignes actuellement en 'O' (validées).
+     */
+    static async markBatchAsTransmitted(tempsIds) {
+        try {
+            if (!Array.isArray(tempsIds) || tempsIds.length === 0) {
+                return { success: false, error: 'Liste d\'IDs invalide' };
+            }
+            const params = {};
+            const placeholders = tempsIds.map((id, i) => {
+                params[`id${i}`] = id;
+                return `@id${i}`;
+            }).join(', ');
+            const q = `
+                UPDATE [SEDI_APP_INDEPENDANTE].[dbo].[ABTEMPS_OPERATEURS]
+                SET StatutTraitement = 'T'
+                WHERE TempsId IN (${placeholders})
+                  AND StatutTraitement = 'O'
+            `;
+            const r = await executeNonQuery(q, params);
+            return { success: true, count: r.rowsAffected };
+        } catch (error) {
+            console.error('❌ Erreur markBatchAsTransmitted:', error);
+            return { success: false, error: error.message };
         }
     }
 }
