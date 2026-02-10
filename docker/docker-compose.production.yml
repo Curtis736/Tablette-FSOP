@@ -108,6 +108,7 @@ networks:
   sedi-network:
     # Create the network if missing; reuse it if already present.
     name: sedi-tablette-network
+    external: true
 
 volumes:
   redis-data:
