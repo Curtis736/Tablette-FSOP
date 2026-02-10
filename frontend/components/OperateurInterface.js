@@ -1862,6 +1862,9 @@ class OperateurInterface {
         this.isRunning = false;
         clearInterval(this.timerInterval);
         this.timerDisplay.textContent = '00:00:00';
+        // IMPORTANT: reset startTime, sinon un nouveau lancement peut réutiliser l'ancien temps
+        // (startTimer() n'écrase startTime que s'il est null/undefined).
+        this.startTime = null;
         this.totalPausedTime = 0;
         this.pauseStartTime = null;
     }
