@@ -1265,12 +1265,14 @@ class AdminPage {
                     bestScore = s;
                 }
             }
-            // Injecter un indicateur "autres ops" (pour info)
-            if (list.length > 1) {
-                best = { ...best, _otherOpsCount: list.length - 1 };
-            }
             return best;
         });
+
+        // Mémoriser des compteurs d'affichage pour la pagination (fallback)
+        this._lastDisplayCounts = {
+            rowsDisplayed: operationsToDisplay.length,
+            operatorsDisplayed: operationsToDisplay.length
+        };
 
         // Pré-calcul: détecter les LT avec plusieurs opérateurs (pour afficher un badge clair)
         const ltToOperators = new Map(); // LT -> Set(operatorCode)
@@ -1363,14 +1365,7 @@ class AdminPage {
                 <td>${operation.OperatorName || operation.OperatorCode || '-'}</td>
                 <td>
                     <div style="display:flex; flex-direction:column; gap:4px;">
-                        <div>
-                            ${operation.LancementCode || '-'}
-                            ${
-                                operation._otherOpsCount
-                                    ? ` <span class="badge badge-secondary" style="margin-left:6px;">+${operation._otherOpsCount}</span>`
-                                    : ''
-                            }
-                        </div>
+                        <div>${operation.LancementCode || '-'}</div>
                         ${
                             (() => {
                                 const lt = String(operation.LancementCode || '').trim().toUpperCase();
@@ -3292,18 +3287,31 @@ class AdminPage {
     updatePaginationInfo() {
         const paginationInfo = document.getElementById('paginationInfo');
         if (paginationInfo && this.pagination) {
+            // Fix: éviter "Page 1 sur 0 (0 éléments)" quand on affiche des lignes (regroupement par opérateur)
+            const displayedRows = Number(this._lastDisplayCounts?.rowsDisplayed || 0);
+            const fallbackTotalItems = displayedRows > 0 ? displayedRows : (this.operations?.length || 0);
+
+            let totalPages = Number(this.pagination.totalPages || 0);
+            let currentPage = Number(this.pagination.currentPage || 1);
+            let totalItems = Number(this.pagination.totalItems || 0);
+
+            if (!Number.isFinite(totalPages) || totalPages < 1) totalPages = 1;
+            if (!Number.isFinite(currentPage) || currentPage < 1) currentPage = 1;
+            if (currentPage > totalPages) currentPage = totalPages;
+            if (!Number.isFinite(totalItems) || totalItems < 1) totalItems = fallbackTotalItems;
+
             paginationInfo.innerHTML = `
                 <div class="pagination-info">
-                    <span>Page ${this.pagination.currentPage} sur ${this.pagination.totalPages}</span>
-                    <span>(${this.pagination.totalItems} éléments au total)</span>
+                    <span>Page ${currentPage} sur ${totalPages}</span>
+                    <span>(${totalItems} éléments au total)</span>
                     <div class="pagination-controls">
                         <button class="btn btn-sm btn-outline-primary" 
-                                onclick="window.adminPage.loadPage(${this.pagination.currentPage - 1})"
+                                onclick="window.adminPage.loadPage(${currentPage - 1})"
                                 ${!this.pagination.hasPrevPage ? 'disabled' : ''}>
                             ← Précédent
                         </button>
                         <button class="btn btn-sm btn-outline-primary"
-                                onclick="window.adminPage.loadPage(${this.pagination.currentPage + 1})"
+                                onclick="window.adminPage.loadPage(${currentPage + 1})"
                                 ${!this.pagination.hasNextPage ? 'disabled' : ''}>
                             Suivant →
                         </button>
