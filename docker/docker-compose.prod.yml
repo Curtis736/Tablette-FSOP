@@ -16,11 +16,18 @@ services:
       - ADMIN_PASSWORD=${ADMIN_PASSWORD:-admin}
       # Database (override via docker/.env for your VM)
       - DB_SERVER=${DB_SERVER:-SERVEURERP}
-      - DB_DATABASE=${DB_DATABASE:-SEDI_ERP}
+      # DB principale de l'app (SEDI_APP_INDEPENDANTE) + base ERP (SEDI_ERP)
+      - DB_DATABASE=${DB_DATABASE:-SEDI_APP_INDEPENDANTE}
       - DB_USER=${DB_USER:-QUALITE}
       - DB_PASSWORD=${DB_PASSWORD:-QUALITE}
       - DB_ENCRYPT=${DB_ENCRYPT:-false}
       - DB_TRUST_CERT=${DB_TRUST_CERT:-true}
+      - DB_ERP_SERVER=${DB_ERP_SERVER:-SERVEURERP}
+      - DB_ERP_DATABASE=${DB_ERP_DATABASE:-SEDI_ERP}
+      - DB_ERP_USER=${DB_ERP_USER:-QUALITE}
+      - DB_ERP_PASSWORD=${DB_ERP_PASSWORD:-QUALITE}
+      - DB_ERP_ENCRYPT=${DB_ERP_ENCRYPT:-false}
+      - DB_ERP_TRUST_CERT=${DB_ERP_TRUST_CERT:-true}
       - FRONTEND_URL=http://localhost:8080
       - API_TIMEOUT=30000
       - API_RETRY_ATTEMPTS=3

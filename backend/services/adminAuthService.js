@@ -15,8 +15,11 @@ function getAdminCredentials() {
     ? process.env.ADMIN_PASSWORD
     : 'admin';
 
-  // ⚠️ Demande métier: toujours autoriser un fallback admin/admin (même en production)
-  return { enabled: true, username, password };
+  // ⚠️ Demande métier: autoriser un fallback admin/admin (même en production)
+  // Désactivation explicite uniquement via variable d'environnement.
+  const disabledRaw = String(process.env.ADMIN_AUTH_DISABLED || '').trim().toLowerCase();
+  const enabled = !(disabledRaw === '1' || disabledRaw === 'true' || disabledRaw === 'yes');
+  return { enabled, username, password };
 }
 
 function issueToken(username) {

@@ -168,6 +168,9 @@ class ApiService {
                     errorMessage += `: ${errorData.message}`;
                 } else if (errorData.hint) {
                     errorMessage += `: ${errorData.hint}`;
+                } else if (errorData.details) {
+                    // Beaucoup de routes backend renvoient "details" (ex: erreurs SQL)
+                    errorMessage += `: ${errorData.details}`;
                 }
                 
                 // For specific errors, include additional context

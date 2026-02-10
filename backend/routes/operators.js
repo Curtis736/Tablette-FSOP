@@ -265,8 +265,24 @@ router.get('/:code', async (req, res) => {
             LEFT JOIN [SEDI_ERP].[dbo].[RESSOURC] r ON v.CodeOperateur = r.Coderessource
             WHERE v.CodeOperateur = @code
         `;
-        
-        const operators = await executeQuery(query, { code });
+        let operators = [];
+        try {
+            operators = await executeQuery(query, { code });
+        } catch (e) {
+            // Fallback: certaines installations n'ont pas la vue V_RESSOURC ou l'accès cross-db peut être restreint.
+            console.warn('⚠️ V_RESSOURC indisponible, fallback sur RESSOURC:', e?.message || e);
+            const fallbackQuery = `
+                SELECT TOP 1
+                    r.Coderessource AS CodeOperateur,
+                    r.Designation1 AS NomOperateur,
+                    CAST(NULL AS VARCHAR(50)) AS StatutOperateur,
+                    CAST(NULL AS DATETIME2) AS DateConsultation,
+                    r.Typeressource
+                FROM [SEDI_ERP].[dbo].[RESSOURC] r
+                WHERE r.Coderessource = @code
+            `;
+            operators = await executeQuery(fallbackQuery, { code });
+        }
         
         if (operators.length === 0) {
             return res.status(404).json({ 
@@ -307,10 +323,11 @@ router.get('/:code', async (req, res) => {
 router.get('/', async (req, res) => {
     try {
         const { search, limit = 100 } = req.query;
+        const limitNum = Math.max(1, Math.min(parseInt(limit, 10) || 100, 500));
         
         // Utiliser la vue V_RESSOURC au lieu d'accéder directement à RESSOURC
         let query = `
-            SELECT TOP ${limit}
+            SELECT TOP ${limitNum}
                 v.CodeOperateur,
                 v.NomOperateur,
                 v.StatutOperateur,
@@ -331,7 +348,29 @@ router.get('/', async (req, res) => {
         
         query += ` ORDER BY v.CodeOperateur`;
         
-        const operators = await executeQuery(query, params);
+        let operators = [];
+        try {
+            operators = await executeQuery(query, params);
+        } catch (e) {
+            console.warn('⚠️ V_RESSOURC indisponible, fallback liste sur RESSOURC:', e?.message || e);
+            let fallbackQuery = `
+                SELECT TOP ${limitNum}
+                    r.Coderessource AS CodeOperateur,
+                    r.Designation1 AS NomOperateur,
+                    CAST(NULL AS VARCHAR(50)) AS StatutOperateur,
+                    CAST(NULL AS DATETIME2) AS DateConsultation,
+                    r.Typeressource
+                FROM [SEDI_ERP].[dbo].[RESSOURC] r
+                WHERE 1=1
+            `;
+            const fbParams = {};
+            if (search) {
+                fallbackQuery += ` AND (r.Coderessource LIKE @search OR r.Designation1 LIKE @search)`;
+                fbParams.search = `%${search}%`;
+            }
+            fallbackQuery += ` ORDER BY r.Coderessource`;
+            operators = await executeQuery(fallbackQuery, fbParams);
+        }
         
         const formattedOperators = operators.map(operator => ({
             id: operator.CodeOperateur,

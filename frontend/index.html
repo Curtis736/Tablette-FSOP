@@ -8,7 +8,8 @@
     <link rel="stylesheet" href="assets/styles.css?v=20260203-ind-operator-fix">
     <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
     <!-- ZXing pour le scan de code-barres -->
-    <script src="https://cdn.jsdelivr.net/npm/@zxing/library@latest"></script>
+    <!-- IMPORTANT: ne pas utiliser "@zxing/library@latest" (entrée CommonJS => `exports is not defined` en navigateur) -->
+    <script defer src="https://cdn.jsdelivr.net/npm/@zxing/library@0.20.0/umd/index.min.js"></script>
 </head>
 <body>
     <div id="app">

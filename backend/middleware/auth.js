@@ -76,7 +76,7 @@ async function authenticateAdmin(req, res, next) {
         if (!creds.enabled) {
             return res.status(403).json({
                 success: false,
-                error: 'Accès administrateur désactivé (ADMIN_PASSWORD manquant en production)'
+                error: 'Accès administrateur désactivé (ADMIN_AUTH_DISABLED=1)'
             });
         }
 
