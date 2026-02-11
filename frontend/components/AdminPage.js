@@ -277,10 +277,19 @@ class AdminPage {
             // Charger les opérateurs connectés et les données admin en parallèle avec timeout
             // Appliquer la période sélectionnée pour la partie monitoring (ABTEMPS_OPERATEURS)
             const now = new Date();
-            const today = now.toISOString().split('T')[0];
+            // IMPORTANT: utiliser une date LOCALE (pas UTC) pour correspondre à CAST(DateCreation AS DATE) côté SQL.
+            // toISOString() utilise UTC et peut décaler d'un jour (dashboard vide alors que l'opérateur voit des opérations).
+            const toLocalDateOnly = (d) => {
+                const x = new Date(d);
+                const y = x.getFullYear();
+                const m = String(x.getMonth() + 1).padStart(2, '0');
+                const day = String(x.getDate()).padStart(2, '0');
+                return `${y}-${m}-${day}`;
+            };
+            const today = toLocalDateOnly(now);
             const period = document.getElementById('periodFilter')?.value || 'today';
 
-            const toDateOnly = (d) => d.toISOString().split('T')[0];
+            const toDateOnly = toLocalDateOnly;
             const startOfWeekMonday = (d) => {
                 const x = new Date(d);
                 x.setHours(0, 0, 0, 0);
@@ -1880,7 +1889,12 @@ class AdminPage {
                 
                 // Recharger les données après un court délai pour s'assurer que tout est synchronisé
                 setTimeout(async () => {
-                    await this.loadMonitoringRecords(new Date().toISOString().split('T')[0]);
+                    // Utiliser la date locale pour correspondre à la date SQL (évite les décalages UTC).
+                    const d = new Date();
+                    const y = d.getFullYear();
+                    const m = String(d.getMonth() + 1).padStart(2, '0');
+                    const day = String(d.getDate()).padStart(2, '0');
+                    await this.loadMonitoringRecords(`${y}-${m}-${day}`);
                     this.updateOperationsTable();
                 }, 500);
             } else {
@@ -3105,7 +3119,9 @@ class AdminPage {
             ].join(','))
         ].join('\n');
 
-        const today = new Date().toISOString().split('T')[0];
+        // Date locale (pas UTC) pour cohérence avec la base
+        const d = new Date();
+        const today = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
         this.downloadCSV(csvContent, `operations_${today}.csv`);
     }
 
