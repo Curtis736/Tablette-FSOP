@@ -10,6 +10,61 @@ const path = require('path');
 const execAsync = promisify(exec);
 
 class EdiJobService {
+    static _psSingleQuote(value) {
+        // Escape single quotes for PowerShell single-quoted strings: ' => ''
+        return String(value ?? '').replace(/'/g, "''");
+    }
+
+    static _maskCommandForLogs(text) {
+        const s = String(text || '');
+        // Mask "-pXXXX" and "-p XXXX" styles (best-effort)
+        return s
+            .replace(/-p[^\s"]+/gi, '-p***')
+            .replace(/-p\s+("[^"]+"|\S+)/gi, '-p ***');
+    }
+
+    static _buildConfig(codeTache, options = {}) {
+        // Backward-compatible env var names + new explicit ones (recommended)
+        const silogExe = process.env.SILOG_EXE_PATH || process.env.SILOG_PATH || options.silogPath || 'C:\\SILOG\\SILOG.exe';
+        const workDir =
+            process.env.SILOG_WORKDIR ||
+            options.workingDirectory ||
+            (() => {
+                try { return path.dirname(silogExe); } catch (_) { return null; }
+            })();
+
+        const profil = process.env.SILOG_DB || process.env.SILOG_PROFIL || options.profil || 'SEDI_TESTS';
+        const utilisateur = process.env.SILOG_USER || options.utilisateur || 'Production8';
+        const motDePasse = process.env.SILOG_PASSWORD || options.motDePasse || '';
+        const langue = process.env.SILOG_LANG || process.env.SILOG_LANGUE || options.langue || 'fr_fr';
+        const mode = process.env.SILOG_MODE || options.mode || 'COMPACT';
+        const entrypoint = process.env.SILOG_ENTRYPOINT || options.entrypoint || 'EDI_JOB';
+        const codeTacheFinal =
+            codeTache ||
+            process.env.SILOG_TASK_CODE ||
+            process.env.SILOG_CODE_TACHE ||
+            process.env.SILOG_TASK ||
+            'SEDI_ETDIFF';
+
+        const timeoutMs = Number.parseInt(process.env.SILOG_TIMEOUT_MS || options.timeoutMs || '300000', 10) || 300000;
+        const useStartProcess =
+            String(process.env.SILOG_USE_START_PROCESS ?? options.useStartProcess ?? 'true').toLowerCase() !== 'false';
+
+        return {
+            silogExe,
+            workDir,
+            profil,
+            utilisateur,
+            motDePasse,
+            langue,
+            mode,
+            entrypoint,
+            codeTache: codeTacheFinal,
+            timeoutMs,
+            useStartProcess
+        };
+    }
+
     /**
      * Exécuter l'EDI_JOB de SILOG
      * @param {string} codeTache - Code de la tâche à exécuter
@@ -18,56 +73,90 @@ class EdiJobService {
      */
     static async executeEdiJob(codeTache, options = {}) {
         try {
-            // Configuration par défaut (à adapter selon l'environnement)
-            const config = {
-                silogPath: process.env.SILOG_PATH || options.silogPath || 'C:\\SILOG\\SILOG.exe',
-                profil: process.env.SILOG_PROFIL || options.profil || 'Profil',
-                utilisateur: process.env.SILOG_USER || options.utilisateur || 'USER',
-                motDePasse: process.env.SILOG_PASSWORD || options.motDePasse || '',
-                langue: process.env.SILOG_LANGUE || options.langue || 'fr_fr',
-                mode: options.mode || 'COMPACT'
-            };
-            
-            // Construire la commande
-            // Format: EXEC Chemin ERP Silog\SILOG.exe -bProfil -uUSER -pMotDePasseUtilisateurERP 
-            //         -dfr_fr -eEDI_JOB -optcodetache=CodeTache -mCOMPACT
-            const command = `"${config.silogPath}" -b${config.profil} -u${config.utilisateur} -p${config.motDePasse} -d${config.langue} -eEDI_JOB -optcodetache=${codeTache} -m${config.mode}`;
-            
-            console.log(`🚀 Exécution de l'EDI_JOB avec codeTache=${codeTache}`);
-            console.log(`📝 Commande: ${command.replace(/-p[^\s]+/, '-p***')}`); // Masquer le mot de passe dans les logs
-            
-            // Exécuter la commande
-            const { stdout, stderr } = await execAsync(command, {
-                timeout: 300000, // 5 minutes de timeout
-                maxBuffer: 10 * 1024 * 1024 // 10 MB de buffer
-            });
+            const config = this._buildConfig(codeTache, options);
+
+            // Construire la liste d'arguments SILOG (alignée sur la commande PowerShell fournie par Franck)
+            // Exemple:
+            // SILOG.exe -bSEDI_TESTS -uProduction8 -p -dfr_fr -eEDI_JOB -optcodetache=SEDI_ETDIFF -mCOMPACT
+            const passArg = config.motDePasse ? `-p${config.motDePasse}` : '-p';
+            const silogArgs = [
+                `-b${config.profil}`,
+                `-u${config.utilisateur}`,
+                passArg,
+                `-d${config.langue}`,
+                `-e${config.entrypoint}`,
+                `-optcodetache=${config.codeTache}`,
+                `-m${config.mode}`
+            ];
+
+            console.log(`🚀 Exécution SILOG EDI_JOB (codeTache=${config.codeTache})`);
+            console.log(`📝 SILOG: ${this._maskCommandForLogs(`"${config.silogExe}" ${silogArgs.join(' ')}`)}`);
+
+            let stdout = '';
+            let stderr = '';
+            let exitCode = null;
+
+            if (process.platform === 'win32' && config.useStartProcess) {
+                // Utiliser Start-Process -Wait pour reproduire le comportement PowerShell (UNC + working directory)
+                const filePath = this._psSingleQuote(config.silogExe);
+                const workingDirectory = this._psSingleQuote(config.workDir || '');
+                const argList = this._psSingleQuote(silogArgs.join(' '));
+
+                const ps = [
+                    "$ErrorActionPreference='Stop';",
+                    `$p = Start-Process -FilePath '${filePath}' -ArgumentList '${argList}'${config.workDir ? ` -WorkingDirectory '${workingDirectory}'` : ''} -Wait -PassThru;`,
+                    'exit $p.ExitCode;'
+                ].join(' ');
+
+                const command = `powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command "${ps}"`;
+                console.log(`📝 PowerShell: ${this._maskCommandForLogs(command)}`);
+
+                const r = await execAsync(command, {
+                    timeout: config.timeoutMs,
+                    maxBuffer: 10 * 1024 * 1024
+                });
+                stdout = r.stdout || '';
+                stderr = r.stderr || '';
+            } else {
+                // Fallback: exécution directe (peut suffire en environnement non-Windows ou si Start-Process est désactivé)
+                const directCmd = `"${config.silogExe}" ${silogArgs.join(' ')}`;
+                const r = await execAsync(directCmd, {
+                    timeout: config.timeoutMs,
+                    maxBuffer: 10 * 1024 * 1024,
+                    cwd: config.workDir || undefined
+                });
+                stdout = r.stdout || '';
+                stderr = r.stderr || '';
+            }
             
             // Analyser le résultat
             const success = !stderr || stderr.trim().length === 0;
             
             if (success) {
-                console.log(`✅ EDI_JOB exécuté avec succès pour codeTache=${codeTache}`);
+                console.log(`✅ EDI_JOB exécuté avec succès pour codeTache=${config.codeTache}`);
                 return {
                     success: true,
                     message: 'EDI_JOB exécuté avec succès',
-                    codeTache: codeTache,
+                    codeTache: config.codeTache,
                     stdout: stdout,
-                    stderr: stderr || null
+                    stderr: stderr || null,
+                    exitCode
                 };
             } else {
-                console.warn(`⚠️ EDI_JOB exécuté avec des avertissements pour codeTache=${codeTache}`);
+                console.warn(`⚠️ EDI_JOB exécuté avec des avertissements pour codeTache=${config.codeTache}`);
                 return {
                     success: true, // Considéré comme succès même avec des avertissements
                     message: 'EDI_JOB exécuté avec des avertissements',
-                    codeTache: codeTache,
+                    codeTache: config.codeTache,
                     stdout: stdout,
                     stderr: stderr,
-                    warnings: true
+                    warnings: true,
+                    exitCode
                 };
             }
             
         } catch (error) {
-            console.error(`❌ Erreur lors de l'exécution de l'EDI_JOB pour codeTache=${codeTache}:`, error);
+            console.error(`❌ Erreur lors de l'exécution de l'EDI_JOB:`, error);
             
             // Analyser le type d'erreur
             let errorMessage = 'Erreur lors de l\'exécution de l\'EDI_JOB';
@@ -75,7 +164,7 @@ class EdiJobService {
             
             if (error.code === 'ENOENT') {
                 errorMessage = 'Fichier SILOG.exe non trouvé. Vérifiez le chemin de configuration.';
-                errorDetails = `Chemin attendu: ${process.env.SILOG_PATH || 'C:\\SILOG\\SILOG.exe'}`;
+                errorDetails = `Chemin attendu: ${process.env.SILOG_EXE_PATH || process.env.SILOG_PATH || 'C:\\SILOG\\SILOG.exe'}`;
             } else if (error.code === 'ETIMEDOUT') {
                 errorMessage = 'Timeout lors de l\'exécution de l\'EDI_JOB';
                 errorDetails = 'L\'exécution a pris plus de 5 minutes';
@@ -90,7 +179,7 @@ class EdiJobService {
                 success: false,
                 error: errorMessage,
                 details: errorDetails,
-                codeTache: codeTache
+                codeTache: codeTache || null
             };
         }
     }
@@ -103,11 +192,11 @@ class EdiJobService {
      */
     static async executeEdiJobForTransmittedRecords(tempsIds, codeTache = null) {
         try {
-            // Si aucun codeTache n'est fourni, générer un code basé sur la date et l'heure
-            if (!codeTache) {
-                const now = new Date();
-                codeTache = `EDI_${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, '0')}${String(now.getDate()).padStart(2, '0')}_${String(now.getHours()).padStart(2, '0')}${String(now.getMinutes()).padStart(2, '0')}`;
-            }
+            // NOTE:
+            // Dans SILOG, optcodetache = "code tâche" d'intégration (ex: SEDI_ETDIFF) et est fixe.
+            // Si aucun codeTache n'est fourni, utiliser la valeur de configuration/env.
+            const resolved = this._buildConfig(codeTache, {});
+            codeTache = resolved.codeTache;
             
             console.log(`🚀 Exécution de l'EDI_JOB pour ${tempsIds.length} enregistrements transmis`);
             
@@ -140,10 +229,14 @@ class EdiJobService {
     static async checkConfiguration() {
         try {
             const config = {
-                silogPath: process.env.SILOG_PATH || 'C:\\SILOG\\SILOG.exe',
-                profil: process.env.SILOG_PROFIL || 'Profil',
-                utilisateur: process.env.SILOG_USER || 'USER',
-                langue: process.env.SILOG_LANGUE || 'fr_fr',
+                silogExe: process.env.SILOG_EXE_PATH || process.env.SILOG_PATH || 'C:\\SILOG\\SILOG.exe',
+                workingDirectory: process.env.SILOG_WORKDIR || null,
+                profil: process.env.SILOG_DB || process.env.SILOG_PROFIL || 'SEDI_TESTS',
+                utilisateur: process.env.SILOG_USER || 'Production8',
+                langue: process.env.SILOG_LANG || process.env.SILOG_LANGUE || 'fr_fr',
+                codeTache: process.env.SILOG_TASK_CODE || process.env.SILOG_CODE_TACHE || process.env.SILOG_TASK || 'SEDI_ETDIFF',
+                mode: process.env.SILOG_MODE || 'COMPACT',
+                entrypoint: process.env.SILOG_ENTRYPOINT || 'EDI_JOB',
                 hasPassword: !!(process.env.SILOG_PASSWORD || '')
             };
             
@@ -153,8 +246,8 @@ class EdiJobService {
             let pathError = null;
             
             try {
-                if (path.isAbsolute(config.silogPath)) {
-                    pathExists = fs.existsSync(config.silogPath);
+                if (path.isAbsolute(config.silogExe)) {
+                    pathExists = fs.existsSync(config.silogExe);
                 } else {
                     // Si le chemin est relatif, on ne peut pas vérifier facilement
                     pathExists = null;
@@ -170,7 +263,8 @@ class EdiJobService {
                 config: config,
                 pathExists: pathExists,
                 pathError: pathError,
-                ready: pathExists !== false && config.hasPassword
+                // Password peut être vide (Franck utilise "-p" sans valeur).
+                ready: pathExists !== false && !!config.profil && !!config.utilisateur && !!config.codeTache
             };
             
         } catch (error) {
