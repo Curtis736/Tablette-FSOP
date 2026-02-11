@@ -903,24 +903,41 @@ router.get('/export/:format', async (req, res) => {
 async function getAdminStats(date) {
     try {
         // Compter les opérateurs actifs (connectés OU avec lancement en cours)
+        // IMPORTANT:
+        // Ne pas compter "actif" si un ancien DEBUT (Statut=EN_COURS) existe mais qu'un FIN est arrivé après.
+        // On se base uniquement sur le DERNIER événement de la journée par opérateur.
         const operatorsQuery = `
-            SELECT COUNT(DISTINCT active_operators.OperatorCode) as totalOperators
+            WITH last_per_operator AS (
+                SELECT
+                    h.OperatorCode,
+                    h.Ident,
+                    h.Statut,
+                    ROW_NUMBER() OVER (
+                        PARTITION BY h.OperatorCode
+                        ORDER BY h.DateCreation DESC, h.NoEnreg DESC
+                    ) AS rn
+                FROM [SEDI_APP_INDEPENDANTE].[dbo].[ABHISTORIQUE_OPERATEURS] h
+                WHERE CAST(h.DateCreation AS DATE) = CAST(GETDATE() AS DATE)
+                  AND h.OperatorCode IS NOT NULL
+                  AND LTRIM(RTRIM(h.OperatorCode)) <> ''
+                  AND h.OperatorCode <> '0'
+            )
+            SELECT COUNT(DISTINCT active_operators.OperatorCode) AS totalOperators
             FROM (
-                -- Opérateurs connectés
-                SELECT OperatorCode
-                FROM [SEDI_APP_INDEPENDANTE].[dbo].[ABSESSIONS_OPERATEURS]
-                WHERE SessionStatus = 'ACTIVE'
-                
+                -- Opérateurs connectés (session ACTIVE)
+                SELECT s.OperatorCode
+                FROM [SEDI_APP_INDEPENDANTE].[dbo].[ABSESSIONS_OPERATEURS] s
+                WHERE s.SessionStatus = 'ACTIVE'
+                  AND CAST(s.DateCreation AS DATE) = CAST(GETDATE() AS DATE)
+
                 UNION
-                
-                -- Opérateurs avec lancement en cours aujourd'hui
-                SELECT DISTINCT OperatorCode
-                FROM [SEDI_APP_INDEPENDANTE].[dbo].[ABHISTORIQUE_OPERATEURS]
-                WHERE Statut IN ('EN_COURS', 'EN_PAUSE')
-                AND CAST(DateCreation AS DATE) = CAST(GETDATE() AS DATE)
-                AND OperatorCode IS NOT NULL
-                AND OperatorCode != ''
-                AND OperatorCode != '0'
+
+                -- Opérateurs avec une opération réellement en cours (dernier event != FIN/TERMINE)
+                SELECT l.OperatorCode
+                FROM last_per_operator l
+                WHERE l.rn = 1
+                  AND UPPER(LTRIM(RTRIM(COALESCE(l.Ident, '')))) <> 'FIN'
+                  AND UPPER(LTRIM(RTRIM(COALESCE(l.Statut, '')))) IN ('EN_COURS', 'EN_PAUSE')
             ) active_operators
         `;
         
@@ -949,10 +966,8 @@ async function getAdminStats(date) {
         const allEvents = validationResult.events;
         
         // Filtrer les événements par date (par défaut, utiliser aujourd'hui)
-        let filteredEvents = allEvents.filter(event => {
-            const eventDate = moment(event.DateCreation).format('YYYY-MM-DD');
-            return eventDate === targetDate;
-        });
+        // IMPORTANT: DateCreation est renvoyé en 'YYYY-MM-DD' (string) pour éviter les décalages timezone.
+        let filteredEvents = allEvents.filter(event => String(event.DateCreation || '') === targetDate);
 
         // Exclure les opérations déjà transmises (StatutTraitement = 'T') pour ne pas les afficher dans le dashboard
         try {
@@ -1111,10 +1126,8 @@ async function getAdminOperations(date, page = 1, limit = 25) {
         
         // Filtrer par date (sinon on mélange les jours et on crée des doublons)
         const targetDate = date ? moment(date).format('YYYY-MM-DD') : moment().format('YYYY-MM-DD');
-        let filteredEvents = allEvents.filter(event => {
-            const eventDate = moment(event.DateCreation).format('YYYY-MM-DD');
-            return eventDate === targetDate;
-        });
+        // IMPORTANT: DateCreation est renvoyé en 'YYYY-MM-DD' (string) pour éviter les décalages timezone.
+        let filteredEvents = allEvents.filter(event => String(event.DateCreation || '') === targetDate);
 
         // Exclure les opérations déjà transmises (StatutTraitement = 'T') pour qu'elles disparaissent du dashboard
         try {
@@ -1960,59 +1973,78 @@ router.get('/operators', async (req, res) => {
         console.log('🔍 Récupération des opérateurs connectés depuis ABSESSIONS_OPERATEURS...');
 
         // IMPORTANT:
-        // On considère "connecté" un opérateur qui a une session ACTIVE OU qui a un lancement EN_COURS/EN_PAUSE aujourd'hui
-        // (certaines installations ont des opérations en cours sans ligne de session).
+        // On considère "connecté" un opérateur qui a une session ACTIVE,
+        // et "en opération" uniquement si le DERNIER événement du jour n'est pas FIN/TERMINE.
+        // (Sinon, un ancien DEBUT (Statut=EN_COURS) ferait apparaître l'opérateur actif alors qu'il a terminé.)
         const operatorsQuery = `
-            WITH all_operators AS (
-                -- Sessions actives du jour
-                SELECT DISTINCT s.OperatorCode
+            WITH active_sessions AS (
+                SELECT DISTINCT s.OperatorCode, s.LoginTime, s.SessionStatus, s.DeviceInfo
                 FROM [SEDI_APP_INDEPENDANTE].[dbo].[ABSESSIONS_OPERATEURS] s
                 WHERE s.SessionStatus = 'ACTIVE'
                   AND CAST(s.DateCreation AS DATE) = CAST(GETDATE() AS DATE)
-
-                UNION
-
-                -- Opérateurs en opération aujourd'hui (même sans session)
-                SELECT DISTINCT h.OperatorCode
+            ),
+            last_per_operator AS (
+                SELECT
+                    h.OperatorCode,
+                    h.Ident,
+                    h.Statut,
+                    h.DateCreation,
+                    h.NoEnreg,
+                    ROW_NUMBER() OVER (
+                        PARTITION BY h.OperatorCode
+                        ORDER BY h.DateCreation DESC, h.NoEnreg DESC
+                    ) AS rn
                 FROM [SEDI_APP_INDEPENDANTE].[dbo].[ABHISTORIQUE_OPERATEURS] h
-                WHERE h.Statut IN ('EN_COURS', 'EN_PAUSE')
-                  AND CAST(h.DateCreation AS DATE) = CAST(GETDATE() AS DATE)
+                WHERE CAST(h.DateCreation AS DATE) = CAST(GETDATE() AS DATE)
                   AND h.OperatorCode IS NOT NULL
-                  AND h.OperatorCode != ''
-                  AND h.OperatorCode != '0'
+                  AND LTRIM(RTRIM(h.OperatorCode)) <> ''
+                  AND h.OperatorCode <> '0'
+            ),
+            last_event AS (
+                SELECT OperatorCode, Ident, Statut, DateCreation, NoEnreg
+                FROM last_per_operator
+                WHERE rn = 1
+            ),
+            all_operators AS (
+                -- Liste: opérateurs avec session active OU avec une opération réellement en cours
+                SELECT OperatorCode FROM active_sessions
+                UNION
+                SELECT le.OperatorCode
+                FROM last_event le
+                WHERE UPPER(LTRIM(RTRIM(COALESCE(le.Ident, '')))) <> 'FIN'
+                  AND UPPER(LTRIM(RTRIM(COALESCE(le.Statut, '')))) IN ('EN_COURS', 'EN_PAUSE')
             )
             SELECT
-                ao.OperatorCode as OperatorCode,
-                COALESCE(r.Designation1, 'Opérateur ' + CAST(ao.OperatorCode AS VARCHAR)) as NomOperateur,
+                ao.OperatorCode AS OperatorCode,
+                COALESCE(r.Designation1, 'Opérateur ' + CAST(ao.OperatorCode AS VARCHAR)) AS NomOperateur,
                 s.LoginTime,
-                COALESCE(s.SessionStatus, 'ACTIVE') as SessionStatus,
-                CASE 
-                    WHEN hLast.OperatorCode IS NOT NULL THEN 'EN_OPERATION'
+                COALESCE(s.SessionStatus, 'ACTIVE') AS SessionStatus,
+                CASE
+                    WHEN le.OperatorCode IS NOT NULL
+                         AND UPPER(LTRIM(RTRIM(COALESCE(le.Ident, '')))) <> 'FIN'
+                         AND UPPER(LTRIM(RTRIM(COALESCE(le.Statut, '')))) IN ('EN_COURS', 'EN_PAUSE')
+                    THEN 'EN_OPERATION'
                     WHEN s.OperatorCode IS NOT NULL THEN 'CONNECTE'
                     ELSE 'INACTIVE'
-                END as ActivityStatus,
-                COALESCE(s.LoginTime, hLast.DateCreation) as LastActivityTime,
-                r.Coderessource as RessourceCode,
+                END AS ActivityStatus,
+                COALESCE(s.LoginTime, le.DateCreation) AS LastActivityTime,
+                r.Coderessource AS RessourceCode,
                 s.DeviceInfo,
-                CASE 
-                    WHEN hLast.OperatorCode IS NOT NULL THEN 'EN_OPERATION'
+                CASE
+                    WHEN le.OperatorCode IS NOT NULL
+                         AND UPPER(LTRIM(RTRIM(COALESCE(le.Ident, '')))) <> 'FIN'
+                         AND UPPER(LTRIM(RTRIM(COALESCE(le.Statut, '')))) IN ('EN_COURS', 'EN_PAUSE')
+                    THEN 'EN_OPERATION'
                     WHEN s.OperatorCode IS NOT NULL THEN 'CONNECTE'
                     ELSE 'INACTIVE'
-                END as CurrentStatus
+                END AS CurrentStatus
             FROM all_operators ao
-            LEFT JOIN [SEDI_APP_INDEPENDANTE].[dbo].[ABSESSIONS_OPERATEURS] s
-                ON ao.OperatorCode = s.OperatorCode
-               AND s.SessionStatus = 'ACTIVE'
-               AND CAST(s.DateCreation AS DATE) = CAST(GETDATE() AS DATE)
-            OUTER APPLY (
-                SELECT TOP 1 h.OperatorCode, h.DateCreation
-                FROM [SEDI_APP_INDEPENDANTE].[dbo].[ABHISTORIQUE_OPERATEURS] h
-                WHERE h.OperatorCode = ao.OperatorCode
-                  AND h.Statut IN ('EN_COURS', 'EN_PAUSE')
-                  AND CAST(h.DateCreation AS DATE) = CAST(GETDATE() AS DATE)
-                ORDER BY h.DateCreation DESC, h.NoEnreg DESC
-            ) hLast
-            LEFT JOIN [SEDI_ERP].[dbo].[RESSOURC] r ON ao.OperatorCode = r.Coderessource
+            LEFT JOIN active_sessions s
+              ON ao.OperatorCode = s.OperatorCode
+            LEFT JOIN last_event le
+              ON ao.OperatorCode = le.OperatorCode
+            LEFT JOIN [SEDI_ERP].[dbo].[RESSOURC] r
+              ON ao.OperatorCode = r.Coderessource
             ORDER BY ao.OperatorCode
         `;
 

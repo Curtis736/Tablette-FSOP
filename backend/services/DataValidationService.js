@@ -121,7 +121,8 @@ class DataValidationService {
                     h.Statut,
                     CONVERT(VARCHAR(5), h.HeureDebut, 108) AS HeureDebut,
                     CONVERT(VARCHAR(5), h.HeureFin, 108) AS HeureFin,
-                    h.DateCreation,
+                    -- IMPORTANT: Date-only stable (évite les décalages de fuseau côté Node/moment)
+                    CONVERT(VARCHAR(10), h.DateCreation, 23) AS DateCreation, -- YYYY-MM-DD
                     h.CreatedAt,
                     l.DesignationLct1 as Article,
                     l.DesignationLct2 as ArticleDetail
@@ -164,7 +165,8 @@ class DataValidationService {
                     h.Statut,
                     CONVERT(VARCHAR(5), h.HeureDebut, 108) AS HeureDebut,
                     CONVERT(VARCHAR(5), h.HeureFin, 108) AS HeureFin,
-                    h.DateCreation,
+                    -- IMPORTANT: Date-only stable (évite les décalages de fuseau côté Node/moment)
+                    CONVERT(VARCHAR(10), h.DateCreation, 23) AS DateCreation, -- YYYY-MM-DD
                     h.CreatedAt,
                     COALESCE(r.Designation1, 'Opérateur ' + CAST(h.OperatorCode AS VARCHAR)) as operatorName,
                     r.Coderessource as resourceCode,
