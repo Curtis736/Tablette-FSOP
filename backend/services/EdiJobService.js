@@ -75,6 +75,24 @@ class EdiJobService {
         try {
             const config = this._buildConfig(codeTache, options);
 
+            // IMPORTANT: SILOG.exe ne peut pas être exécuté directement sur Linux.
+            // Dans ce cas, on doit passer par un "runner" Windows (SSH/WinRM/etc).
+            if (process.platform !== 'win32') {
+                const remoteMode = String(process.env.SILOG_REMOTE_MODE || options.remoteMode || '').trim().toLowerCase();
+                if (remoteMode !== 'ssh') {
+                    return {
+                        success: false,
+                        error: 'SILOG_UNSUPPORTED_PLATFORM',
+                        details:
+                            `Le backend tourne sur ${process.platform}. SILOG.exe nécessite Windows.\n` +
+                            `Solutions:\n` +
+                            `- Exécuter le backend sur une machine Windows qui voit \\\\SERVEURERP\\SILOG8\n` +
+                            `- OU configurer un runner Windows et activer SILOG_REMOTE_MODE=ssh (voir docs/SILOG_EDI_JOB.md).`,
+                        codeTache: config.codeTache
+                    };
+                }
+            }
+
             // Construire la liste d'arguments SILOG (alignée sur la commande PowerShell fournie par Franck)
             // Exemple:
             // SILOG.exe -bSEDI_TESTS -uProduction8 -p -dfr_fr -eEDI_JOB -optcodetache=SEDI_ETDIFF -mCOMPACT
@@ -112,6 +130,55 @@ class EdiJobService {
                 console.log(`📝 PowerShell: ${this._maskCommandForLogs(command)}`);
 
                 const r = await execAsync(command, {
+                    timeout: config.timeoutMs,
+                    maxBuffer: 10 * 1024 * 1024
+                });
+                stdout = r.stdout || '';
+                stderr = r.stderr || '';
+            } else if (process.platform !== 'win32') {
+                // Runner distant (SSH) vers un hôte Windows qui exécutera PowerShell/Start-Process
+                const sshHost = String(process.env.SILOG_SSH_HOST || options.sshHost || '').trim();
+                const sshUser = String(process.env.SILOG_SSH_USER || options.sshUser || '').trim();
+                const sshPort = String(process.env.SILOG_SSH_PORT || options.sshPort || '').trim();
+                const sshKey = String(process.env.SILOG_SSH_KEY_PATH || options.sshKeyPath || '').trim();
+                const sshExtra = String(process.env.SILOG_SSH_EXTRA_ARGS || options.sshExtraArgs || '').trim();
+
+                if (!sshHost || !sshUser) {
+                    return {
+                        success: false,
+                        error: 'SILOG_REMOTE_SSH_NOT_CONFIGURED',
+                        details:
+                            `SILOG_REMOTE_MODE=ssh est activé mais SILOG_SSH_HOST/SILOG_SSH_USER ne sont pas définis.\n` +
+                            `Définir au minimum: SILOG_SSH_HOST, SILOG_SSH_USER (et optionnellement SILOG_SSH_KEY_PATH, SILOG_SSH_PORT).`,
+                        codeTache: config.codeTache
+                    };
+                }
+
+                const filePath = this._psSingleQuote(config.silogExe);
+                const workingDirectory = this._psSingleQuote(config.workDir || '');
+                const argList = this._psSingleQuote(silogArgs.join(' '));
+                const ps = [
+                    "$ErrorActionPreference='Stop';",
+                    `$p = Start-Process -FilePath '${filePath}' -ArgumentList '${argList}'${config.workDir ? ` -WorkingDirectory '${workingDirectory}'` : ''} -Wait -PassThru;`,
+                    'exit $p.ExitCode;'
+                ].join(' ');
+
+                // Commande PowerShell à exécuter sur Windows
+                const remotePs = `powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command "${ps}"`;
+                // Construire commande SSH (BatchMode pour ne pas bloquer)
+                const parts = [
+                    'ssh',
+                    '-o', 'BatchMode=yes',
+                    ...(sshPort ? ['-p', sshPort] : []),
+                    ...(sshKey ? ['-i', `"${sshKey}"`] : []),
+                    ...(sshExtra ? [sshExtra] : []),
+                    `${sshUser}@${sshHost}`,
+                    `"${remotePs.replace(/"/g, '\\"')}"`
+                ];
+                const sshCommand = parts.join(' ');
+                console.log(`📝 SSH: ${this._maskCommandForLogs(sshCommand)}`);
+
+                const r = await execAsync(sshCommand, {
                     timeout: config.timeoutMs,
                     maxBuffer: 10 * 1024 * 1024
                 });
@@ -239,6 +306,9 @@ class EdiJobService {
                 entrypoint: process.env.SILOG_ENTRYPOINT || 'EDI_JOB',
                 hasPassword: !!(process.env.SILOG_PASSWORD || '')
             };
+
+            const remoteMode = String(process.env.SILOG_REMOTE_MODE || '').trim().toLowerCase();
+            const sshConfigured = !!(process.env.SILOG_SSH_HOST && process.env.SILOG_SSH_USER);
             
             // Vérifier si le fichier existe (si le chemin est absolu)
             const fs = require('fs');
@@ -264,7 +334,13 @@ class EdiJobService {
                 pathExists: pathExists,
                 pathError: pathError,
                 // Password peut être vide (Franck utilise "-p" sans valeur).
-                ready: pathExists !== false && !!config.profil && !!config.utilisateur && !!config.codeTache
+                ready:
+                    (process.platform === 'win32'
+                        ? (pathExists !== false && !!config.profil && !!config.utilisateur && !!config.codeTache)
+                        : (remoteMode === 'ssh' && sshConfigured && !!config.profil && !!config.utilisateur && !!config.codeTache)),
+                platform: process.platform,
+                remoteMode,
+                sshConfigured
             };
             
         } catch (error) {
