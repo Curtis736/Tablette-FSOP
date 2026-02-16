@@ -1626,6 +1626,18 @@ class OperateurInterface {
 
     resumeRunningOperation(operation) {
         this.isRunning = true;
+        const parseLocalDateOnly = (dc) => {
+            // dc: "YYYY-MM-DD" (ne pas utiliser new Date(dc) => UTC => 01:00 en hiver)
+            const s = String(dc || '').trim();
+            const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(s);
+            if (!m) return null;
+            const y = Number(m[1]);
+            const mo = Number(m[2]) - 1;
+            const d = Number(m[3]);
+            const out = new Date(y, mo, d, 0, 0, 0, 0);
+            return isNaN(out.getTime()) ? null : out;
+        };
+        const isTimeLike = (t) => typeof t === 'string' && /^\d{2}:\d{2}(:\d{2})?$/.test(t);
         // Utiliser un timestamp complet si dispo (sinon la date seule donne des heures fantômes comme 01:00)
         const startedAt = operation?.startedAt || null;
         if (startedAt) {
@@ -1634,12 +1646,21 @@ class OperateurInterface {
             // Fallback: tenter de combiner dateCreation + startTime "HH:mm"
             const dc = operation?.dateCreation || operation?.DateCreation || null;
             const st = operation?.startTime || operation?.HeureDebut || null;
-            if (dc && st && typeof st === 'string' && /^\d{2}:\d{2}(:\d{2})?$/.test(st)) {
-                const d = new Date(dc);
-                const datePart = isNaN(d.getTime()) ? null : d.toISOString().slice(0, 10);
-                this.startTime = datePart ? new Date(`${datePart}T${st}`) : new Date();
+            if (dc && st && isTimeLike(st)) {
+                const dcStr = String(dc || '').trim().slice(0, 10);
+                // Si dc est déjà "YYYY-MM-DD", construire directement "YYYY-MM-DDTHH:mm:ss"
+                if (/^\d{4}-\d{2}-\d{2}$/.test(dcStr)) {
+                    this.startTime = new Date(`${dcStr}T${st}`);
+                } else {
+                    const d = parseLocalDateOnly(dcStr) || parseLocalDateOnly(dc);
+                    const datePart =
+                        d ? `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}` : null;
+                    this.startTime = datePart ? new Date(`${datePart}T${st}`) : new Date();
+                }
             } else {
-                this.startTime = dc ? new Date(dc) : new Date();
+                // Ne jamais parser une date seule "YYYY-MM-DD" avec new Date() (UTC)
+                const d = parseLocalDateOnly(dc);
+                this.startTime = d || (dc ? new Date(dc) : new Date());
             }
         }
         
@@ -1673,8 +1694,17 @@ class OperateurInterface {
         this.statusDisplay.textContent = 'En pause';
 
         // Si le backend fournit startedAt/heure de pause complète, l'utiliser; sinon fallback sur dateCreation.
+        const parseLocalDateOnly = (dc) => {
+            const s = String(dc || '').trim();
+            const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(s);
+            if (!m) return null;
+            const out = new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]), 0, 0, 0, 0);
+            return isNaN(out.getTime()) ? null : out;
+        };
         const pausedAt = operation?.startedAt || operation?.dateCreation || operation?.DateCreation || null;
-        const pauseSince = pausedAt ? new Date(pausedAt) : new Date();
+        const pauseSince = pausedAt
+            ? (typeof pausedAt === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(pausedAt) ? (parseLocalDateOnly(pausedAt) || new Date()) : new Date(pausedAt))
+            : new Date();
         
         this.lancementDetails.innerHTML = `
             <strong>Lancement: ${lancementCode}</strong><br>

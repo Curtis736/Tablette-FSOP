@@ -1548,8 +1548,8 @@ router.get('/current/:operatorCode', authenticateOperator, async (req, res) => {
                 h.CodeLanctImprod,
                 h.Ident,
                 h.Statut,
-                h.HeureDebut,
-                h.DateCreation,
+                CONVERT(VARCHAR(8), h.HeureDebut, 108) AS HeureDebut, -- HH:mm:ss (stable)
+                CONVERT(VARCHAR(10), h.DateCreation, 23) AS DateCreation, -- YYYY-MM-DD (stable, évite décalage timezone)
                 h.CreatedAt,
                 COALESCE(h.Phase, 'PRODUCTION') AS Phase,
                 h.CodeRubrique,
@@ -1593,9 +1593,8 @@ router.get('/current/:operatorCode', authenticateOperator, async (req, res) => {
         let startedAt = operation.CreatedAt || null;
         if (!startedAt && operation.DateCreation && operation.HeureDebut) {
             // Construire une string ISO-like: YYYY-MM-DDTHH:mm:ss (sans timezone) pour un parse stable
-            const d = new Date(operation.DateCreation);
-            const datePart = d.toISOString().slice(0, 10);
-            const timeStr = String(operation.HeureDebut).length >= 5 ? String(operation.HeureDebut) : null;
+            const datePart = String(operation.DateCreation || '').slice(0, 10);
+            const timeStr = String(operation.HeureDebut || '').length >= 5 ? String(operation.HeureDebut) : null;
             if (datePart && timeStr) {
                 startedAt = `${datePart}T${timeStr}`;
             }
