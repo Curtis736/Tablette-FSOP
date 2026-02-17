@@ -24,6 +24,11 @@ const cacheService = require('./services/CacheService');
 const app = express();
 const PORT = process.env.PORT || 3001;
 
+// Derrière Nginx / reverse proxy, activer trust proxy pour que express-rate-limit
+// utilise correctement X-Forwarded-For (sinon warning + mauvais keying).
+// Sécurisé: on fait confiance au proxy local (docker/nginx) uniquement.
+app.set('trust proxy', 1);
+
 // CORS configuration - MUST be before Helmet
 const allowedOrigins = [
     'http://localhost:8080',
@@ -249,6 +254,11 @@ let server = null;
 // Fonction de nettoyage automatique
 async function performStartupCleanup() {
     try {
+        if (String(process.env.DISABLE_STARTUP_CLEANUP || '').toLowerCase() === 'true') {
+            console.log('🧹 Nettoyage automatique désactivé (DISABLE_STARTUP_CLEANUP=true)');
+            return;
+        }
+
         console.log('🧹 Nettoyage automatique au démarrage...');
         
         const { executeQuery } = require('./config/database');
@@ -271,9 +281,11 @@ async function performStartupCleanup() {
             LEFT JOIN [SEDI_APP_INDEPENDANTE].[dbo].[ABSESSIONS_OPERATEURS] s 
                 ON h.OperatorCode = s.OperatorCode 
                 AND s.SessionStatus = 'ACTIVE'
-                AND CAST(s.DateCreation AS DATE) = CAST(GETDATE() AS DATE)
+                AND s.DateCreation >= CONVERT(date, GETDATE())
+                AND s.DateCreation <  DATEADD(day, 1, CONVERT(date, GETDATE()))
             WHERE h.Statut IN ('EN_COURS', 'EN_PAUSE')
-                AND CAST(h.DateCreation AS DATE) = CAST(GETDATE() AS DATE)
+                AND h.DateCreation >= CONVERT(date, GETDATE())
+                AND h.DateCreation <  DATEADD(day, 1, CONVERT(date, GETDATE()))
                 AND s.OperatorCode IS NULL
                 AND h.OperatorCode IS NOT NULL
                 AND h.OperatorCode != ''
@@ -284,16 +296,21 @@ async function performStartupCleanup() {
         
         // Nettoyer les doublons d'opérations
         const duplicatesQuery = `
+            -- ⚡ Limiter le nettoyage aux événements récents (évite scans énormes + timeouts)
+            DECLARE @startDate date = DATEADD(day, -7, CONVERT(date, GETDATE()));
+            DECLARE @endDate   date = DATEADD(day,  1, CONVERT(date, GETDATE()));
             WITH DuplicateEvents AS (
                 SELECT NoEnreg,
                        ROW_NUMBER() OVER (
-                           PARTITION BY OperatorCode, CodeLanctImprod, CAST(DateCreation AS DATE), Ident, Phase
+                           PARTITION BY OperatorCode, CodeLanctImprod, CONVERT(date, DateCreation), Ident, Phase
                            ORDER BY DateCreation ASC, NoEnreg ASC
                        ) as rn
                 FROM [SEDI_APP_INDEPENDANTE].[dbo].[ABHISTORIQUE_OPERATEURS]
                 WHERE OperatorCode IS NOT NULL 
                     AND OperatorCode != ''
                     AND OperatorCode != '0'
+                    AND DateCreation >= @startDate
+                    AND DateCreation <  @endDate
             )
             DELETE FROM [SEDI_APP_INDEPENDANTE].[dbo].[ABHISTORIQUE_OPERATEURS]
             WHERE NoEnreg IN (
@@ -336,8 +353,12 @@ if (shouldStartServer()) {
                 // Effectuer le nettoyage automatique au démarrage
                 await performStartupCleanup();
                 
-                // Démarrer le nettoyage périodique
-                startPeriodicCleanup();
+                // Démarrer le nettoyage périodique uniquement si explicitement activé
+                if (String(process.env.ENABLE_PERIODIC_CLEANUP || '').toLowerCase() === 'true') {
+                    startPeriodicCleanup();
+                } else {
+                    console.log('🧹 Nettoyage périodique désactivé (ENABLE_PERIODIC_CLEANUP!=true)');
+                }
                 
                 resolve(serverInstance);
             });
