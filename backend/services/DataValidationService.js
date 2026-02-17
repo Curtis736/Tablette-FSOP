@@ -182,9 +182,9 @@ class DataValidationService {
                         WHEN r.Coderessource IS NULL THEN 'NO_RESOURCE'
                         ELSE 'INVALID_ASSOCIATION'
                     END as associationStatus
-                FROM [SEDI_APP_INDEPENDANTE].[dbo].[ABHISTORIQUE_OPERATEURS] h
-                LEFT JOIN [SEDI_ERP].[dbo].[RESSOURC] r ON h.OperatorCode = r.Coderessource
-                LEFT JOIN [SEDI_ERP].[dbo].[LCTE] l ON l.CodeLancement = h.CodeLanctImprod
+                FROM [SEDI_APP_INDEPENDANTE].[dbo].[ABHISTORIQUE_OPERATEURS] h WITH (NOLOCK)
+                LEFT JOIN [SEDI_ERP].[dbo].[RESSOURC] r WITH (NOLOCK) ON h.OperatorCode = r.Coderessource
+                LEFT JOIN [SEDI_ERP].[dbo].[LCTE] l WITH (NOLOCK) ON l.CodeLancement = h.CodeLanctImprod
                 WHERE h.OperatorCode IS NOT NULL 
                     AND h.OperatorCode != ''
                     AND h.OperatorCode != '0'

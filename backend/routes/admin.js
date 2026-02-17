@@ -916,7 +916,7 @@ async function getAdminStats(date) {
                         PARTITION BY h.OperatorCode
                         ORDER BY h.DateCreation DESC, h.NoEnreg DESC
                     ) AS rn
-                FROM [SEDI_APP_INDEPENDANTE].[dbo].[ABHISTORIQUE_OPERATEURS] h
+                FROM [SEDI_APP_INDEPENDANTE].[dbo].[ABHISTORIQUE_OPERATEURS] h WITH (NOLOCK)
                 -- ⚡ SARGABLE date filter (avoid CAST(DateCreation AS DATE) which can force scans)
                 WHERE h.DateCreation >= CONVERT(date, GETDATE())
                   AND h.DateCreation <  DATEADD(day, 1, CONVERT(date, GETDATE()))
@@ -928,7 +928,7 @@ async function getAdminStats(date) {
             FROM (
                 -- Opérateurs connectés (session ACTIVE)
                 SELECT s.OperatorCode
-                FROM [SEDI_APP_INDEPENDANTE].[dbo].[ABSESSIONS_OPERATEURS] s
+                FROM [SEDI_APP_INDEPENDANTE].[dbo].[ABSESSIONS_OPERATEURS] s WITH (NOLOCK)
                 WHERE s.SessionStatus = 'ACTIVE'
                   AND s.DateCreation >= CONVERT(date, GETDATE())
                   AND s.DateCreation <  DATEADD(day, 1, CONVERT(date, GETDATE()))
@@ -977,7 +977,7 @@ async function getAdminStats(date) {
         try {
             const transmittedQuery = `
                 SELECT OperatorCode, LancementCode, Phase, CodeRubrique
-                FROM [SEDI_APP_INDEPENDANTE].[dbo].[ABTEMPS_OPERATEURS]
+                FROM [SEDI_APP_INDEPENDANTE].[dbo].[ABTEMPS_OPERATEURS] WITH (NOLOCK)
                 WHERE StatutTraitement = 'T'
                   -- ABTEMPS.DateCreation is stored as DATE (see insertion), keep predicate sargable
                   AND DateCreation = @date
@@ -1985,7 +1985,7 @@ router.get('/operators', async (req, res) => {
         const operatorsQuery = `
             WITH active_sessions AS (
                 SELECT DISTINCT s.OperatorCode, s.LoginTime, s.SessionStatus, s.DeviceInfo
-                FROM [SEDI_APP_INDEPENDANTE].[dbo].[ABSESSIONS_OPERATEURS] s
+                FROM [SEDI_APP_INDEPENDANTE].[dbo].[ABSESSIONS_OPERATEURS] s WITH (NOLOCK)
                 WHERE s.SessionStatus = 'ACTIVE'
                   -- ⚡ SARGABLE date filter
                   AND s.DateCreation >= CONVERT(date, GETDATE())
@@ -2002,7 +2002,7 @@ router.get('/operators', async (req, res) => {
                         PARTITION BY h.OperatorCode
                         ORDER BY h.DateCreation DESC, h.NoEnreg DESC
                     ) AS rn
-                FROM [SEDI_APP_INDEPENDANTE].[dbo].[ABHISTORIQUE_OPERATEURS] h
+                FROM [SEDI_APP_INDEPENDANTE].[dbo].[ABHISTORIQUE_OPERATEURS] h WITH (NOLOCK)
                 WHERE h.DateCreation >= CONVERT(date, GETDATE())
                   AND h.DateCreation <  DATEADD(day, 1, CONVERT(date, GETDATE()))
                   AND h.OperatorCode IS NOT NULL
@@ -2052,7 +2052,7 @@ router.get('/operators', async (req, res) => {
               ON ao.OperatorCode = s.OperatorCode
             LEFT JOIN last_event le
               ON ao.OperatorCode = le.OperatorCode
-            LEFT JOIN [SEDI_ERP].[dbo].[RESSOURC] r
+            LEFT JOIN [SEDI_ERP].[dbo].[RESSOURC] r WITH (NOLOCK)
               ON ao.OperatorCode = r.Coderessource
             ORDER BY ao.OperatorCode
         `;
