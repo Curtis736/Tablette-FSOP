@@ -9,6 +9,105 @@ const DurationCalculationService = require('./DurationCalculationService');
 
 class ConsolidationService {
     /**
+     * Retourne une clé de date locale YYYY-MM-DD (évite les décalages UTC sur les champs SQL DATE)
+     */
+    static _localDateKey(value) {
+        if (!value) return null;
+        const d = value instanceof Date ? new Date(value) : new Date(value);
+        if (Number.isNaN(d.getTime())) return null;
+        const yyyy = d.getFullYear();
+        const mm = String(d.getMonth() + 1).padStart(2, '0');
+        const dd = String(d.getDate()).padStart(2, '0');
+        return `${yyyy}-${mm}-${dd}`;
+    }
+
+    /**
+     * Sélectionne le "dernier cycle" (DEBUT..FIN) pertinent parmi tous les événements d'un opérateur/lancement.
+     * - Si options.phase / options.codeRubrique / options.dateCreation sont fournis, on scope dessus.
+     * - Sinon on infère à partir du dernier événement FIN (ou à défaut du dernier événement).
+     * @returns {Object} { scopedEvents, debutEvent, finEvent, inferredPhase, inferredCodeRubrique, inferredDateKey }
+     */
+    static _selectLatestCycleEvents(allEvents, options = {}) {
+        const optPhase = options.phase ?? options.Phase ?? null;
+        const optCodeRubrique = options.codeRubrique ?? options.CodeRubrique ?? null;
+        const optDate = options.dateCreation ?? options.date ?? options.DateCreation ?? null;
+        const optDateKey = this._localDateKey(optDate);
+
+        const getEventDateTime = (e) => {
+            const v = e.CreatedAt || e.createdAt || e.DateCreation || e.dateCreation;
+            const d = new Date(v);
+            if (!Number.isNaN(d.getTime())) return d;
+            return new Date(0);
+        };
+
+        const sorted = [...allEvents].sort((a, b) => {
+            const da = getEventDateTime(a).getTime();
+            const db = getEventDateTime(b).getTime();
+            if (da !== db) return da - db;
+            return (a.NoEnreg || 0) - (b.NoEnreg || 0);
+        });
+
+        const lastFin = [...sorted].reverse().find(e => String(e.Ident || '').toUpperCase() === 'FIN');
+        const lastAny = sorted.length ? sorted[sorted.length - 1] : null;
+        const ref = lastFin || lastAny;
+
+        const inferredPhase = (optPhase ?? ref?.Phase ?? null);
+        const inferredCodeRubrique = (optCodeRubrique ?? ref?.CodeRubrique ?? null);
+        const inferredDateKey = (optDateKey ?? this._localDateKey(ref?.DateCreation || ref?.CreatedAt || ref?.createdAt) ?? null);
+
+        const scoped = sorted.filter(e => {
+            if (inferredDateKey) {
+                const dk = this._localDateKey(e.DateCreation || e.dateCreation || e.CreatedAt || e.createdAt);
+                if (dk !== inferredDateKey) return false;
+            }
+            if (inferredPhase && String(e.Phase || '').trim() !== String(inferredPhase).trim()) return false;
+            if (inferredCodeRubrique && String(e.CodeRubrique || '').trim() !== String(inferredCodeRubrique).trim()) return false;
+            return true;
+        });
+
+        // Dans le scope, prendre le dernier FIN puis le DEBUT le plus proche avant.
+        let finIdx = -1;
+        for (let i = scoped.length - 1; i >= 0; i--) {
+            if (String(scoped[i].Ident || '').toUpperCase() === 'FIN') {
+                finIdx = i;
+                break;
+            }
+        }
+        if (finIdx === -1) {
+            const debutEvent = [...scoped].reverse().find(e => String(e.Ident || '').toUpperCase() === 'DEBUT') || null;
+            return {
+                scopedEvents: scoped,
+                debutEvent,
+                finEvent: null,
+                inferredPhase,
+                inferredCodeRubrique,
+                inferredDateKey
+            };
+        }
+
+        let debutIdx = -1;
+        for (let i = finIdx; i >= 0; i--) {
+            if (String(scoped[i].Ident || '').toUpperCase() === 'DEBUT') {
+                debutIdx = i;
+                break;
+            }
+        }
+
+        const cycleEvents = debutIdx >= 0 ? scoped.slice(debutIdx, finIdx + 1) : scoped.slice(0, finIdx + 1);
+        const debutEvent = cycleEvents.find(e => String(e.Ident || '').toUpperCase() === 'DEBUT') || null;
+        const finEvent = cycleEvents.find(e => String(e.Ident || '').toUpperCase() === 'FIN') || null;
+
+        return {
+            scopedEvents: cycleEvents,
+            debutEvent,
+            finEvent,
+            inferredPhase,
+            inferredCodeRubrique,
+            inferredDateKey
+        };
+    }
+
+    /**
      * Consolide une opération terminée dans ABTEMPS_OPERATEURS
      * @param {string} operatorCode - Code opérateur
      * @param {string} lancementCode - Code lancement
@@ -20,75 +119,8 @@ class ConsolidationService {
         
         try {
             console.log(`🔄 Consolidation de ${operatorCode}/${lancementCode}...`);
-            
-            // 1. Vérifier si déjà consolidé
-            if (!force) {
-                const existingQuery = `
-                    SELECT TempsId 
-                    FROM [SEDI_APP_INDEPENDANTE].[dbo].[ABTEMPS_OPERATEURS]
-                    WHERE OperatorCode = @operatorCode 
-                      AND LancementCode = @lancementCode
-                `;
-                
-                const existing = await executeQuery(existingQuery, { operatorCode, lancementCode });
-                
-                if (existing.length > 0) {
-                    console.log(`ℹ️ Opération déjà consolidée: TempsId=${existing[0].TempsId}`);
-                    return {
-                        success: true,
-                        tempsId: existing[0].TempsId,
-                        error: null,
-                        warnings: ['Opération déjà consolidée'],
-                        alreadyExists: true
-                    };
-                }
-            }
-            
-            // 2. Validation préalable
-            const validation = await OperationValidationService.validateConsolidationData(operatorCode, lancementCode);
-            
-            if (!validation.valid) {
-                // Auto-correction si activée
-                if (autoFix && validation.events.length > 0) {
-                    console.log(`🔧 Tentative d'auto-correction...`);
-                    const fixed = OperationValidationService.autoFixOperationEvents(validation.events);
-                    
-                    if (fixed.fixed) {
-                        console.log(`✅ Auto-corrections appliquées:`, fixed.fixes);
-                        // Re-valider après correction
-                        const revalidation = await OperationValidationService.validateConsolidationData(operatorCode, lancementCode);
-                        if (revalidation.valid) {
-                            console.log(`✅ Validation réussie après auto-correction`);
-                        } else {
-                            // Si toujours invalide après correction, retourner l'erreur
-                            return {
-                                success: false,
-                                tempsId: null,
-                                error: `Opération invalide après auto-correction: ${revalidation.errors.join(', ')}`,
-                                warnings: fixed.fixes
-                            };
-                        }
-                    } else {
-                        // Auto-correction impossible
-                        return {
-                            success: false,
-                            tempsId: null,
-                            error: `Opération invalide: ${validation.errors.join(', ')}`,
-                            warnings: validation.warnings
-                        };
-                    }
-                } else {
-                    // Auto-correction désactivée ou impossible
-                    return {
-                        success: false,
-                        tempsId: null,
-                        error: `Opération invalide: ${validation.errors.join(', ')}`,
-                        warnings: validation.warnings
-                    };
-                }
-            }
-            
-            // 3. Récupérer tous les événements (après validation)
+
+            // 1. Récupérer tous les événements (on scoper ensuite sur le dernier cycle)
             const eventsQuery = `
                 SELECT * 
                 FROM [SEDI_APP_INDEPENDANTE].[dbo].[ABHISTORIQUE_OPERATEURS]
@@ -97,9 +129,9 @@ class ConsolidationService {
                 ORDER BY DateCreation ASC, NoEnreg ASC
             `;
             
-            const events = await executeQuery(eventsQuery, { operatorCode, lancementCode });
-            
-            if (events.length === 0) {
+            const allEvents = await executeQuery(eventsQuery, { operatorCode, lancementCode });
+
+            if (!allEvents || allEvents.length === 0) {
                 return {
                     success: false,
                     tempsId: null,
@@ -107,21 +139,55 @@ class ConsolidationService {
                     warnings: []
                 };
             }
-            
-            // 4. Trouver les événements clés
-            const debutEvent = events.find(e => e.Ident === 'DEBUT');
-            const finEvent = events.find(e => e.Ident === 'FIN');
-            
+
+            // 2. Sélectionner le dernier cycle (évite de consolider un ancien jour/cycle)
+            const selected = this._selectLatestCycleEvents(allEvents, options);
+            let events = selected.scopedEvents;
+            let debutEvent = selected.debutEvent;
+            let finEvent = selected.finEvent;
+
+            // 3. Validation du cycle sélectionné
+            let validation = OperationValidationService.validateOperationEvents(events);
+            if (!validation.valid) {
+                if (autoFix && validation.events && validation.events.length > 0) {
+                    console.log(`🔧 Tentative d'auto-correction...`);
+                    const fixed = OperationValidationService.autoFixOperationEvents(validation.events);
+                    if (fixed.fixed) {
+                        console.log(`✅ Auto-corrections appliquées:`, fixed.fixes);
+                        events = fixed.fixedEvents;
+                        validation = OperationValidationService.validateOperationEvents(events);
+                    }
+                    if (!validation.valid) {
+                        return {
+                            success: false,
+                            tempsId: null,
+                            error: `Opération invalide: ${validation.errors.join(', ')}`,
+                            warnings: fixed.fixes || validation.warnings || []
+                        };
+                    }
+                } else {
+                    return {
+                        success: false,
+                        tempsId: null,
+                        error: `Opération invalide: ${validation.errors.join(', ')}`,
+                        warnings: validation.warnings || []
+                    };
+                }
+            }
+
+            // Reprendre les events clés après validation (sur le cycle)
+            debutEvent = events.find(e => String(e.Ident || '').toUpperCase() === 'DEBUT') || debutEvent;
+            finEvent = events.find(e => String(e.Ident || '').toUpperCase() === 'FIN') || finEvent;
             if (!debutEvent || !finEvent) {
                 return {
                     success: false,
                     tempsId: null,
-                    error: 'Événements DEBUT ou FIN manquants',
-                    warnings: []
+                    error: 'Événements DEBUT ou FIN manquants (cycle sélectionné)',
+                    warnings: validation.warnings || []
                 };
             }
-            
-            // 5. Calculer les durées (utiliser le service unifié)
+
+            // 4. Calculer les durées (sur le cycle sélectionné)
             const durations = DurationCalculationService.calculateDurations(events);
             
             // IMPORTANT: la "date de travail" doit rester celle des événements (pas la date de consolidation),
@@ -241,6 +307,36 @@ class ConsolidationService {
 
             const startTime = buildDateTime(debutEvent, 'start');
             const endTime = buildDateTime(finEvent, 'end');
+
+            // 8. Vérifier si déjà consolidé (sur les clés complètes : opérateur + LT + phase + rubrique + date)
+            if (!force) {
+                const existingQuery = `
+                    SELECT TempsId 
+                    FROM [SEDI_APP_INDEPENDANTE].[dbo].[ABTEMPS_OPERATEURS]
+                    WHERE OperatorCode = @operatorCode 
+                      AND LancementCode = @lancementCode
+                      AND ISNULL(LTRIM(RTRIM(Phase)), '') = ISNULL(LTRIM(RTRIM(@phase)), '')
+                      AND ISNULL(LTRIM(RTRIM(CodeRubrique)), '') = ISNULL(LTRIM(RTRIM(@codeRubrique)), '')
+                      AND CAST(DateCreation AS DATE) = CAST(@dateCreation AS DATE)
+                `;
+                const existing = await executeQuery(existingQuery, {
+                    operatorCode,
+                    lancementCode,
+                    phase,
+                    codeRubrique,
+                    dateCreation: opDate
+                });
+                if (existing.length > 0) {
+                    console.log(`ℹ️ Opération déjà consolidée: TempsId=${existing[0].TempsId}`);
+                    return {
+                        success: true,
+                        tempsId: existing[0].TempsId,
+                        error: null,
+                        warnings: ['Opération déjà consolidée'],
+                        alreadyExists: true
+                    };
+                }
+            }
             
             // 8. Vérifier à nouveau si déjà consolidé (race condition)
             if (!force) {

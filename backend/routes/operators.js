@@ -1337,7 +1337,13 @@ router.post('/stop', async (req, res) => {
         // Nécessaire pour que le transfert fonctionne côté admin
         try {
             const ConsolidationService = require('../services/ConsolidationService');
-            const consolidationResult = await ConsolidationService.consolidateOperation(operatorId, lancementCode, { autoFix: true });
+            // Passer phase/codeRubrique/date pour consolider le BON cycle (et éviter de tomber sur un ancien jour)
+            const consolidationResult = await ConsolidationService.consolidateOperation(operatorId, lancementCode, { 
+                autoFix: true,
+                phase,
+                codeRubrique,
+                dateCreation: currentDate
+            });
             
             if (consolidationResult.success) {
                 console.log(`✅ Consolidation automatique réussie: TempsId=${consolidationResult.tempsId}`);
