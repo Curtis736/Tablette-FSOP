@@ -394,8 +394,8 @@ class ApiService {
         const cacheKey = '/admin/operators/all';
         const cached = this.cache.get(cacheKey);
         
-        // Utiliser le cache si disponible et récent (< 60 secondes) car cette liste change rarement
-        if (!forceRefresh && cached && (Date.now() - cached.timestamp) < 60000) {
+        // Utiliser le cache si disponible et récent (< 10 minutes) car cette liste change rarement
+        if (!forceRefresh && cached && (Date.now() - cached.timestamp) < 10 * 60 * 1000) {
             console.log('📦 Utilisation du cache pour /admin/operators/all');
             return cached.data;
         }

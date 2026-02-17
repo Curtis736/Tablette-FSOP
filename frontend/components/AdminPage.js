@@ -247,13 +247,17 @@ class AdminPage {
             } else if (timeSinceLastEdit <= 5000) {
                 console.log(`⏸️ Rechargement automatique ignoré (édition récente il y a ${Math.round(timeSinceLastEdit/1000)}s)`);
             }
-        }, 15000); // Toutes les 15 secondes (réduit pour éviter le rate limiting)
+        }, 30000); // Toutes les 30 secondes (réduit pour éviter surcharge/timeout)
 
         // Mise à jour temps réel des opérateurs connectés (réduit pour éviter le rate limiting)
         this.lastOperatorsUpdate = 0; // Timestamp de la dernière mise à jour des opérateurs
         this.operatorsInterval = setInterval(() => {
             // Ne pas mettre à jour si trop d'erreurs
             if (this.consecutiveErrors < this.maxConsecutiveErrors) {
+                if (this.isLoading) {
+                    // Éviter d'empiler des requêtes pendant un loadData en cours
+                    return;
+                }
                 // Vérifier si on a des données récentes (< 10 secondes) pour éviter les requêtes redondantes
                 const timeSinceLastUpdate = Date.now() - this.lastOperatorsUpdate;
                 if (timeSinceLastUpdate < 10000) {
@@ -262,7 +266,7 @@ class AdminPage {
                 }
                 this.updateOperatorsStatus();
             }
-        }, 15000); // Toutes les 15 secondes (au lieu de 5) pour réduire le rate limiting
+        }, 60000); // Toutes les 60 secondes (évite surcharge + timeouts)
     }
 
     async loadData(enableAutoConsolidate = true) {
@@ -331,16 +335,15 @@ class AdminPage {
             // même si le timeout se déclenche après coup (ou dans des environnements de test).
             const timeoutPromiseHandled = timeoutPromise.catch((e) => { throw e; });
             
-            // Charger les données en parallèle avec timeout
+            // Charger le minimum en parallèle (⚡ éviter de bloquer loadData sur /operators/all qui peut être lent)
             const dataPromises = Promise.all([
                 this.apiService.getAdminData(today),
-                this.apiService.getConnectedOperators(),
-                this.apiService.getAllOperators() // Charger aussi la liste globale
+                this.apiService.getConnectedOperators()
             ]);
             
-            let adminData, operatorsData, allOperatorsData;
+            let adminData, operatorsData;
             try {
-                [adminData, operatorsData, allOperatorsData] = await Promise.race([
+                [adminData, operatorsData] = await Promise.race([
                     dataPromises,
                     timeoutPromiseHandled
                 ]);
@@ -510,11 +513,30 @@ class AdminPage {
             
             // Mettre à jour le menu déroulant des opérateurs avec les deux listes
             const connectedOps = operatorsData && (operatorsData.success ? operatorsData.operators : operatorsData.operators) || [];
-            const allOps = allOperatorsData && (allOperatorsData.success ? allOperatorsData.operators : allOperatorsData.operators) || [];
-            
-            if (connectedOps.length > 0 || allOps.length > 0) {
-                this.updateOperatorSelect(connectedOps, allOps);
-                this.lastOperatorsUpdate = Date.now(); // Mettre à jour le timestamp
+            // Utiliser une cache locale pour la liste complète (évite de re-télécharger pendant les refresh)
+            const cachedAll = this._allOperatorsCache || [];
+            if (connectedOps.length > 0 || cachedAll.length > 0) {
+                this.updateOperatorSelect(connectedOps, cachedAll);
+                this.lastOperatorsUpdate = Date.now();
+            }
+
+            // Charger "tous les opérateurs" en arrière-plan (rarement), sans bloquer loadData
+            const allCacheAge = Date.now() - (this._allOperatorsCacheAt || 0);
+            const shouldRefreshAll = !this._allOperatorsCacheAt || allCacheAge > 10 * 60 * 1000; // 10 minutes
+            if (shouldRefreshAll) {
+                this.apiService.getAllOperators()
+                    .then((allOperatorsData) => {
+                        const allOps = allOperatorsData && (allOperatorsData.success ? allOperatorsData.operators : allOperatorsData.operators) || [];
+                        this._allOperatorsCache = allOps;
+                        this._allOperatorsCacheAt = Date.now();
+                        if (connectedOps.length > 0 || allOps.length > 0) {
+                            this.updateOperatorSelect(connectedOps, allOps);
+                            this.lastOperatorsUpdate = Date.now();
+                        }
+                    })
+                    .catch((e) => {
+                        console.warn('⚠️ Impossible de charger la liste globale des opérateurs (non bloquant):', e?.message || e);
+                    });
             }
             
             // Mettre à jour l'affichage des opérateurs connectés (toujours, même si vide)
