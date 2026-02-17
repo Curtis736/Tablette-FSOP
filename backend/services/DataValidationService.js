@@ -188,7 +188,11 @@ class DataValidationService {
                 WHERE h.OperatorCode IS NOT NULL 
                     AND h.OperatorCode != ''
                     AND h.OperatorCode != '0'
-                    ${targetDate ? 'AND CAST(h.DateCreation AS DATE) = @date' : ''}
+                    ${
+                        targetDate
+                            ? "AND h.DateCreation >= @date AND h.DateCreation < DATEADD(day, 1, @date)"
+                            : ''
+                    }
                 ORDER BY h.DateCreation DESC
             `;
             

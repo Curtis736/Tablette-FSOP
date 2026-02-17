@@ -917,7 +917,9 @@ async function getAdminStats(date) {
                         ORDER BY h.DateCreation DESC, h.NoEnreg DESC
                     ) AS rn
                 FROM [SEDI_APP_INDEPENDANTE].[dbo].[ABHISTORIQUE_OPERATEURS] h
-                WHERE CAST(h.DateCreation AS DATE) = CAST(GETDATE() AS DATE)
+                -- ⚡ SARGABLE date filter (avoid CAST(DateCreation AS DATE) which can force scans)
+                WHERE h.DateCreation >= CONVERT(date, GETDATE())
+                  AND h.DateCreation <  DATEADD(day, 1, CONVERT(date, GETDATE()))
                   AND h.OperatorCode IS NOT NULL
                   AND LTRIM(RTRIM(h.OperatorCode)) <> ''
                   AND h.OperatorCode <> '0'
@@ -928,7 +930,8 @@ async function getAdminStats(date) {
                 SELECT s.OperatorCode
                 FROM [SEDI_APP_INDEPENDANTE].[dbo].[ABSESSIONS_OPERATEURS] s
                 WHERE s.SessionStatus = 'ACTIVE'
-                  AND CAST(s.DateCreation AS DATE) = CAST(GETDATE() AS DATE)
+                  AND s.DateCreation >= CONVERT(date, GETDATE())
+                  AND s.DateCreation <  DATEADD(day, 1, CONVERT(date, GETDATE()))
 
                 UNION
 
@@ -976,7 +979,8 @@ async function getAdminStats(date) {
                 SELECT OperatorCode, LancementCode, Phase, CodeRubrique
                 FROM [SEDI_APP_INDEPENDANTE].[dbo].[ABTEMPS_OPERATEURS]
                 WHERE StatutTraitement = 'T'
-                  AND CAST(DateCreation AS DATE) = @date
+                  -- ABTEMPS.DateCreation is stored as DATE (see insertion), keep predicate sargable
+                  AND DateCreation = @date
             `;
             const transmitted = await executeQuery(transmittedQuery, { date: targetDate });
             const transmittedSet = new Set(
@@ -1983,7 +1987,9 @@ router.get('/operators', async (req, res) => {
                 SELECT DISTINCT s.OperatorCode, s.LoginTime, s.SessionStatus, s.DeviceInfo
                 FROM [SEDI_APP_INDEPENDANTE].[dbo].[ABSESSIONS_OPERATEURS] s
                 WHERE s.SessionStatus = 'ACTIVE'
-                  AND CAST(s.DateCreation AS DATE) = CAST(GETDATE() AS DATE)
+                  -- ⚡ SARGABLE date filter
+                  AND s.DateCreation >= CONVERT(date, GETDATE())
+                  AND s.DateCreation <  DATEADD(day, 1, CONVERT(date, GETDATE()))
             ),
             last_per_operator AS (
                 SELECT
@@ -1997,7 +2003,8 @@ router.get('/operators', async (req, res) => {
                         ORDER BY h.DateCreation DESC, h.NoEnreg DESC
                     ) AS rn
                 FROM [SEDI_APP_INDEPENDANTE].[dbo].[ABHISTORIQUE_OPERATEURS] h
-                WHERE CAST(h.DateCreation AS DATE) = CAST(GETDATE() AS DATE)
+                WHERE h.DateCreation >= CONVERT(date, GETDATE())
+                  AND h.DateCreation <  DATEADD(day, 1, CONVERT(date, GETDATE()))
                   AND h.OperatorCode IS NOT NULL
                   AND LTRIM(RTRIM(h.OperatorCode)) <> ''
                   AND h.OperatorCode <> '0'

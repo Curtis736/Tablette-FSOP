@@ -319,7 +319,7 @@ class ConsolidationService {
                       AND LancementCode = @lancementCode
                       AND ISNULL(LTRIM(RTRIM(Phase)), '') = ISNULL(LTRIM(RTRIM(@phase)), '')
                       AND ISNULL(LTRIM(RTRIM(CodeRubrique)), '') = ISNULL(LTRIM(RTRIM(@codeRubrique)), '')
-                      AND CAST(DateCreation AS DATE) = CAST(@dateCreation AS DATE)
+                      AND DateCreation = @dateCreation
                 `;
                 const existing = await executeQuery(existingQuery, {
                     operatorCode,
@@ -349,7 +349,7 @@ class ConsolidationService {
                       AND LancementCode = @lancementCode
                       AND ISNULL(LTRIM(RTRIM(Phase)), '') = ISNULL(LTRIM(RTRIM(@phase)), '')
                       AND ISNULL(LTRIM(RTRIM(CodeRubrique)), '') = ISNULL(LTRIM(RTRIM(@codeRubrique)), '')
-                      AND CAST(DateCreation AS DATE) = CAST(@dateCreation AS DATE)
+                      AND DateCreation = @dateCreation
                 `;
                 
                 const doubleCheck = await executeQuery(doubleCheckQuery, {
@@ -437,7 +437,7 @@ class ConsolidationService {
                       AND LancementCode = @lancementCode
                       AND ISNULL(LTRIM(RTRIM(Phase)), '') = ISNULL(LTRIM(RTRIM(@phase)), '')
                       AND ISNULL(LTRIM(RTRIM(CodeRubrique)), '') = ISNULL(LTRIM(RTRIM(@codeRubrique)), '')
-                      AND CAST(DateCreation AS DATE) = CAST(@dateCreation AS DATE)
+                      AND DateCreation = @dateCreation
                 `;
                 
                 try {
