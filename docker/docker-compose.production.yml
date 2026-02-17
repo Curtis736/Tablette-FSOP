@@ -20,6 +20,8 @@ services:
     environment:
       - NODE_ENV=production
       - TZ=Europe/Paris
+      # Mitigation: disable heavy startup cleanup that can lock/timeout on large tables
+      - DISABLE_STARTUP_CLEANUP=true
       # Admin authentication (override via docker/.env if needed)
       - ADMIN_USERNAME=${ADMIN_USERNAME:-admin}
       - ADMIN_PASSWORD=${ADMIN_PASSWORD:-admin}
