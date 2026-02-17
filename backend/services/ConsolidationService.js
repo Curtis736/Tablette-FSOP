@@ -194,11 +194,13 @@ class ConsolidationService {
             // sinon le filtre "transféré" côté opérateur (JOIN ABTEMPS.DateCreation = ABHISTO.DateCreation) ne matche pas
             // quand l'admin transfère un jour différent.
             const rawDateCreation = debutEvent?.DateCreation || finEvent?.DateCreation || new Date();
+            // ⚠️ IMPORTANT: éviter de passer un objet Date JS (risque de décalage UTC sur un champ SQL DATE).
+            // On passe une string YYYY-MM-DD stable, castée en DATE côté SQL.
             const opDate = (() => {
-                const d = rawDateCreation instanceof Date ? new Date(rawDateCreation) : new Date(rawDateCreation);
-                if (Number.isNaN(d.getTime())) return new Date();
-                d.setHours(0, 0, 0, 0);
-                return d;
+                const k = this._localDateKey(rawDateCreation);
+                if (k) return k; // 'YYYY-MM-DD'
+                // fallback: aujourd'hui (local)
+                return this._localDateKey(new Date());
             })();
 
             // 6. Déterminer Phase et CodeRubrique (clés ERP)
