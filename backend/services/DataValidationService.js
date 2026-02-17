@@ -149,8 +149,12 @@ class DataValidationService {
     /**
      * Récupérer les données admin avec validation stricte
      */
-    async getAdminDataSecurely() {
+    async getAdminDataSecurely(date = null) {
         try {
+            // ⚡ Perf: si une date est fournie, filtrer en SQL (sinon, on scanne tout l'historique et on risque un 504).
+            // Le frontend admin travaille quasi exclusivement "par jour" (param ?date=YYYY-MM-DD).
+            const targetDate = date ? String(date).trim() : null;
+
             // Récupérer TOUS les événements avec validation stricte
             // IMPORTANT: Convertir HeureDebut et HeureFin en VARCHAR(5) (HH:mm) directement dans SQL
             // pour éviter les problèmes de timezone lors de la conversion par Node.js
@@ -184,10 +188,11 @@ class DataValidationService {
                 WHERE h.OperatorCode IS NOT NULL 
                     AND h.OperatorCode != ''
                     AND h.OperatorCode != '0'
+                    ${targetDate ? 'AND CAST(h.DateCreation AS DATE) = @date' : ''}
                 ORDER BY h.DateCreation DESC
             `;
             
-            const allEvents = await executeQuery(eventsQuery);
+            const allEvents = await executeQuery(eventsQuery, targetDate ? { date: targetDate } : {});
             
             // Filtrer les associations invalides
             const validEvents = allEvents.filter(event => 

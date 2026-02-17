@@ -946,7 +946,8 @@ async function getAdminStats(date) {
         const targetDate = date ? moment(date).format('YYYY-MM-DD') : moment().format('YYYY-MM-DD');
         
         // Utiliser le service de validation pour récupérer les événements (même source que le tableau)
-        const validationResult = await dataValidation.getAdminDataSecurely();
+        // ⚡ Perf: filtrer directement côté SQL sur la journée demandée (sinon scan de tout l'historique)
+        const validationResult = await dataValidation.getAdminDataSecurely(targetDate);
         
         // Exécuter la requête des opérateurs en parallèle
         const [operatorStats] = await Promise.all([
@@ -1101,7 +1102,9 @@ async function getAdminOperations(date, page = 1, limit = 25) {
         console.log('🚀 DEBUT getAdminOperations SÉCURISÉ - date:', date, 'page:', page, 'limit:', limit);
         
         // Utiliser le service de validation pour éviter les mélanges de données
-        const validationResult = await dataValidation.getAdminDataSecurely();
+        const targetDate = date ? moment(date).format('YYYY-MM-DD') : moment().format('YYYY-MM-DD');
+        // ⚡ Perf: filtrer côté SQL sur la journée demandée
+        const validationResult = await dataValidation.getAdminDataSecurely(targetDate);
         
         if (!validationResult.valid) {
             console.error('❌ Erreur de validation des données:', validationResult.error);
@@ -1124,8 +1127,7 @@ async function getAdminOperations(date, page = 1, limit = 25) {
             });
         }
         
-        // Filtrer par date (sinon on mélange les jours et on crée des doublons)
-        const targetDate = date ? moment(date).format('YYYY-MM-DD') : moment().format('YYYY-MM-DD');
+        // Filtrer par date (défense en profondeur)
         // IMPORTANT: DateCreation est renvoyé en 'YYYY-MM-DD' (string) pour éviter les décalages timezone.
         let filteredEvents = allEvents.filter(event => String(event.DateCreation || '') === targetDate);
 
