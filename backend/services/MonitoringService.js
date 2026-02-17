@@ -222,15 +222,17 @@ class MonitoringService {
             // - date: exact day (YYYY-MM-DD)
             // - dateStart/dateEnd: inclusive range (YYYY-MM-DD)
             if (date) {
-                whereConditions.push('CAST(t.DateCreation AS DATE) = @date');
+                // ⚡ SARGABLE: support DATE or DATETIME columns without CAST(DateCreation AS DATE)
+                whereConditions.push('t.DateCreation >= @date AND t.DateCreation < DATEADD(day, 1, @date)');
                 params.date = date;
             } else if (dateStart || dateEnd) {
                 if (dateStart) {
-                    whereConditions.push('CAST(t.DateCreation AS DATE) >= @dateStart');
+                    whereConditions.push('t.DateCreation >= @dateStart');
                     params.dateStart = dateStart;
                 }
                 if (dateEnd) {
-                    whereConditions.push('CAST(t.DateCreation AS DATE) <= @dateEnd');
+                    // inclusive end date => < end+1 day (works for DATE and DATETIME)
+                    whereConditions.push('t.DateCreation < DATEADD(day, 1, @dateEnd)');
                     params.dateEnd = dateEnd;
                 }
             }
@@ -259,9 +261,9 @@ class MonitoringService {
                     t.DateCreation,
                     t.CalculatedAt,
                     t.CalculationMethod
-                FROM [SEDI_APP_INDEPENDANTE].[dbo].[ABTEMPS_OPERATEURS] t
-                LEFT JOIN [SEDI_ERP].[dbo].[RESSOURC] r ON t.OperatorCode = r.Coderessource
-                LEFT JOIN [SEDI_ERP].[dbo].[LCTE] l ON t.LancementCode = l.CodeLancement
+                FROM [SEDI_APP_INDEPENDANTE].[dbo].[ABTEMPS_OPERATEURS] t WITH (NOLOCK)
+                LEFT JOIN [SEDI_ERP].[dbo].[RESSOURC] r WITH (NOLOCK) ON t.OperatorCode = r.Coderessource
+                LEFT JOIN [SEDI_ERP].[dbo].[LCTE] l WITH (NOLOCK) ON t.LancementCode = l.CodeLancement
                 ${whereClause}
                 ORDER BY t.DateCreation DESC, t.TempsId DESC
             `;
