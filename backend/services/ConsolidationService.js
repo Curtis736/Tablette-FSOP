@@ -310,6 +310,35 @@ class ConsolidationService {
             const startTime = buildDateTime(debutEvent, 'start');
             const endTime = buildDateTime(finEvent, 'end');
 
+            // 8bis. Vérifier si déjà consolidé selon la contrainte UNIQUE réelle (souvent basée sur StartTime)
+            // Certains environnements ont une contrainte UNIQUE sur (OperatorCode, LancementCode, StartTime).
+            // Si on ne check pas ça, on peut échouer avec "Cannot insert duplicate key".
+            if (!force && startTime) {
+                try {
+                    const byStartQuery = `
+                        SELECT TOP 1 TempsId
+                        FROM [SEDI_APP_INDEPENDANTE].[dbo].[ABTEMPS_OPERATEURS]
+                        WHERE OperatorCode = @operatorCode
+                          AND LancementCode = @lancementCode
+                          AND StartTime = @startTime
+                        ORDER BY TempsId DESC
+                    `;
+                    const rows = await executeQuery(byStartQuery, { operatorCode, lancementCode, startTime });
+                    if (rows && rows.length > 0) {
+                        console.log(`ℹ️ Opération déjà consolidée (StartTime match): TempsId=${rows[0].TempsId}`);
+                        return {
+                            success: true,
+                            tempsId: rows[0].TempsId,
+                            error: null,
+                            warnings: ['Opération déjà consolidée (StartTime)'],
+                            alreadyExists: true
+                        };
+                    }
+                } catch (e) {
+                    // best-effort: ne pas bloquer si ce check échoue
+                }
+            }
+
             // 8. Vérifier si déjà consolidé (sur les clés complètes : opérateur + LT + phase + rubrique + date)
             if (!force) {
                 const existingQuery = `
@@ -429,7 +458,33 @@ class ConsolidationService {
             
             // Vérifier si c'est une erreur de contrainte unique (doublon)
             if (error.number === 2627 || error.originalError?.number === 2627) {
-                // Récupérer le TempsId existant
+                // Récupérer le TempsId existant (commencer par la clé de contrainte la plus probable: StartTime)
+                try {
+                    if (startTime) {
+                        const byStartQuery = `
+                            SELECT TOP 1 TempsId
+                            FROM [SEDI_APP_INDEPENDANTE].[dbo].[ABTEMPS_OPERATEURS]
+                            WHERE OperatorCode = @operatorCode
+                              AND LancementCode = @lancementCode
+                              AND StartTime = @startTime
+                            ORDER BY TempsId DESC
+                        `;
+                        const byStart = await executeQuery(byStartQuery, { operatorCode, lancementCode, startTime });
+                        if (byStart && byStart.length > 0) {
+                            return {
+                                success: true,
+                                tempsId: byStart[0].TempsId,
+                                error: null,
+                                warnings: ['Opération déjà consolidée (détecté via StartTime après erreur UNIQUE)'],
+                                alreadyExists: true
+                            };
+                        }
+                    }
+                } catch (e) {
+                    // ignore
+                }
+
+                // Fallback: clé historique (phase/rubrique/date)
                 const existingQuery = `
                     SELECT TempsId 
                     FROM [SEDI_APP_INDEPENDANTE].[dbo].[ABTEMPS_OPERATEURS]
