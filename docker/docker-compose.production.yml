@@ -56,7 +56,8 @@ services:
       # SILOG - Runner distant (Linux -> Windows via SSH)
       # =========================
       # Required for Linux backend to trigger SILOG.exe on a Windows runner (OpenSSH Server).
-      - SILOG_REMOTE_MODE=${SILOG_REMOTE_MODE:-ssh}
+      # If you do NOT have SSH access to SERVEURERP, use scheduled mode (Windows Scheduled Task).
+      - SILOG_REMOTE_MODE=${SILOG_REMOTE_MODE:-scheduled}
       - SILOG_SSH_HOST=${SILOG_SSH_HOST:-SERVEURERP}
       - SILOG_SSH_USER=${SILOG_SSH_USER:-maintenance}
       - SILOG_SSH_PORT=${SILOG_SSH_PORT:-22}

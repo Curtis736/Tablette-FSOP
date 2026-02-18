@@ -79,6 +79,18 @@ class EdiJobService {
             // Dans ce cas, on doit passer par un "runner" Windows (SSH/WinRM/etc).
             if (process.platform !== 'win32') {
                 const remoteMode = String(process.env.SILOG_REMOTE_MODE || options.remoteMode || '').trim().toLowerCase();
+                // Allow "scheduled"/"disabled": a Windows Scheduled Task runs EDI_JOB periodically on SERVEURERP.
+                // In that case we don't trigger anything from Linux; we just avoid failing the admin flow.
+                if (remoteMode === 'scheduled' || remoteMode === 'disable' || remoteMode === 'disabled' || remoteMode === 'none') {
+                    return {
+                        success: true,
+                        skipped: true,
+                        message:
+                            `EDI_JOB non déclenché par le backend (SILOG_REMOTE_MODE=${remoteMode}). ` +
+                            `Mode prévu: tâche planifiée Windows sur SERVEURERP.`,
+                        codeTache: config.codeTache
+                    };
+                }
                 if (remoteMode !== 'ssh') {
                     return {
                         success: false,
@@ -87,7 +99,8 @@ class EdiJobService {
                             `Le backend tourne sur ${process.platform}. SILOG.exe nécessite Windows.\n` +
                             `Solutions:\n` +
                             `- Exécuter le backend sur une machine Windows qui voit \\\\SERVEURERP\\SILOG8\n` +
-                            `- OU configurer un runner Windows et activer SILOG_REMOTE_MODE=ssh (voir docs/SILOG_EDI_JOB.md).`,
+                            `- OU configurer un runner Windows et activer SILOG_REMOTE_MODE=ssh (voir docs/SILOG_EDI_JOB.md).\n` +
+                            `- OU utiliser une tâche planifiée sur SERVEURERP et définir SILOG_REMOTE_MODE=scheduled.`,
                         codeTache: config.codeTache
                     };
                 }
