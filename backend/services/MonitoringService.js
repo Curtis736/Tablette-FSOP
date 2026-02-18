@@ -198,6 +198,16 @@ class MonitoringService {
             
             let whereConditions = [];
             const params = {};
+
+            // In scheduled/disabled mode, validated records (StatutTraitement='O') are expected to be consumed by SILOG
+            // via a Windows Scheduled Task. They should not clutter the default admin dashboard list.
+            // If the caller explicitly requests statutTraitement, we respect it.
+            const remoteMode = String(process.env.SILOG_REMOTE_MODE || '').trim().toLowerCase();
+            const isScheduledMode = ['scheduled', 'disable', 'disabled', 'none'].includes(remoteMode);
+            if (isScheduledMode && statutTraitement === undefined) {
+                // Default view: show only actionable records (NULL or 'A' = on hold)
+                whereConditions.push("(t.StatutTraitement IS NULL OR t.StatutTraitement = 'A')");
+            }
             
             if (statutTraitement !== undefined) {
                 if (statutTraitement === null || statutTraitement === 'NULL') {
