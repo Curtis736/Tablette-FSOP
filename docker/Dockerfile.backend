@@ -2,7 +2,7 @@
 
 # Stage 1: Base image avec dépendances communes
 FROM node:18-alpine AS base
-RUN apk add --no-cache curl dumb-init tzdata
+RUN apk add --no-cache curl dumb-init tzdata openssh-client
 WORKDIR /app
 
 # Stage 2: Dependencies (pour le cache des layers)
