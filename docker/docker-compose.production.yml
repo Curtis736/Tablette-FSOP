@@ -17,6 +17,9 @@ services:
     # If DB_SERVER_IP is not set, it will try to use the host network gateway
     extra_hosts:
       - "SERVEURERP:${DB_SERVER_IP:-172.17.0.1}"
+      # Some clients (including OpenSSH) may lowercase hostnames during resolution.
+      # Add a lowercase alias to avoid "Could not resolve hostname serveurerp".
+      - "serveurerp:${DB_SERVER_IP:-172.17.0.1}"
     environment:
       - NODE_ENV=production
       - TZ=Europe/Paris
