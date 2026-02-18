@@ -4254,6 +4254,9 @@ router.post('/monitoring/:tempsId/transmit', async (req, res) => {
         const { tempsId } = req.params;
         const { triggerEdiJob = false, codeTache = null } = req.body;
 
+        const remoteMode = String(process.env.SILOG_REMOTE_MODE || '').trim().toLowerCase();
+        const isScheduledMode = ['scheduled', 'disable', 'disabled', 'none'].includes(remoteMode);
+
         // Nouveau flux:
         // 1) Valider en 'O' (si nécessaire)
         // 2) Exécuter EDI_JOB (si demandé)
@@ -4265,7 +4268,7 @@ router.post('/monitoring/:tempsId/transmit', async (req, res) => {
         }
 
         let ediJobResult = null;
-        if (triggerEdiJob) {
+        if (triggerEdiJob && !isScheduledMode) {
             ediJobResult = await EdiJobService.executeEdiJobForTransmittedRecords([idNum], codeTache);
             if (!ediJobResult.success) {
                 return res.status(500).json({
@@ -4274,17 +4277,27 @@ router.post('/monitoring/:tempsId/transmit', async (req, res) => {
                     details: ediJobResult.error || 'EDI_JOB a échoué'
                 });
             }
+        } else if (triggerEdiJob && isScheduledMode) {
+            ediJobResult = {
+                success: true,
+                skipped: true,
+                message: `EDI_JOB non déclenché par le backend (SILOG_REMOTE_MODE=${remoteMode}). Tâche planifiée Windows attendue.`
+            };
         }
 
-        const mark = await MonitoringService.markAsTransmitted(idNum);
-        if (!mark.success) {
-            return res.status(400).json({ success: false, error: mark.error });
+        // En mode scheduled/disabled, ne pas marquer en 'T' (laisser 'O' pour consommation par SILOG).
+        let mark = null;
+        if (!isScheduledMode) {
+            mark = await MonitoringService.markAsTransmitted(idNum);
+            if (!mark.success) {
+                return res.status(400).json({ success: false, error: mark.error });
+            }
         }
 
         return res.json({
             success: true,
-            message: 'Enregistrement transmis',
-            data: { validated: validate, transmitted: mark },
+            message: isScheduledMode ? 'Enregistrement validé (planifié: tâche SILOG sur SERVEURERP)' : 'Enregistrement transmis',
+            data: isScheduledMode ? { validated: validate } : { validated: validate, transmitted: mark },
             ediJob: ediJobResult
         });
         
@@ -4363,9 +4376,13 @@ router.post('/monitoring/validate-and-transmit-batch', async (req, res) => {
             });
         }
         
+        const remoteMode = String(process.env.SILOG_REMOTE_MODE || '').trim().toLowerCase();
+        const isScheduledMode = ['scheduled', 'disable', 'disabled', 'none'].includes(remoteMode);
+
         // Déclencher l'EDI_JOB après validation (les lignes sont en 'O', donc visibles via V_REMONTE_TEMPS)
+        // En mode "scheduled/disabled", on ne déclenche rien ici: une tâche planifiée Windows sur SERVEURERP s'en charge.
         let ediJobResult = null;
-        if (triggerEdiJob) {
+        if (triggerEdiJob && !isScheduledMode) {
             try {
                 const idsForJob = result.validatedIds || tempsIds;
                 ediJobResult = await EdiJobService.executeEdiJobForTransmittedRecords(idsForJob, codeTache);
@@ -4374,18 +4391,27 @@ router.post('/monitoring/validate-and-transmit-batch', async (req, res) => {
                 console.error('❌ Erreur lors du déclenchement de l\'EDI_JOB:', ediError);
                 ediJobResult = { success: false, error: ediError.message };
             }
+        } else if (triggerEdiJob && isScheduledMode) {
+            ediJobResult = {
+                success: true,
+                skipped: true,
+                message: `EDI_JOB non déclenché par le backend (SILOG_REMOTE_MODE=${remoteMode}). Tâche planifiée Windows attendue.`
+            };
         }
 
         // Marquer comme transmis uniquement si l'EDI_JOB est OK
         let markResult = null;
-        if (!triggerEdiJob || (ediJobResult && ediJobResult.success)) {
+        // ⚠️ En mode scheduled/disabled, ne PAS marquer en 'T' (SILOG doit consommer les lignes 'O').
+        if (!isScheduledMode && (!triggerEdiJob || (ediJobResult && ediJobResult.success && !ediJobResult.skipped))) {
             const idsToMark = result.validatedIds || tempsIds;
             markResult = await MonitoringService.markBatchAsTransmitted(idsToMark);
         }
 
         return res.json({
-            success: !triggerEdiJob || (ediJobResult && ediJobResult.success),
-            message: result.message,
+            success: isScheduledMode || !triggerEdiJob || (ediJobResult && ediJobResult.success),
+            message: isScheduledMode
+                ? `${result.message} (planifié: tâche SILOG sur SERVEURERP)`
+                : result.message,
             count: result.count,
             ediJob: ediJobResult,
             marked: markResult
