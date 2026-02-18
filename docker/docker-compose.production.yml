@@ -49,9 +49,22 @@ services:
       - REDIS_URL=${REDIS_URL:-redis://redis:6379}
       - REDIS_PASSWORD=${REDIS_PASSWORD:-}
       - REDIS_DB=${REDIS_DB:-0}
-      # SILOG EDI_JOB runner (SSH) - mount the SSH key inside the container
-      # If your SILOG integration uses SSH, ensure SILOG_SSH_KEY_PATH points to a readable key file inside the container.
+      # =========================
+      # SILOG - Runner distant (Linux -> Windows via SSH)
+      # =========================
+      # Required for Linux backend to trigger SILOG.exe on a Windows runner (OpenSSH Server).
+      - SILOG_REMOTE_MODE=${SILOG_REMOTE_MODE:-ssh}
+      - SILOG_SSH_HOST=${SILOG_SSH_HOST:-SERVEURERP}
+      - SILOG_SSH_USER=${SILOG_SSH_USER:-maintenance}
+      - SILOG_SSH_PORT=${SILOG_SSH_PORT:-22}
+      # SSH key path inside container (mounted read-only below)
       - SILOG_SSH_KEY_PATH=${SILOG_SSH_KEY_PATH:-/home/maintenance/.ssh/id_ed25519}
+      # Avoid interactive prompts (host key) in automation. Override if you want strict checking.
+      - SILOG_SSH_EXTRA_ARGS=${SILOG_SSH_EXTRA_ARGS:--o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null}
+
+      # SILOG executable path as seen by the Windows runner (local path recommended)
+      - SILOG_EXE_PATH=${SILOG_EXE_PATH:-C:\\SILOG8\\SILOG.exe}
+      - SILOG_WORKDIR=${SILOG_WORKDIR:-C:\\SILOG8}
     volumes:
       # Host mount -> container mount (defaults keep existing behavior)
       # VM variant example: SERVICES_HOST_PATH=/mnt/partage_fsop and SERVICES_CONTAINER_PATH=/mnt/services/Tracabilite
