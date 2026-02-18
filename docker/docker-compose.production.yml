@@ -49,6 +49,9 @@ services:
       - REDIS_URL=${REDIS_URL:-redis://redis:6379}
       - REDIS_PASSWORD=${REDIS_PASSWORD:-}
       - REDIS_DB=${REDIS_DB:-0}
+      # SILOG EDI_JOB runner (SSH) - mount the SSH key inside the container
+      # If your SILOG integration uses SSH, ensure SILOG_SSH_KEY_PATH points to a readable key file inside the container.
+      - SILOG_SSH_KEY_PATH=${SILOG_SSH_KEY_PATH:-/home/maintenance/.ssh/id_ed25519}
     volumes:
       # Host mount -> container mount (defaults keep existing behavior)
       # VM variant example: SERVICES_HOST_PATH=/mnt/partage_fsop and SERVICES_CONTAINER_PATH=/mnt/services/Tracabilite
@@ -57,6 +60,9 @@ services:
       # Example VM: TEMPLATES_HOST_PATH=/mnt/partage_services/Services and TEMPLATES_CONTAINER_PATH=/mnt/templates
       - ${TEMPLATES_HOST_PATH:-/srv/services}:${TEMPLATES_CONTAINER_PATH:-/mnt/templates}:rw
       - ../backend/logs:/app/logs
+      # SSH key for SILOG runner (read-only). Override SSH_KEY_HOST_DIR in docker/.env if needed.
+      # Note: if the key is 600 and owned by maintenance on host, you may need BACKEND_USER=0:0 to read it inside container.
+      - ${SSH_KEY_HOST_DIR:-/home/maintenance/.ssh}:/home/maintenance/.ssh:ro
     networks:
       - sedi-network
     restart: always
