@@ -1135,13 +1135,19 @@ async function getAdminOperations(date, page = 1, limit = 25) {
         // IMPORTANT: DateCreation est renvoyé en 'YYYY-MM-DD' (string) pour éviter les décalages timezone.
         let filteredEvents = allEvents.filter(event => String(event.DateCreation || '') === targetDate);
 
-        // Exclure les opérations déjà transmises (StatutTraitement = 'T') pour qu'elles disparaissent du dashboard
+        // Exclure les opérations déjà traitées dans ABTEMPS_OPERATEURS pour qu'elles disparaissent du dashboard.
+        // - mode SSH (instant): après succès, elles passent en 'T'
+        // - mode scheduled: elles restent en 'O' (consommées par SILOG via tâche planifiée)
         try {
+            const remoteMode = String(process.env.SILOG_REMOTE_MODE || '').trim().toLowerCase();
+            const isScheduledMode = ['scheduled', 'disable', 'disabled', 'none'].includes(remoteMode);
+            const statutSql = isScheduledMode ? "IN ('T','O')" : "= 'T'";
+
             const transmittedQuery = `
                 SELECT OperatorCode, LancementCode, Phase, CodeRubrique
                 FROM [SEDI_APP_INDEPENDANTE].[dbo].[ABTEMPS_OPERATEURS]
-                WHERE StatutTraitement = 'T'
-                  AND CAST(DateCreation AS DATE) = @date
+                WHERE StatutTraitement ${statutSql}
+                  AND DateCreation >= @date AND DateCreation < DATEADD(day, 1, @date)
             `;
             const transmitted = await executeQuery(transmittedQuery, { date: targetDate });
             const transmittedSet = new Set(
