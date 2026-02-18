@@ -5,6 +5,14 @@ FROM node:18-alpine AS base
 RUN apk add --no-cache curl dumb-init tzdata openssh-client
 WORKDIR /app
 
+# Create a dedicated user matching common host bind-mount ownership (uid/gid 1001),
+# so running the container as 1001:1001 works without "No user exists for uid 1001".
+# (Used for reading mounted SSH keys like /home/maintenance/.ssh/id_ed25519)
+RUN addgroup -g 1001 -S maintenance && \
+    adduser  -u 1001 -S -G maintenance -h /home/maintenance maintenance && \
+    mkdir -p /home/maintenance/.ssh && \
+    chown -R 1001:1001 /home/maintenance
+
 # Stage 2: Dependencies (pour le cache des layers)
 FROM base AS dependencies
 COPY backend/package*.json ./
