@@ -1,11 +1,28 @@
-// Page d'administration - v20251014-fixed-v4
+// Page d'administration - v20251014-fixed-v4-refactored
 import TimeUtils from '../utils/TimeUtils.js';
+import Logger from '../utils/Logger.js';
+import DOMCache from '../utils/DOMCache.js';
+import ErrorHandler from '../utils/ErrorHandler.js';
+import Validator from '../utils/Validator.js';
+import LoadingIndicator from '../utils/LoadingIndicator.js';
+import { debounce } from '../utils/debounce.js';
+import { createElement, createTableCell, createButton, createBadge, clearElement } from '../utils/DOMHelper.js';
+import { ADMIN_CONFIG, STATUS_CODES, STATUS_LABELS } from '../utils/Constants.js';
 
 class AdminPage {
     constructor(app) {
         this.app = app;
         this.apiService = app.getApiService();
         this.notificationManager = app.getNotificationManager();
+        
+        // Initialiser les utilitaires
+        this.logger = new Logger();
+        this.domCache = new DOMCache();
+        this.errorHandler = new ErrorHandler(this.notificationManager, this.logger);
+        this.validator = new Validator();
+        this.loadingIndicator = new LoadingIndicator();
+        
+        // Données
         this.operations = [];
         this.stats = {};
         this.pagination = null;
@@ -13,29 +30,29 @@ class AdminPage {
         this.transferSelectionIds = new Set(); // sélection dans la modale de transfert (TempsId)
         this.selectedTempsIds = new Set(); // sélection de lignes dans le tableau principal (TempsId)
         
-        // Debug (désactivé par défaut pour éviter de spammer la console)
-        // Activer via URL: ?debugTime=1  ou via localStorage: sedi_debug_time=1
-        this.debugTime = false;
-        try {
-            const sp = new URLSearchParams(window.location.search);
-            this.debugTime =
-                sp.get('debugTime') === '1' ||
-                window.localStorage?.getItem('sedi_debug_time') === '1';
-        } catch (e) {
-            // noop
-        }
-        
         // Flags pour éviter les appels simultanés
         this._isTransferring = false;
         this._isConsolidating = false;
+        this.isLoading = false;
         
         // Système de sauvegarde automatique
         this.autoSaveEnabled = true;
-        this.autoSaveInterval = 30000; // 30 secondes
+        this.autoSaveInterval = ADMIN_CONFIG.AUTO_SAVE_INTERVAL;
         this.pendingChanges = new Map(); // Map des modifications en attente
         this.autoSaveTimer = null;
         
-        // Initialisation silencieuse
+        // Gestion des erreurs et refresh
+        this.lastEditTime = 0;
+        this.consecutiveErrors = 0;
+        this.maxConsecutiveErrors = ADMIN_CONFIG.MAX_CONSECUTIVE_ERRORS;
+        this.refreshInterval = null;
+        this.operatorsInterval = null;
+        this.lastOperatorsUpdate = 0;
+        this.timeoutId = null;
+        
+        // Cache des opérateurs
+        this._allOperatorsCache = [];
+        this._allOperatorsCacheAt = 0;
         
         // Initialisation immédiate (le DOM devrait être prêt maintenant)
         this.initializeElements();
@@ -44,8 +61,11 @@ class AdminPage {
     }
 
     initializeElements() {
-        // Recherche des éléments DOM
-        const elements = {
+        // Initialiser le cache DOM
+        this.domCache.initialize();
+        
+        // Mapper les éléments du cache vers les propriétés de la classe
+        const elementMap = {
             refreshDataBtn: 'refreshDataBtn',
             totalOperators: 'totalOperators',
             activeLancements: 'activeLancements',
@@ -53,8 +73,6 @@ class AdminPage {
             completedLancements: 'completedLancements',
             operationsTableBody: 'operationsTableBody',
             operatorSelect: 'operatorFilter',
-
-            // Modal transfert
             transferSelectionModal: 'transferSelectionModal',
             transferModalTableBody: 'transferModalTableBody',
             closeTransferModalBtn: 'closeTransferModalBtn',
@@ -63,16 +81,16 @@ class AdminPage {
         };
         
         // Initialiser les éléments avec vérification
-        Object.keys(elements).forEach(key => {
-            const elementId = elements[key];
-            this[key] = document.getElementById(elementId);
+        Object.keys(elementMap).forEach(key => {
+            const elementId = elementMap[key];
+            this[key] = this.domCache.get(elementId);
             
             if (!this[key]) {
-                console.warn(`⚠️ Élément non trouvé: ${elementId}`);
+                this.logger.warn(`⚠️ Élément non trouvé: ${elementId}`);
                 // Créer un élément de fallback pour éviter les erreurs
                 if (key === 'operationsTableBody') {
-                    this[key] = document.createElement('tbody');
-                    this[key].id = elementId;
+                    this[key] = createElement('tbody', { id: elementId });
+                    this.domCache.set(elementId, this[key]);
                 }
             }
         });
@@ -80,15 +98,15 @@ class AdminPage {
 
     addEventListenerSafe(elementId, eventType, handler) {
         try {
-            const element = document.getElementById(elementId);
+            const element = this.domCache.get(elementId);
             if (element && typeof element.addEventListener === 'function') {
                 element.addEventListener(eventType, handler);
-                console.log(`Listener ajouté: ${elementId} (${eventType})`);
+                this.logger.log(`Listener ajouté: ${elementId} (${eventType})`);
             } else {
-                console.warn(`Élément non trouvé ou invalide: ${elementId}`);
+                this.logger.warn(`Élément non trouvé ou invalide: ${elementId}`);
             }
         } catch (error) {
-            console.error(`Erreur ajout listener ${elementId}:`, error);
+            this.errorHandler.handle(error, 'addEventListenerSafe', `Erreur lors de l'ajout du listener ${elementId}`);
         }
     }
 
@@ -97,7 +115,7 @@ class AdminPage {
         setTimeout(() => {
             try {
                 // Bouton Actualiser
-                const refreshBtn = document.getElementById('refreshDataBtn');
+                const refreshBtn = this.domCache.get('refreshDataBtn');
                 if (refreshBtn) {
                     refreshBtn.addEventListener('click', () => {
                         this.resetConsecutiveErrors();
@@ -106,29 +124,29 @@ class AdminPage {
                 }
 
                 // Modale transfert
-                const closeTransferModalBtn = document.getElementById('closeTransferModalBtn');
+                const closeTransferModalBtn = this.domCache.get('closeTransferModalBtn');
                 if (closeTransferModalBtn) {
                     closeTransferModalBtn.addEventListener('click', () => this.hideTransferModal());
                 }
 
-                const transferSelectedConfirmBtn = document.getElementById('transferSelectedConfirmBtn');
+                const transferSelectedConfirmBtn = this.domCache.get('transferSelectedConfirmBtn');
                 if (transferSelectedConfirmBtn) {
                     transferSelectedConfirmBtn.addEventListener('click', () => this.confirmTransferFromModal());
                 }
 
-                const transferSelectAll = document.getElementById('transferSelectAll');
+                const transferSelectAll = this.domCache.get('transferSelectAll');
                 if (transferSelectAll) {
                     transferSelectAll.addEventListener('change', () => this.toggleTransferSelectAll(transferSelectAll.checked));
                 }
                 
                 // Menu déroulant opérateurs
-                const operatorSelect = document.getElementById('operatorFilter');
+                const operatorSelect = this.domCache.get('operatorFilter');
                 if (operatorSelect) {
                     operatorSelect.addEventListener('change', () => this.handleOperatorChange());
                 }
                 
                 // Filtre de statut
-                const statusFilter = document.getElementById('statusFilter');
+                const statusFilter = this.domCache.get('statusFilter');
                 if (statusFilter) {
                     statusFilter.addEventListener('change', () => {
                         // Recharger depuis le backend car ABTEMPS_OPERATEURS est filtré côté API
@@ -137,24 +155,25 @@ class AdminPage {
                 }
 
                 // Filtre de période
-                const periodFilter = document.getElementById('periodFilter');
+                const periodFilter = this.domCache.get('periodFilter');
                 if (periodFilter) {
                     periodFilter.addEventListener('change', () => {
                         this.loadData();
                     });
                 }
                 
-                // Filtre de recherche
-                const searchFilter = document.getElementById('searchFilter');
+                // Filtre de recherche avec debounce
+                const searchFilter = this.domCache.get('searchFilter');
                 if (searchFilter) {
-                    searchFilter.addEventListener('input', () => {
+                    const debouncedLoadData = debounce(() => {
                         // Recharger depuis le backend car le filtre lancement peut être appliqué côté API
                         this.loadData();
-                    });
+                    }, ADMIN_CONFIG.SEARCH_DEBOUNCE_DELAY);
+                    searchFilter.addEventListener('input', debouncedLoadData);
                 }
                 
                 // Bouton effacer filtres
-                const clearFiltersBtn = document.getElementById('clearFiltersBtn');
+                const clearFiltersBtn = this.domCache.get('clearFiltersBtn');
                 if (clearFiltersBtn) {
                     clearFiltersBtn.addEventListener('click', () => {
                         if (operatorSelect) operatorSelect.value = '';
@@ -166,19 +185,19 @@ class AdminPage {
                 }
                 
                    // Bouton Transfert
-                   const transferBtn = document.getElementById('transferBtn');
+                   const transferBtn = this.domCache.get('transferBtn');
                    if (transferBtn) {
                        transferBtn.addEventListener('click', () => this.handleTransfer());
                    }
                    
                    // Bouton Ajouter une ligne
-                   const addOperationBtn = document.getElementById('addOperationBtn');
+                   const addOperationBtn = this.domCache.get('addOperationBtn');
                    if (addOperationBtn) {
                        addOperationBtn.addEventListener('click', () => this.handleAddOperation());
                    }
                 
                 // Tableau des opérations
-                const tableBody = document.getElementById('operationsTableBody');
+                const tableBody = this.domCache.get('operationsTableBody');
                 if (tableBody) {
                     tableBody.addEventListener('click', async (e) => {
                         if (e.target.closest('.btn-delete')) {
@@ -203,8 +222,11 @@ class AdminPage {
                             const isUnconsolidated = (btn.dataset.unconsolidated === 'true') || !tempsId;
                             
                             if (!id) {
-                                console.error('❌ ID manquant sur le bouton!');
-                                this.notificationManager.error('Erreur: ID manquant sur le bouton d\'édition');
+                                this.errorHandler.handle(
+                                    new Error('ID manquant sur le bouton'),
+                                    'setupEventListeners',
+                                    'Erreur: ID manquant sur le bouton d\'édition'
+                                );
                                 return;
                             }
                             
@@ -215,42 +237,35 @@ class AdminPage {
                                     await this.editMonitoringRecord(tempsId || id);
                                 }
                             } catch (error) {
-                                console.error('❌ Erreur lors de l\'édition:', error);
-                                this.notificationManager.error(`Erreur lors de l'édition: ${error.message}`);
+                                this.errorHandler.handle(error, 'setupEventListeners', 'Erreur lors de l\'édition');
                             }
                         }
                     });
                 }
                 
             } catch (error) {
-                console.error('Erreur lors de l\'ajout des listeners:', error);
+                this.errorHandler.handle(error, 'setupEventListeners', 'Erreur lors de l\'ajout des listeners');
             }
         }, 300);
         
         // Actualisation automatique avec retry en cas d'erreur
-        // Auto-refresh plus fréquent pour les mises à jour temps réel
-        this.lastEditTime = 0; // Timestamp de la dernière édition pour éviter le rechargement immédiat
-        this.consecutiveErrors = 0; // Compteur d'erreurs consécutives
-        this.maxConsecutiveErrors = 3; // Arrêter le refresh après 3 erreurs consécutives
-        
         this.refreshInterval = setInterval(() => {
             // Ne pas recharger si trop d'erreurs consécutives
             if (this.consecutiveErrors >= this.maxConsecutiveErrors) {
-                console.log(`⏸️ Refresh automatique désactivé (${this.consecutiveErrors} erreurs consécutives)`);
+                this.logger.log(`⏸️ Refresh automatique désactivé (${this.consecutiveErrors} erreurs consécutives)`);
                 return;
             }
             
             // Ne pas recharger si une édition vient d'être effectuée (dans les 5 dernières secondes)
             const timeSinceLastEdit = Date.now() - this.lastEditTime;
-            if (!this.isLoading && timeSinceLastEdit > 5000) {
+            if (!this.isLoading && timeSinceLastEdit > ADMIN_CONFIG.EDIT_COOLDOWN) {
                 this.loadDataWithRetry();
-            } else if (timeSinceLastEdit <= 5000) {
-                console.log(`⏸️ Rechargement automatique ignoré (édition récente il y a ${Math.round(timeSinceLastEdit/1000)}s)`);
+            } else if (timeSinceLastEdit <= ADMIN_CONFIG.EDIT_COOLDOWN) {
+                this.logger.log(`⏸️ Rechargement automatique ignoré (édition récente il y a ${Math.round(timeSinceLastEdit/1000)}s)`);
             }
-        }, 30000); // Toutes les 30 secondes (réduit pour éviter surcharge/timeout)
+        }, ADMIN_CONFIG.REFRESH_INTERVAL);
 
-        // Mise à jour temps réel des opérateurs connectés (réduit pour éviter le rate limiting)
-        this.lastOperatorsUpdate = 0; // Timestamp de la dernière mise à jour des opérateurs
+        // Mise à jour temps réel des opérateurs connectés
         this.operatorsInterval = setInterval(() => {
             // Ne pas mettre à jour si trop d'erreurs
             if (this.consecutiveErrors < this.maxConsecutiveErrors) {
@@ -258,20 +273,20 @@ class AdminPage {
                     // Éviter d'empiler des requêtes pendant un loadData en cours
                     return;
                 }
-                // Vérifier si on a des données récentes (< 10 secondes) pour éviter les requêtes redondantes
+                // Vérifier si on a des données récentes pour éviter les requêtes redondantes
                 const timeSinceLastUpdate = Date.now() - this.lastOperatorsUpdate;
-                if (timeSinceLastUpdate < 10000) {
-                    console.log(`⏸️ Mise à jour opérateurs ignorée (données récentes il y a ${Math.round(timeSinceLastUpdate/1000)}s)`);
+                if (timeSinceLastUpdate < ADMIN_CONFIG.MIN_UPDATE_INTERVAL) {
+                    this.logger.log(`⏸️ Mise à jour opérateurs ignorée (données récentes il y a ${Math.round(timeSinceLastUpdate/1000)}s)`);
                     return;
                 }
                 this.updateOperatorsStatus();
             }
-        }, 60000); // Toutes les 60 secondes (évite surcharge + timeouts)
+        }, ADMIN_CONFIG.OPERATORS_UPDATE_INTERVAL);
     }
 
     async loadData(enableAutoConsolidate = true) {
         if (this.isLoading) {
-            console.log('Chargement déjà en cours, ignorer...');
+            this.logger.log('Chargement déjà en cours, ignorer...');
             return;
         }
         
@@ -291,7 +306,8 @@ class AdminPage {
                 return `${y}-${m}-${day}`;
             };
             const today = toLocalDateOnly(now);
-            const period = document.getElementById('periodFilter')?.value || 'today';
+            const periodFilter = this.domCache.get('periodFilter');
+            const period = periodFilter?.value || 'today';
 
             const toDateOnly = toLocalDateOnly;
             const startOfWeekMonday = (d) => {
@@ -327,9 +343,9 @@ class AdminPage {
             })();
             
             // Créer une promesse avec timeout (⚠️ toujours clearTimeout sinon rejection non gérée plus tard)
-            let timeoutId = null;
+            this.timeoutId = null;
             const timeoutPromise = new Promise((_, reject) => {
-                timeoutId = setTimeout(() => reject(new Error('Timeout: La requête a pris trop de temps')), 30000);
+                this.timeoutId = setTimeout(() => reject(new Error('Timeout: La requête a pris trop de temps')), ADMIN_CONFIG.TIMEOUT_DURATION);
             });
             // Important: attacher un handler immédiatement pour éviter les "Unhandled Rejection"
             // même si le timeout se déclenche après coup (ou dans des environnements de test).
@@ -348,16 +364,22 @@ class AdminPage {
                     timeoutPromiseHandled
                 ]);
             } finally {
-                if (timeoutId) clearTimeout(timeoutId);
+                if (this.timeoutId) {
+                    clearTimeout(this.timeoutId);
+                    this.timeoutId = null;
+                }
             }
             
             // Les données sont déjà parsées par ApiService
             const data = adminData;
             
             // Charger les opérations consolidées depuis ABTEMPS_OPERATEURS
-            const statutTraitement = document.getElementById('statusFilter')?.value || undefined;
-            const operatorCode = document.getElementById('operatorFilter')?.value || undefined;
-            const lancementCode = document.getElementById('searchFilter')?.value?.trim() || undefined;
+            const statusFilter = this.domCache.get('statusFilter');
+            const operatorFilter = this.domCache.get('operatorFilter');
+            const searchFilter = this.domCache.get('searchFilter');
+            const statutTraitement = statusFilter?.value || undefined;
+            const operatorCode = operatorFilter?.value || undefined;
+            const lancementCode = searchFilter?.value?.trim() || undefined;
 
             const filters = { ...periodRange };
             if (statutTraitement) filters.statutTraitement = statutTraitement;
@@ -470,7 +492,6 @@ class AdminPage {
             };
             
             // Vérifier si l'utilisateur veut voir les opérations transmises
-            const statusFilter = document.getElementById('statusFilter');
             const showTransmitted = statusFilter?.value === 'T';
             
             // D'abord ajouter les opérations de monitoring (consolidées)
@@ -535,7 +556,7 @@ class AdminPage {
                         }
                     })
                     .catch((e) => {
-                        console.warn('⚠️ Impossible de charger la liste globale des opérateurs (non bloquant):', e?.message || e);
+                        this.logger.warn('⚠️ Impossible de charger la liste globale des opérateurs (non bloquant):', e?.message || e);
                     });
             }
             
@@ -546,34 +567,27 @@ class AdminPage {
             this.updateOperationsTable();
             this.updatePaginationInfo();
         } catch (error) {
-            console.error('❌ ERREUR loadData():', error);
-            
-            // Vérifier si c'est une erreur 429 (Too Many Requests)
-            const isRateLimitError = error.message && (
-                error.message.includes('429') || 
-                error.message.includes('Too Many Requests') ||
-                error.message.includes('Trop de requêtes')
-            );
+            // Masquer l'indicateur de chargement en cas d'erreur
+            this.loadingIndicator.hide('loadData');
+            const isRateLimitError = this.errorHandler.isRateLimitError(error);
             
             if (isRateLimitError) {
                 // Pour les erreurs 429, augmenter significativement le compteur d'erreurs
-                // pour désactiver le refresh automatique plus rapidement
                 this.consecutiveErrors += 3; // Équivalent à 3 erreurs normales
                 
                 // Augmenter l'intervalle de refresh temporairement
                 if (this.refreshInterval) {
                     clearInterval(this.refreshInterval);
-                    // Augmenter l'intervalle à 60 secondes au lieu de 15
                     this.refreshInterval = setInterval(() => {
                         if (this.consecutiveErrors >= this.maxConsecutiveErrors) {
-                            console.log(`⏸️ Refresh automatique désactivé (${this.consecutiveErrors} erreurs consécutives)`);
+                            this.logger.log(`⏸️ Refresh automatique désactivé (${this.consecutiveErrors} erreurs consécutives)`);
                             return;
                         }
                         const timeSinceLastEdit = Date.now() - this.lastEditTime;
-                        if (!this.isLoading && timeSinceLastEdit > 5000) {
+                        if (!this.isLoading && timeSinceLastEdit > ADMIN_CONFIG.EDIT_COOLDOWN) {
                             this.loadDataWithRetry();
                         }
-                    }, 60000); // 60 secondes au lieu de 15
+                    }, ADMIN_CONFIG.OPERATORS_UPDATE_INTERVAL);
                 }
                 
                 // Afficher un message spécifique pour le rate limiting
@@ -582,23 +596,13 @@ class AdminPage {
                 }
             } else {
                 // Pour les autres erreurs, incrémenter normalement
-            this.consecutiveErrors++;
-            
-            // Afficher un message d'erreur plus informatif
-            let errorMessage = 'Erreur de connexion au serveur';
-            if (error.message.includes('Timeout')) {
-                errorMessage = 'Le serveur met trop de temps à répondre. Vérifiez votre connexion.';
-            } else if (error.message.includes('HTTP')) {
-                errorMessage = `Erreur serveur: ${error.message}`;
-            } else if (error.message.includes('fetch')) {
-                errorMessage = 'Impossible de contacter le serveur';
-            }
-            
-            // Ne pas spammer les notifications si trop d'erreurs
-            if (this.consecutiveErrors <= 2) {
-                this.notificationManager.error(errorMessage);
-            } else if (this.consecutiveErrors === this.maxConsecutiveErrors) {
-                this.notificationManager.warning('Chargement automatique désactivé après plusieurs erreurs. Cliquez sur "Actualiser" pour réessayer.');
+                this.consecutiveErrors++;
+                
+                // Ne pas spammer les notifications si trop d'erreurs
+                if (this.consecutiveErrors <= 2) {
+                    this.errorHandler.handle(error, 'loadData');
+                } else if (this.consecutiveErrors === this.maxConsecutiveErrors) {
+                    this.notificationManager.warning('Chargement automatique désactivé après plusieurs erreurs. Cliquez sur "Actualiser" pour réessayer.');
                 }
             }
             
@@ -620,6 +624,8 @@ class AdminPage {
             throw error;
         } finally {
             this.isLoading = false;
+            // Masquer l'indicateur de chargement
+            this.loadingIndicator.hide('loadData');
         }
     }
 
@@ -627,11 +633,14 @@ class AdminPage {
         // Réduire les tentatives pour éviter les boucles infinies
         // Le setInterval se chargera de réessayer plus tard
         try {
+            this._isAutoRefresh = true; // Marquer comme auto-refresh pour ne pas afficher le loader
             await this.loadData();
         } catch (error) {
-            console.warn(`Échec du chargement:`, error.message);
+            this.logger.warn(`Échec du chargement:`, error.message);
             // Ne pas réessayer immédiatement, laisser le setInterval gérer
             // Cela évite les boucles infinies
+        } finally {
+            this._isAutoRefresh = false;
         }
     }
     
@@ -639,22 +648,47 @@ class AdminPage {
     resetConsecutiveErrors() {
         this.consecutiveErrors = 0;
         
-        // Réinitialiser l'intervalle de refresh à 15 secondes
+        // Réinitialiser l'intervalle de refresh
         if (this.refreshInterval) {
             clearInterval(this.refreshInterval);
             this.refreshInterval = setInterval(() => {
                 if (this.consecutiveErrors >= this.maxConsecutiveErrors) {
-                    console.log(`⏸️ Refresh automatique désactivé (${this.consecutiveErrors} erreurs consécutives)`);
+                    this.logger.log(`⏸️ Refresh automatique désactivé (${this.consecutiveErrors} erreurs consécutives)`);
                     return;
                 }
                 const timeSinceLastEdit = Date.now() - this.lastEditTime;
-                if (!this.isLoading && timeSinceLastEdit > 5000) {
+                if (!this.isLoading && timeSinceLastEdit > ADMIN_CONFIG.EDIT_COOLDOWN) {
                     this.loadDataWithRetry();
                 }
-            }, 15000); // Retour à 15 secondes
+            }, ADMIN_CONFIG.REFRESH_INTERVAL);
         }
         
-        console.log('✅ Compteur d\'erreurs réinitialisé, refresh automatique réactivé');
+        this.logger.log('✅ Compteur d\'erreurs réinitialisé, refresh automatique réactivé');
+    }
+    
+    /**
+     * Nettoie tous les timers et ressources
+     * À appeler lors de la destruction du composant
+     */
+    destroy() {
+        if (this.refreshInterval) {
+            clearInterval(this.refreshInterval);
+            this.refreshInterval = null;
+        }
+        if (this.operatorsInterval) {
+            clearInterval(this.operatorsInterval);
+            this.operatorsInterval = null;
+        }
+        if (this.autoSaveTimer) {
+            clearInterval(this.autoSaveTimer);
+            this.autoSaveTimer = null;
+        }
+        if (this.timeoutId) {
+            clearTimeout(this.timeoutId);
+            this.timeoutId = null;
+        }
+        this.domCache.clear();
+        this.logger.log('✅ AdminPage détruit, toutes les ressources nettoyées');
     }
 
     // ===== Monitoring (ABTEMPS_OPERATEURS) =====
@@ -679,7 +713,7 @@ class AdminPage {
                 this.operations = [];
             }
         } catch (error) {
-            console.error('❌ Erreur loadMonitoringRecords:', error);
+            this.logger.error('❌ Erreur loadMonitoringRecords:', error);
             this.operations = [];
         }
     }
@@ -765,68 +799,94 @@ class AdminPage {
         this.stats = stats;
         
         // Log pour debug
-        console.log('📊 Statistiques mises à jour depuis les données du tableau:', stats);
+        this.logger.log('📊 Statistiques mises à jour depuis les données du tableau:', stats);
     }
 
     showNoDataMessage() {
         if (!this.operationsTableBody) return;
         
-        this.operationsTableBody.innerHTML = `
-            <tr>
-                <td colspan="9" style="text-align: center; padding: 2rem; color: #dc3545;">
-                    <i class="fas fa-exclamation-triangle" style="font-size: 2rem; margin-bottom: 1rem;"></i>
-                    <br>
-                    <strong>Erreur de chargement des données</strong>
-                    <br>
-                    <small>Vérifiez la connexion au serveur et réessayez</small>
-                    <br>
-                    <button onclick="window.adminPage.loadData()" class="btn btn-sm btn-outline-primary mt-2">
-                        <i class="fas fa-refresh"></i> Réessayer
-                    </button>
-                </td>
-            </tr>
-        `;
+        clearElement(this.operationsTableBody);
+        
+        const row = createElement('tr');
+        const cell = createTableCell('', { colspan: '9', style: { textAlign: 'center', padding: '2rem', color: '#dc3545' } });
+        
+        const icon = createElement('i', { className: 'fas fa-exclamation-triangle', style: { fontSize: '2rem', marginBottom: '1rem', display: 'block' } });
+        cell.appendChild(icon);
+        
+        const br1 = createElement('br');
+        cell.appendChild(br1);
+        
+        const strong = createElement('strong', {}, 'Erreur de chargement des données');
+        cell.appendChild(strong);
+        
+        const br2 = createElement('br');
+        cell.appendChild(br2);
+        
+        const small = createElement('small', {}, 'Vérifiez la connexion au serveur et réessayez');
+        cell.appendChild(small);
+        
+        const br3 = createElement('br');
+        cell.appendChild(br3);
+        
+        const retryBtn = createButton({
+            icon: 'fas fa-refresh',
+            className: 'btn btn-sm btn-outline-primary mt-2',
+            onClick: () => this.loadData()
+        });
+        retryBtn.appendChild(document.createTextNode(' Réessayer'));
+        cell.appendChild(retryBtn);
+        
+        row.appendChild(cell);
+        this.operationsTableBody.appendChild(row);
     }
 
     showRateLimitWarning() {
-        console.warn('⚠️ Rate limit atteint - affichage du message d\'avertissement');
+        this.logger.warn('⚠️ Rate limit atteint - affichage du message d\'avertissement');
         
         // Afficher un message d'erreur dans l'interface
-        const errorDiv = document.createElement('div');
-        errorDiv.className = 'rate-limit-warning';
-        errorDiv.innerHTML = `
-            <div style="
-                background: linear-gradient(135deg, #ff6b6b, #ee5a52);
-                color: white;
-                padding: 16px 20px;
-                border-radius: 12px;
-                margin: 20px;
-                text-align: center;
-                box-shadow: 0 4px 12px rgba(255, 107, 107, 0.3);
-                animation: slideIn 0.3s ease-out;
-            ">
-                <i class="fas fa-exclamation-triangle" style="font-size: 24px; margin-bottom: 8px;"></i>
-                <h3 style="margin: 0 0 8px 0; font-size: 18px;">Trop de requêtes</h3>
-                <p style="margin: 0; opacity: 0.9;">
-                    Le serveur est temporairement surchargé. Veuillez patienter quelques secondes avant de recharger.
-                </p>
-                <button onclick="this.parentElement.parentElement.remove(); window.adminPage.loadData();" 
-                        style="
-                            background: rgba(255,255,255,0.2);
-                            border: 1px solid rgba(255,255,255,0.3);
-                            color: white;
-                            padding: 8px 16px;
-                            border-radius: 6px;
-                            margin-top: 12px;
-                            cursor: pointer;
-                            transition: all 0.2s ease;
-                        "
-                        onmouseover="this.style.background='rgba(255,255,255,0.3)'"
-                        onmouseout="this.style.background='rgba(255,255,255,0.2)'">
-                    <i class="fas fa-refresh"></i> Réessayer
-                </button>
-            </div>
-        `;
+        const errorDiv = createElement('div', { className: 'rate-limit-warning' });
+        
+        const innerDiv = createElement('div', {
+            style: {
+                background: 'linear-gradient(135deg, #ff6b6b, #ee5a52)',
+                color: 'white',
+                padding: '16px 20px',
+                borderRadius: '12px',
+                margin: '20px',
+                textAlign: 'center',
+                boxShadow: '0 4px 12px rgba(255, 107, 107, 0.3)',
+                animation: 'slideIn 0.3s ease-out'
+            }
+        });
+        
+        const icon = createElement('i', { 
+            className: 'fas fa-exclamation-triangle',
+            style: { fontSize: '24px', marginBottom: '8px', display: 'block' }
+        });
+        innerDiv.appendChild(icon);
+        
+        const h3 = createElement('h3', { style: { margin: '0 0 8px 0', fontSize: '18px' } }, 'Trop de requêtes');
+        innerDiv.appendChild(h3);
+        
+        const p = createElement('p', { style: { margin: '0', opacity: '0.9' } }, 
+            'Le serveur est temporairement surchargé. Veuillez patienter quelques secondes avant de recharger.');
+        innerDiv.appendChild(p);
+        
+        const retryBtn = createButton({
+            icon: 'fas fa-refresh',
+            className: '',
+            onClick: () => {
+                errorDiv.remove();
+                this.loadData();
+            }
+        });
+        retryBtn.style.cssText = 'background: rgba(255,255,255,0.2); border: 1px solid rgba(255,255,255,0.3); color: white; padding: 8px 16px; border-radius: 6px; margin-top: 12px; cursor: pointer; transition: all 0.2s ease;';
+        retryBtn.appendChild(document.createTextNode(' Réessayer'));
+        retryBtn.addEventListener('mouseover', () => retryBtn.style.background = 'rgba(255,255,255,0.3)');
+        retryBtn.addEventListener('mouseout', () => retryBtn.style.background = 'rgba(255,255,255,0.2)');
+        innerDiv.appendChild(retryBtn);
+        
+        errorDiv.appendChild(innerDiv);
         
         // Insérer le message au début du contenu principal
         const mainContent = document.querySelector('.admin-content') || document.querySelector('main');
@@ -843,13 +903,15 @@ class AdminPage {
     }
 
     updateOperatorSelect(connectedOperators = [], allOperators = []) {
-        console.log('🔄 Mise à jour du menu déroulant des opérateurs:', {
+        this.logger.log('🔄 Mise à jour du menu déroulant des opérateurs:', {
             connectés: connectedOperators.length,
             globaux: allOperators.length
         });
         
         // Vider le select et ajouter l'option par défaut
-        this.operatorSelect.innerHTML = '<option value="">Tous les opérateurs</option>';
+        clearElement(this.operatorSelect);
+        const defaultOption = createElement('option', { value: '' }, 'Tous les opérateurs');
+        this.operatorSelect.appendChild(defaultOption);
         
         // Créer un Set des codes d'opérateurs connectés pour vérification rapide
         const connectedCodes = new Set(connectedOperators.map(op => op.code));
@@ -915,7 +977,7 @@ class AdminPage {
             this.operatorSelect.appendChild(optgroupAll);
         }
         
-        console.log('✅ Menu déroulant mis à jour avec', connectedOperators.length, 'connectés et', allOperators.length, 'globaux');
+        this.logger.log('✅ Menu déroulant mis à jour avec', connectedOperators.length, 'connectés et', allOperators.length, 'globaux');
     }
 
     // Nouvelle méthode pour mettre à jour le statut des opérateurs
@@ -923,7 +985,7 @@ class AdminPage {
         // Éviter les requêtes si on vient de recevoir une erreur 429 récemment
         const timeSinceLastUpdate = Date.now() - this.lastOperatorsUpdate;
         if (timeSinceLastUpdate < 10000) {
-            console.log(`⏸️ Mise à jour opérateurs ignorée (données récentes)`);
+            this.logger.log(`⏸️ Mise à jour opérateurs ignorée (données récentes)`);
             return;
         }
         
@@ -944,13 +1006,13 @@ class AdminPage {
             // Mettre à jour l'affichage des opérateurs actifs (toujours, même si vide)
             this.updateActiveOperatorsDisplay(connectedOps);
         } catch (error) {
-            console.error('Erreur lors de la mise à jour du statut des opérateurs:', error);
+            this.errorHandler.handle(error, 'updateOperatorsStatus');
             // Mettre à jour l'indicateur avec un état d'erreur
             this.updateActiveOperatorsDisplay([]);
             // En cas d'erreur 429, attendre plus longtemps avant la prochaine tentative
-            if (error.message && error.message.includes('Trop de requêtes')) {
+            if (this.errorHandler.isRateLimitError(error)) {
                 this.lastOperatorsUpdate = Date.now() - 5000; // Forcer une attente de 15 secondes minimum
-                console.log('⏸️ Rate limit détecté, attente prolongée avant la prochaine mise à jour');
+                this.logger.log('⏸️ Rate limit détecté, attente prolongée avant la prochaine mise à jour');
             }
         }
     }
@@ -960,8 +1022,10 @@ class AdminPage {
         const activeOperators = operators.filter(op => op.isActive);
         
         // Mettre à jour un indicateur visuel des opérateurs actifs
-        const activeIndicator = document.getElementById('activeOperatorsIndicator');
+        const activeIndicator = this.domCache.get('activeOperatorsIndicator');
         if (activeIndicator) {
+            clearElement(activeIndicator);
+            
             if (activeOperators.length > 0) {
                 // Afficher les noms (max 3) + compteur
                 const names = activeOperators
@@ -969,11 +1033,8 @@ class AdminPage {
                     .map(op => `${op.name || op.code} (${op.code})`)
                     .join(', ');
                 const more = activeOperators.length > 3 ? ` +${activeOperators.length - 3}` : '';
-            activeIndicator.innerHTML = `
-                <span class="badge badge-success">
-                         🟢 ${names}${more}
-                    </span>
-                `;
+                const badge = createBadge(`🟢 ${names}${more}`, 'badge-success');
+                activeIndicator.appendChild(badge);
             } else if (operators.length > 0) {
                 // Des opérateurs sont connectés mais aucun n'est actif
                 const names = operators
@@ -981,35 +1042,29 @@ class AdminPage {
                     .map(op => `${op.name || op.code} (${op.code})`)
                     .join(', ');
                 const more = operators.length > 3 ? ` +${operators.length - 3}` : '';
-                activeIndicator.innerHTML = `
-                    <span class="badge badge-secondary">
-                         🟢 Connecté(s): ${names}${more}
-                    </span>
-                `;
+                const badge = createBadge(`🟢 Connecté(s): ${names}${more}`, 'badge-secondary');
+                activeIndicator.appendChild(badge);
             } else {
                 // Aucun opérateur connecté
-                activeIndicator.innerHTML = `
-                    <span class="badge badge-secondary">
-                        Aucun opérateur connecté
-                </span>
-            `;
+                const badge = createBadge('Aucun opérateur connecté', 'badge-secondary');
+                activeIndicator.appendChild(badge);
             }
         }
         
         // Log pour debug
         if (activeOperators.length > 0) {
-            console.log('🟢 Opérateurs actifs:', activeOperators.map(op => op.code).join(', '));
+            this.logger.log('🟢 Opérateurs actifs:', activeOperators.map(op => op.code).join(', '));
         }
     }
 
     async handleOperatorChange() {
         if (this.isLoading) {
-            console.log('⚠️ Chargement en cours, ignorer le changement d\'opérateur');
+            this.logger.log('⚠️ Chargement en cours, ignorer le changement d\'opérateur');
             return;
         }
         
         const selectedOperator = this.operatorSelect.value;
-        console.log('🔄 Changement d\'opérateur sélectionné:', selectedOperator);
+        this.logger.log('🔄 Changement d\'opérateur sélectionné:', selectedOperator);
 
         // En mode Monitoring, le filtre opérateur est appliqué via loadMonitoringRecords()
         if (this.selectedTempsIds && typeof this.selectedTempsIds.clear === 'function') {
@@ -1017,7 +1072,7 @@ class AdminPage {
         } else {
             this.selectedTempsIds = new Set();
         }
-        const selectAll = document.getElementById('selectAllRows');
+        const selectAll = this.domCache.get('selectAllRows');
         if (selectAll) selectAll.checked = false;
         await this.loadData();
     }
@@ -1028,8 +1083,20 @@ class AdminPage {
             const operatorCode = prompt('Code opérateur :');
             if (!operatorCode) return;
             
+            // Valider le code opérateur
+            if (!this.validator.validateOperatorCode(operatorCode)) {
+                this.notificationManager.error('Code opérateur invalide');
+                return;
+            }
+            
             const lancementCode = prompt('Code lancement :');
             if (!lancementCode) return;
+            
+            // Valider le code lancement
+            if (!this.validator.validateLancementCode(lancementCode)) {
+                this.notificationManager.error('Code lancement invalide');
+                return;
+            }
             
             // Étape (Phase + CodeRubrique) : ne demander que s'il y a plusieurs étapes
             let codeOperation = null;
@@ -1065,7 +1132,7 @@ class AdminPage {
                 }
             } catch (e) {
                 // Best effort: si l'endpoint steps échoue, on laisse l'admin créer une ligne "ADMIN"
-                console.warn('⚠️ Impossible de récupérer les étapes (CodeOperation) pour admin:', e?.message || e);
+                this.logger.warn('⚠️ Impossible de récupérer les étapes (CodeOperation) pour admin:', e?.message || e);
             }
 
             const phase = prompt('Phase (optionnel - laisser vide pour ERP/auto) :') || '';
@@ -1080,55 +1147,70 @@ class AdminPage {
                 status: 'DEBUT'
             };
             
-            console.log('Ajout d\'une nouvelle opération:', newOperation);
-            
-            // Appeler l'API pour ajouter l'opération
-            const result = await this.apiService.post('/admin/operations', newOperation);
-            
-            if (result.success) {
-                if (result.warning) {
-                    this.notificationManager.warning(result.warning);
-                    console.warn('⚠️ Avertissement:', result.warning);
-                } else {
-                    this.notificationManager.success(result.message || 'Opération ajoutée avec succès');
-                }
-                console.log('Opération ajoutée:', result);
-                
-                // Attendre un peu pour que le backend ait fini de traiter
-                await new Promise(resolve => setTimeout(resolve, 500));
-                
-                // Recharger les données pour afficher la nouvelle ligne
-                await this.loadData();
-            } else {
-                const errorMessage = result.error || 'Erreur inconnue lors de l\'ajout';
-                this.notificationManager.error(`Erreur lors de l'ajout : ${errorMessage}`);
-                console.error('Erreur d\'ajout:', result);
-                
-                // Si le lancement n'existe pas, suggérer de le créer
-                if (errorMessage.includes('n\'existe pas dans la base de données')) {
-                    const createLancement = confirm(
-                        `${errorMessage}\n\nVoulez-vous créer le lancement dans LCTE maintenant ?`
-                    );
-                    if (createLancement) {
-                        // TODO: Ouvrir un formulaire pour créer le lancement
-                        console.log('Création du lancement demandée');
-                    }
-                }
+            // Valider l'opération complète
+            const validation = this.validator.validateOperation(newOperation);
+            if (!validation.valid) {
+                this.notificationManager.error(`Erreurs de validation:\n${validation.errors.join('\n')}`);
+                return;
             }
             
+            this.logger.log('Ajout d\'une nouvelle opération:', newOperation);
+            
+            // Afficher un indicateur de chargement
+            const addBtn = this.domCache.get('addOperationBtn');
+            this.loadingIndicator.show('addOperation', addBtn, 'Ajout en cours...');
+            
+            try {
+                // Appeler l'API pour ajouter l'opération
+                const result = await this.apiService.post('/admin/operations', newOperation);
+            
+                if (result.success) {
+                    if (result.warning) {
+                        this.notificationManager.warning(result.warning);
+                        this.logger.warn('⚠️ Avertissement:', result.warning);
+                    } else {
+                        this.notificationManager.success(result.message || 'Opération ajoutée avec succès');
+                    }
+                    this.logger.log('Opération ajoutée:', result);
+                    
+                    // Attendre un peu pour que le backend ait fini de traiter
+                    await new Promise(resolve => setTimeout(resolve, 500));
+                    
+                    // Recharger les données pour afficher la nouvelle ligne
+                    await this.loadData();
+                } else {
+                    const errorMessage = result.error || 'Erreur inconnue lors de l\'ajout';
+                    this.notificationManager.error(`Erreur lors de l'ajout : ${errorMessage}`);
+                    this.logger.error('Erreur d\'ajout:', result);
+                    
+                    // Si le lancement n'existe pas, suggérer de le créer
+                    if (errorMessage.includes('n\'existe pas dans la base de données')) {
+                        const createLancement = confirm(
+                            `${errorMessage}\n\nVoulez-vous créer le lancement dans LCTE maintenant ?`
+                        );
+                        if (createLancement) {
+                            // TODO: Ouvrir un formulaire pour créer le lancement
+                            this.logger.log('Création du lancement demandée');
+                        }
+                    }
+                }
+            } finally {
+                // Masquer l'indicateur de chargement
+                this.loadingIndicator.hide('addOperation');
+            }
         } catch (error) {
-            console.error('Erreur lors de l\'ajout d\'opération:', error);
-            this.notificationManager.error('Erreur de connexion lors de l\'ajout');
+            this.errorHandler.handle(error, 'handleAddOperation', 'Erreur de connexion lors de l\'ajout');
+            this.loadingIndicator.hide('addOperation');
         }
     }
 
     updateOperationsTable() {
-        console.log('🔄 DEBUT updateOperationsTable()');
-        console.log('📊 OPERATIONS TOTALES:', this.operations.length);
-        console.log('📋 TABLEAU BODY:', this.operationsTableBody);
+        this.logger.log('🔄 DEBUT updateOperationsTable()');
+        this.logger.log('📊 OPERATIONS TOTALES:', this.operations.length);
+        this.logger.log('📋 TABLEAU BODY:', this.operationsTableBody);
         
         if (!this.operationsTableBody) {
-            console.error('❌ ERREUR: operationsTableBody est null!');
+            this.logger.error('❌ ERREUR: operationsTableBody est null!');
             return;
         }
         
@@ -1169,27 +1251,27 @@ class AdminPage {
         }
         
         // Filtre de recherche (code lancement)
-        const searchFilter = document.getElementById('searchFilter');
+        const searchFilter = this.domCache.get('searchFilter');
         if (searchFilter && searchFilter.value.trim()) {
             const searchTerm = searchFilter.value.trim().toLowerCase();
-            console.log('🔍 Filtrage par recherche:', searchTerm);
+            this.logger.log('🔍 Filtrage par recherche:', searchTerm);
             filteredOperations = filteredOperations.filter(op => {
                 const lancementCode = (op.LancementCode || op.lancementCode || '').toLowerCase();
                 return lancementCode.includes(searchTerm);
             });
-            console.log(`📊 Après filtrage recherche: ${filteredOperations.length} opérations`);
+            this.logger.log(`📊 Après filtrage recherche: ${filteredOperations.length} opérations`);
         }
         
-        this.operationsTableBody.innerHTML = '';
-        console.log('🧹 TABLEAU VIDE');
+        clearElement(this.operationsTableBody);
+        this.logger.log('🧹 TABLEAU VIDE');
         
         // Déterminer le message à afficher si aucune opération
         let emptyMessage = '';
         let emptySubMessage = '';
         
         if (filteredOperations.length === 0) {
-            console.log('⚠️ AUCUNE OPERATION APRES FILTRAGE - AFFICHAGE MESSAGE');
-            console.log('🔍 Filtres actifs:', {
+            this.logger.log('⚠️ AUCUNE OPERATION APRES FILTRAGE - AFFICHAGE MESSAGE');
+            this.logger.log('🔍 Filtres actifs:', {
                 statusFilter: statusFilter?.value || 'aucun',
                 searchFilter: searchFilter?.value || 'aucun',
                 totalOperations: this.operations.length
@@ -1217,23 +1299,31 @@ class AdminPage {
                 emptySubMessage = 'Aucun enregistrement ne correspond aux filtres sélectionnés';
             }
             
-            const row = document.createElement('tr');
-            row.className = 'empty-state-row';
-            row.innerHTML = `
-                <td colspan="9" class="empty-state">
-                    <div style="text-align: center; padding: 3rem 2rem;">
-                        <i class="fas fa-inbox" style="font-size: 3rem; color: #ccc; margin-bottom: 1rem; display: block;"></i>
-                        <p style="font-size: 1.1rem; color: #666; margin: 0.5rem 0; font-weight: 500;">
-                            ${emptyMessage}
-                        </p>
-                        <p style="font-size: 0.9rem; color: #999; margin: 0;">
-                            ${emptySubMessage}
-                        </p>
-                    </div>
-                </td>
-            `;
+            const row = createElement('tr', { className: 'empty-state-row' });
+            const cell = createTableCell('', { colspan: '9', className: 'empty-state' });
+            
+            const div = createElement('div', { style: { textAlign: 'center', padding: '3rem 2rem' } });
+            
+            const icon = createElement('i', { 
+                className: 'fas fa-inbox',
+                style: { fontSize: '3rem', color: '#ccc', marginBottom: '1rem', display: 'block' }
+            });
+            div.appendChild(icon);
+            
+            const p1 = createElement('p', {
+                style: { fontSize: '1.1rem', color: '#666', margin: '0.5rem 0', fontWeight: '500' }
+            }, emptyMessage);
+            div.appendChild(p1);
+            
+            const p2 = createElement('p', {
+                style: { fontSize: '0.9rem', color: '#999', margin: '0' }
+            }, emptySubMessage);
+            div.appendChild(p2);
+            
+            cell.appendChild(div);
+            row.appendChild(cell);
             this.operationsTableBody.appendChild(row);
-            console.log('✅ MESSAGE AJOUTE AU TABLEAU');
+            this.logger.log('✅ MESSAGE AJOUTE AU TABLEAU');
             return;
         }
         
@@ -1315,12 +1405,12 @@ class AdminPage {
             if (opCode) ltToOperators.get(lt).add(opCode);
         });
         
-        console.log('🔄 CREATION DES LIGNES POUR', operationsToDisplay.length, 'OPERATIONS');
-        console.log('📋 DONNEES COMPLETES DES OPERATIONS:', operationsToDisplay);
+        this.logger.log('🔄 CREATION DES LIGNES POUR', operationsToDisplay.length, 'OPERATIONS');
+        this.logger.log('📋 DONNEES COMPLETES DES OPERATIONS:', operationsToDisplay);
         
         operationsToDisplay.forEach((operation, index) => {
             // Debug pour voir les données reçues (Monitoring)
-            console.log(`🔍 Enregistrement ${index + 1}:`, {
+            this.logger.log(`🔍 Enregistrement ${index + 1}:`, {
                 TempsId: operation.TempsId,
                 OperatorName: operation.OperatorName,
                 OperatorCode: operation.OperatorCode,
@@ -1343,17 +1433,17 @@ class AdminPage {
                 // Si l'heure de fin est avant l'heure de début (et pas de traversée de minuit)
                 if (endMinutes < startMinutes && endMinutes > 0) {
                     timeWarning = ' ⚠️';
-                    console.warn(`⚠️ Heures incohérentes pour ${operation.lancementCode}: ${formattedStartTime} -> ${formattedEndTime}`);
+                    this.logger.warn(`⚠️ Heures incohérentes pour ${operation.lancementCode}: ${formattedStartTime} -> ${formattedEndTime}`);
                 }
             }
             
-            console.log(`⏰ Heures formatées pour ${operation.LancementCode}:`, {
+            this.logger.log(`⏰ Heures formatées pour ${operation.LancementCode}:`, {
                 startTime: `${operation.StartTime} -> ${formattedStartTime}`,
                 endTime: `${operation.EndTime} -> ${formattedEndTime}`,
                 warning: timeWarning ? 'Heures incohérentes détectées' : 'OK'
             });
             
-            const row = document.createElement('tr');
+            const row = createElement('tr');
             
             // Identifiants (ne pas confondre):
             // - TempsId: ABTEMPS_OPERATEURS (consolidé)
@@ -1392,54 +1482,84 @@ class AdminPage {
                 statutLabel = this.getMonitoringStatusText(statutCode);
             }
             
-            row.innerHTML = `
-                <td>${operation.OperatorName || operation.OperatorCode || '-'}</td>
-                <td>
-                    <div style="display:flex; flex-direction:column; gap:4px;">
-                        <div>${operation.LancementCode || '-'}</div>
-                        ${
-                            (() => {
-                                const lt = String(operation.LancementCode || '').trim().toUpperCase();
-                                const n = lt ? (ltToOperators.get(lt)?.size || 0) : 0;
-                                if (n > 1) {
-                                    return `<span class="badge badge-secondary" style="width:max-content;">👥 ${n} opérateurs</span>`;
-                                }
-                                return '';
-                            })()
-                        }
-                    </div>
-                </td>
-                <td>${operation.LancementName || '-'}</td>
-                <td>${operation.Phase || operation.phase || '-'}</td>
-                <td>${operation.CodeRubrique || operation.codeRubrique || '-'}</td>
-                <td>${formattedStartTime}</td>
-                <td>${formattedEndTime}${timeWarning}</td>
-                <td>
-                    <span class="status-badge status-${statutCode}">${statutLabel}</span>
-                </td>
-                <td class="actions-cell">
-                    <button class="btn-edit"
-                        data-id="${rowId}"
-                        data-operation-id="${rowId}"
-                        data-temps-id="${tempsId || ''}"
-                        data-event-id="${eventId || ''}"
-                        data-unconsolidated="${isUnconsolidated ? 'true' : 'false'}"
-                        title="Corriger"
-                        type="button">
-                        <i class="fas fa-edit"></i>
-                    </button>
-                    <button class="btn-delete"
-                        data-id="${rowId}"
-                        data-operation-id="${rowId}"
-                        data-temps-id="${tempsId || ''}"
-                        data-event-id="${eventId || ''}"
-                        data-unconsolidated="${isUnconsolidated ? 'true' : 'false'}"
-                        title="Supprimer"
-                        type="button">
-                        <i class="fas fa-trash"></i>
-                    </button>
-                </td>
-            `;
+            // Construire les cellules de manière sécurisée
+            // Cellule 1: Opérateur
+            const cell1 = createTableCell(operation.OperatorName || operation.OperatorCode || '-');
+            row.appendChild(cell1);
+            
+            // Cellule 2: Lancement avec badge multi-opérateurs
+            const cell2 = createTableCell('');
+            const lancementDiv = createElement('div', { style: { display: 'flex', flexDirection: 'column', gap: '4px' } });
+            const lancementCodeDiv = createElement('div', {}, operation.LancementCode || '-');
+            lancementDiv.appendChild(lancementCodeDiv);
+            
+            const lt = String(operation.LancementCode || '').trim().toUpperCase();
+            const n = lt ? (ltToOperators.get(lt)?.size || 0) : 0;
+            if (n > 1) {
+                const badge = createBadge(`👥 ${n} opérateurs`, 'badge-secondary');
+                badge.style.cssText = 'width:max-content;';
+                lancementDiv.appendChild(badge);
+            }
+            cell2.appendChild(lancementDiv);
+            row.appendChild(cell2);
+            
+            // Cellule 3: Nom lancement
+            const cell3 = createTableCell(operation.LancementName || '-');
+            row.appendChild(cell3);
+            
+            // Cellule 4: Phase
+            const cell4 = createTableCell(operation.Phase || operation.phase || '-');
+            row.appendChild(cell4);
+            
+            // Cellule 5: CodeRubrique
+            const cell5 = createTableCell(operation.CodeRubrique || operation.codeRubrique || '-');
+            row.appendChild(cell5);
+            
+            // Cellule 6: Heure début
+            const cell6 = createTableCell(formattedStartTime);
+            row.appendChild(cell6);
+            
+            // Cellule 7: Heure fin avec warning
+            const endTimeText = formattedEndTime + timeWarning;
+            const cell7 = createTableCell(endTimeText);
+            row.appendChild(cell7);
+            
+            // Cellule 8: Statut
+            const cell8 = createTableCell('');
+            const statusBadge = createBadge(statutLabel, `status-badge status-${statutCode}`);
+            cell8.appendChild(statusBadge);
+            row.appendChild(cell8);
+            
+            // Cellule 9: Actions
+            const cell9 = createTableCell('', { className: 'actions-cell' });
+            const editBtn = createButton({
+                icon: 'fas fa-edit',
+                className: 'btn-edit',
+                title: 'Corriger',
+                dataset: {
+                    id: rowId,
+                    operationId: rowId,
+                    tempsId: tempsId || '',
+                    eventId: eventId || '',
+                    unconsolidated: isUnconsolidated ? 'true' : 'false'
+                }
+            });
+            const deleteBtn = createButton({
+                icon: 'fas fa-trash',
+                className: 'btn-delete',
+                title: 'Supprimer',
+                dataset: {
+                    id: rowId,
+                    operationId: rowId,
+                    tempsId: tempsId || '',
+                    eventId: eventId || '',
+                    unconsolidated: isUnconsolidated ? 'true' : 'false'
+                }
+            });
+            cell9.appendChild(editBtn);
+            cell9.appendChild(deleteBtn);
+            row.appendChild(cell9);
+            
             this.operationsTableBody.appendChild(row);
             
             // Afficher les problèmes détectés pour cette opération
@@ -1480,21 +1600,25 @@ class AdminPage {
     async handleTransfer() {
         // Empêcher les appels simultanés
         if (this._isTransferring) {
-            console.log('⏸️ Transfert déjà en cours, ignoré');
+            this.logger.log('⏸️ Transfert déjà en cours, ignoré');
             return;
         }
 
         try {
             this._isTransferring = true;
+            
+            // Afficher un indicateur de chargement
+            const transferBtn = this.domCache.get('transferBtn');
+            this.loadingIndicator.show('transfer', transferBtn, 'Transfert en cours...');
             const allRecordsData = this.operations || [];
-            console.log(`📊 Total opérations dans le tableau: ${allRecordsData.length}`);
+            this.logger.log(`📊 Total opérations dans le tableau: ${allRecordsData.length}`);
 
             // 1) Prendre uniquement les opérations TERMINÉES non déjà transférées
             let terminatedOps = allRecordsData.filter(
                 op => this.isOperationTerminated(op) && op.StatutTraitement !== 'T'
             );
 
-            console.log(`📊 Opérations TERMINÉES non transférées: ${terminatedOps.length}`);
+            this.logger.log(`📊 Opérations TERMINÉES non transférées: ${terminatedOps.length}`);
 
             if (terminatedOps.length === 0) {
                 const alreadyTransferred = allRecordsData.filter(op => op.StatutTraitement === 'T').length;
@@ -1512,7 +1636,7 @@ class AdminPage {
             let lastConsolidationSkipped = [];
             let lastConsolidationErrors = [];
             if (opsWithoutTempsId.length > 0) {
-                console.log(`🔄 Consolidation de ${opsWithoutTempsId.length} opération(s) terminée(s) sans TempsId avant transfert...`);
+                this.logger.log(`🔄 Consolidation de ${opsWithoutTempsId.length} opération(s) terminée(s) sans TempsId avant transfert...`);
                 const operationsToConsolidate = opsWithoutTempsId.map(op => ({
                     OperatorCode: op.OperatorCode,
                     LancementCode: op.LancementCode
@@ -1528,7 +1652,7 @@ class AdminPage {
                     lastConsolidationSkipped = skipped;
                     lastConsolidationErrors = errors;
 
-                    console.log(
+                    this.logger.log(
                         `✅ Consolidation pré-transfert: ${ok.length} réussie(s), ` +
                         `${skipped.length} ignorée(s), ` +
                         `${errors.length} erreur(s)`
@@ -1545,7 +1669,7 @@ class AdminPage {
                             `${errors.length} opération(s) n'ont pas pu être consolidée(s):\n\n${errorDetails}\n\n` +
                             `Vérifiez que les opérations ont bien des événements DEBUT et FIN dans ABHISTORIQUE_OPERATEURS.`;
                         
-                        console.error('❌ Erreurs de consolidation:', errors);
+                        this.logger.error('❌ Erreurs de consolidation:', errors);
                         
                         // Utiliser alert() pour afficher le message complet
                         alert(errorMessage);
@@ -1625,7 +1749,7 @@ class AdminPage {
                 errorDetails += '• Données invalides dans la base de données\n\n';
                 errorDetails += 'Vérifiez les logs backend pour plus de détails.';
                 
-                console.error('❌ Aucune opération consolidée:', {
+                this.logger.error('❌ Aucune opération consolidée:', {
                     totalTerminated: terminatedOps.length,
                     failedOps: failedOps.map(op => ({
                         OperatorCode: op.OperatorCode,
@@ -1648,7 +1772,7 @@ class AdminPage {
                 return;
             }
 
-            console.log(
+            this.logger.log(
                 `✅ Opérations éligibles au transfert (avec TempsId): ${terminatedWithTempsId.length} ` +
                 `sur ${terminatedOps.length} opérations terminées`
             );
@@ -1675,7 +1799,7 @@ class AdminPage {
                     // Recharger les données pour mettre à jour l'affichage (les opérations transmises seront masquées)
                     await this.loadData(false); // Désactiver autoConsolidate après transfert
                     // S'assurer que le filtre de statut n'est pas sur "Transmis" pour masquer les opérations transférées
-                    const statusFilter = document.getElementById('statusFilter');
+                    const statusFilter = this.domCache.get('statusFilter');
                     if (statusFilter && statusFilter.value === 'T') {
                         statusFilter.value = ''; // Réinitialiser le filtre pour masquer les transmises
                     }
@@ -1689,39 +1813,72 @@ class AdminPage {
                 this.openTransferModal(terminatedWithTempsId);
             }
         } catch (error) {
-            console.error('Erreur lors du transfert:', error);
-            this.notificationManager.error('Erreur de connexion lors du transfert');
+            this.errorHandler.handle(error, 'handleTransfer', 'Erreur de connexion lors du transfert');
         } finally {
             this._isTransferring = false;
         }
     }
 
     openTransferModal(records) {
-        const modal = document.getElementById('transferSelectionModal');
-        const body = document.getElementById('transferModalTableBody');
-        const selectAll = document.getElementById('transferSelectAll');
+        const modal = this.domCache.get('transferSelectionModal');
+        const body = this.domCache.get('transferModalTableBody');
+        const selectAll = this.domCache.get('transferSelectAll');
         if (!modal || !body) return;
 
         this.transferSelectionIds.clear();
         if (selectAll) selectAll.checked = true;
 
-        body.innerHTML = '';
+        clearElement(body);
         for (const r of records) {
             const id = r.TempsId;
             const key = String(id);
             this.transferSelectionIds.add(key); // pré-sélectionner tout
 
-            const tr = document.createElement('tr');
-            tr.innerHTML = `
-                <td style="text-align:center; padding:10px; border-bottom:1px solid #f0f0f0;">
-                    <input type="checkbox" class="transfer-row" data-id="${id}" checked />
-                </td>
-                <td style="padding:10px; border-bottom:1px solid #f0f0f0;">${r.OperatorName || r.OperatorCode || '-'}</td>
-                <td style="padding:10px; border-bottom:1px solid #f0f0f0;">${r.LancementCode || '-'}</td>
-                <td style="padding:10px; border-bottom:1px solid #f0f0f0;">${r.LancementName || '-'}</td>
-                <td style="padding:10px; border-bottom:1px solid #f0f0f0;">${this.formatDateTime(r.StartTime)}</td>
-                <td style="padding:10px; border-bottom:1px solid #f0f0f0;">${this.formatDateTime(r.EndTime)}</td>
-            `;
+            const tr = createElement('tr');
+            
+            // Cellule checkbox
+            const cell1 = createTableCell('', { 
+                style: { textAlign: 'center', padding: '10px', borderBottom: '1px solid #f0f0f0' } 
+            });
+            const checkbox = createElement('input', {
+                type: 'checkbox',
+                className: 'transfer-row',
+                dataset: { id: id },
+                checked: true
+            });
+            cell1.appendChild(checkbox);
+            tr.appendChild(cell1);
+            
+            // Cellule opérateur
+            const cell2 = createTableCell(r.OperatorName || r.OperatorCode || '-', {
+                style: { padding: '10px', borderBottom: '1px solid #f0f0f0' }
+            });
+            tr.appendChild(cell2);
+            
+            // Cellule lancement code
+            const cell3 = createTableCell(r.LancementCode || '-', {
+                style: { padding: '10px', borderBottom: '1px solid #f0f0f0' }
+            });
+            tr.appendChild(cell3);
+            
+            // Cellule lancement name
+            const cell4 = createTableCell(r.LancementName || '-', {
+                style: { padding: '10px', borderBottom: '1px solid #f0f0f0' }
+            });
+            tr.appendChild(cell4);
+            
+            // Cellule heure début
+            const cell5 = createTableCell(this.formatDateTime(r.StartTime), {
+                style: { padding: '10px', borderBottom: '1px solid #f0f0f0' }
+            });
+            tr.appendChild(cell5);
+            
+            // Cellule heure fin
+            const cell6 = createTableCell(this.formatDateTime(r.EndTime), {
+                style: { padding: '10px', borderBottom: '1px solid #f0f0f0' }
+            });
+            tr.appendChild(cell6);
+            
             body.appendChild(tr);
         }
 
@@ -1738,19 +1895,19 @@ class AdminPage {
     }
 
     hideTransferModal() {
-        const modal = document.getElementById('transferSelectionModal');
+        const modal = this.domCache.get('transferSelectionModal');
         if (modal) modal.style.display = 'none';
         this.transferSelectionIds.clear();
         // Réinitialiser le flag de transfert si la modale est fermée sans transférer
         // (le flag sera réinitialisé dans le finally de handleTransfer si le transfert a été fait)
         if (this._isTransferring) {
-            console.log('⚠️ Modale fermée sans transfert, réinitialisation du flag');
+            this.logger.log('⚠️ Modale fermée sans transfert, réinitialisation du flag');
             this._isTransferring = false;
         }
     }
 
     toggleTransferSelectAll(checked) {
-        const body = document.getElementById('transferModalTableBody');
+        const body = this.domCache.get('transferModalTableBody');
         if (!body) return;
         const cbs = body.querySelectorAll('input.transfer-row');
         cbs.forEach(cb => {
@@ -1779,7 +1936,7 @@ class AdminPage {
             this.notificationManager.error(result?.error || 'Erreur transfert');
             }
         } catch (error) {
-            console.error('❌ Erreur lors du transfert depuis la modale:', error);
+            this.logger.error('❌ Erreur lors du transfert depuis la modale:', error);
             this.notificationManager.error('Erreur de connexion lors du transfert');
         }
     }
@@ -1797,17 +1954,23 @@ class AdminPage {
                 this.notificationManager.error(result?.error || 'Erreur lors de la suppression');
             }
         } catch (error) {
-            console.error('❌ Erreur suppression opération:', error);
+            this.logger.error('❌ Erreur suppression opération:', error);
             this.notificationManager.error('Erreur lors de la suppression');
         }
     }
 
     async deleteMonitoringRecord(id) {
         // Supprimer un enregistrement consolidé (depuis ABTEMPS_OPERATEURS)
+        // Valider l'ID
+        if (!this.validator.validateId(id)) {
+            this.notificationManager.error('ID invalide');
+            return;
+        }
+        
         // Convertir l'ID en nombre pour éviter les problèmes de type
         const tempsId = parseInt(id, 10);
         if (isNaN(tempsId)) {
-            console.error('❌ ID invalide:', id);
+            this.logger.error('❌ ID invalide:', id);
             this.notificationManager.error('ID d\'enregistrement invalide');
             return;
         }
@@ -1815,6 +1978,9 @@ class AdminPage {
         if (!confirm('Supprimer cet enregistrement de temps ?')) return;
         
         try {
+            // Afficher un indicateur de chargement
+            this.loadingIndicator.show('deleteMonitoring', null, 'Suppression en cours...');
+            
             const result = await this.apiService.deleteMonitoringTemps(tempsId);
             if (result && result.success) {
                 this.notificationManager.success('Enregistrement supprimé');
@@ -1830,14 +1996,9 @@ class AdminPage {
                 }
             }
         } catch (error) {
-            console.error('❌ Erreur suppression monitoring:', error);
-            // Si c'est une erreur 404, l'enregistrement n'existe probablement plus
-            if (error.message && error.message.includes('non trouvé')) {
-                this.notificationManager.warning('Cet enregistrement n\'existe plus. Actualisation...');
-                await this.loadData();
-            } else {
-                this.notificationManager.error('Erreur lors de la suppression');
-            }
+            this.errorHandler.handle(error, 'deleteMonitoringRecord', 'Erreur lors de la suppression');
+        } finally {
+            this.loadingIndicator.hide('deleteMonitoring');
         }
     }
 
@@ -1845,7 +2006,7 @@ class AdminPage {
         // Convertir l'ID en nombre pour éviter les problèmes de type
         const tempsId = parseInt(id, 10);
         if (isNaN(tempsId)) {
-            console.error('❌ ID invalide:', id);
+            this.logger.error('❌ ID invalide:', id);
             this.notificationManager.error('ID d\'enregistrement invalide');
             return;
         }
@@ -1854,7 +2015,7 @@ class AdminPage {
         const record = this.operations.find(op => op.TempsId == tempsId);
         
         if (!record) {
-            console.warn(`⚠️ Enregistrement avec TempsId ${tempsId} non trouvé dans les données locales. Actualisation...`);
+            this.logger.warn(`⚠️ Enregistrement avec TempsId ${tempsId} non trouvé dans les données locales. Actualisation...`);
             this.notificationManager.warning('Enregistrement non trouvé. Actualisation des données...');
             await this.loadData();
             return;
@@ -1862,7 +2023,7 @@ class AdminPage {
 
         // Si l'enregistrement est non consolidé, utiliser editOperation à la place
         if (record._isUnconsolidated) {
-            console.log('⚠️ Enregistrement non consolidé, redirection vers editOperation');
+            this.logger.log('⚠️ Enregistrement non consolidé, redirection vers editOperation');
             await this.editOperation(id);
             return;
         }
@@ -1923,7 +2084,7 @@ class AdminPage {
                 this.notificationManager.error(result?.error || 'Erreur correction');
             }
         } catch (error) {
-            console.error('❌ Erreur lors de la correction:', error);
+            this.logger.error('❌ Erreur lors de la correction:', error);
             
             // Si c'est une erreur 404 (enregistrement non trouvé), rafraîchir les données
             if (error.message && error.message.includes('non trouvé')) {
@@ -2000,11 +2161,13 @@ class AdminPage {
         
         if (!validation.valid || validation.warnings.length > 0) {
             // Créer un badge d'avertissement
-            const badge = document.createElement('span');
-            badge.className = 'operation-issue-badge badge badge-warning';
-            badge.style.cssText = 'margin-left: 5px; cursor: pointer;';
-            badge.title = [...validation.errors, ...validation.warnings].join('\n');
-            badge.innerHTML = '<i class="fas fa-exclamation-triangle"></i>';
+            const badge = createElement('span', {
+                className: 'operation-issue-badge badge badge-warning',
+                style: { marginLeft: '5px', cursor: 'pointer' },
+                title: [...validation.errors, ...validation.warnings].join('\n')
+            });
+            const icon = createElement('i', { className: 'fas fa-exclamation-triangle' });
+            badge.appendChild(icon);
             
             badge.addEventListener('click', () => {
                 const message = [
@@ -2049,7 +2212,7 @@ class AdminPage {
     async editOperation(id) {
         // Éditer une opération non consolidée (ABHISTORIQUE_OPERATEURS) avec des popups (prompts)
         // id = EventId (NoEnreg)
-        console.log('✏️ Édition (popup) opération non consolidée, EventId:', id);
+        this.logger.log('✏️ Édition (popup) opération non consolidée, EventId:', id);
         
         const record = this.operations.find(op => 
             (op.EventId && op.EventId == id) || 
@@ -2058,7 +2221,7 @@ class AdminPage {
         );
         
         if (!record) {
-            console.warn(`⚠️ Opération avec EventId ${id} non trouvée. Actualisation...`);
+            this.logger.warn(`⚠️ Opération avec EventId ${id} non trouvée. Actualisation...`);
             this.notificationManager.warning('Opération non trouvée. Actualisation des données...');
             await this.loadData();
             return;
@@ -2066,7 +2229,7 @@ class AdminPage {
 
         // Si l'opération est en fait consolidée, rediriger vers l'édition monitoring
         if (!record._isUnconsolidated && record.TempsId) {
-            console.warn(`⚠️ Opération ${id} est consolidée, redirection vers editMonitoringRecord`);
+            this.logger.warn(`⚠️ Opération ${id} est consolidée, redirection vers editMonitoringRecord`);
             await this.editMonitoringRecord(record.TempsId);
             return;
         }
@@ -2125,14 +2288,14 @@ class AdminPage {
                 this.notificationManager.error(result?.error || 'Erreur lors de la modification');
             }
         } catch (error) {
-            console.error('❌ Erreur lors de la modification de l’opération:', error);
+            this.logger.error('❌ Erreur lors de la modification de l\'opération:', error);
             this.notificationManager.error('Erreur lors de la modification');
         }
     }
     
     // Fonction d'édition inline (non-async car manipulation DOM directe)
     editOperationInline(id) {
-        console.log('🔧 Édition inline de l\'opération:', id, 'Type:', typeof id);
+        this.logger.log('🔧 Édition inline de l\'opération:', id, 'Type:', typeof id);
         
         // Convertir l'ID en nombre si nécessaire pour la comparaison
         const numericId = typeof id === 'string' ? parseInt(id, 10) : id;
@@ -2152,7 +2315,7 @@ class AdminPage {
         }
         
         if (!row) {
-            console.error('❌ Ligne non trouvée pour l\'ID:', id);
+            this.logger.error('❌ Ligne non trouvée pour l\'ID:', id);
             this.notificationManager.warning(`Ligne non trouvée pour l'opération ${id}. Rechargement du tableau...`);
             this.loadData();
             return;
@@ -2169,7 +2332,7 @@ class AdminPage {
         });
         
         if (!operation) {
-            console.error('❌ Opération non trouvée pour l\'ID:', id);
+            this.logger.error('❌ Opération non trouvée pour l\'ID:', id);
             this.notificationManager.warning(`Opération ${id} non trouvée dans les données. Rechargement...`);
             this.loadData();
             return;
@@ -2185,37 +2348,53 @@ class AdminPage {
         const cells = row.querySelectorAll('td');
         if (cells.length >= 6) {
             // Cellule heure début (index 5)
-            cells[5].innerHTML = `
-                <input type="time" 
-                       data-field="startTime" 
-                       data-id="${id}"
-                       data-original="${originalStartTime}"
-                       value="${originalStartTime || ''}" 
-                       class="time-input form-control" 
-                       style="width: 100%; padding: 4px;">
-            `;
+            clearElement(cells[5]);
+            const startInput = createElement('input', {
+                type: 'time',
+                className: 'time-input form-control',
+                dataset: {
+                    field: 'startTime',
+                    id: id,
+                    original: originalStartTime
+                },
+                value: originalStartTime || '',
+                style: { width: '100%', padding: '4px' }
+            });
+            cells[5].appendChild(startInput);
             
             // Cellule heure fin (index 6)
-            cells[6].innerHTML = `
-                <input type="time" 
-                       data-field="endTime" 
-                       data-id="${id}"
-                       data-original="${originalEndTime}"
-                       value="${originalEndTime || ''}" 
-                       class="time-input form-control" 
-                       style="width: 100%; padding: 4px;"
-                       onchange="window.adminPage.validateTimeInput(this)">
-            `;
+            clearElement(cells[6]);
+            const endInput = createElement('input', {
+                type: 'time',
+                className: 'time-input form-control',
+                dataset: {
+                    field: 'endTime',
+                    id: id,
+                    original: originalEndTime
+                },
+                value: originalEndTime || '',
+                style: { width: '100%', padding: '4px' }
+            });
+            endInput.addEventListener('change', () => this.validateTimeInput(endInput));
+            cells[6].appendChild(endInput);
             
             // Cellule actions (index 8) - remplacer par boutons sauvegarder/annuler
-            cells[8].innerHTML = `
-                <button class="btn btn-sm btn-success" onclick="window.adminPage.saveOperation('${id}')" title="Sauvegarder">
-                    <i class="fas fa-check"></i>
-                </button>
-                <button class="btn btn-sm btn-secondary" onclick="window.adminPage.cancelEdit('${id}')" title="Annuler" style="margin-left: 5px;">
-                    <i class="fas fa-times"></i>
-                </button>
-            `;
+            clearElement(cells[8]);
+            const saveBtn = createButton({
+                icon: 'fas fa-check',
+                className: 'btn btn-sm btn-success',
+                title: 'Sauvegarder',
+                onClick: () => this.saveOperation(id)
+            });
+            const cancelBtn = createButton({
+                icon: 'fas fa-times',
+                className: 'btn btn-sm btn-secondary',
+                title: 'Annuler',
+                onClick: () => this.cancelEdit(id)
+            });
+            cancelBtn.style.marginLeft = '5px';
+            cells[8].appendChild(saveBtn);
+            cells[8].appendChild(cancelBtn);
         }
     }
     
@@ -2227,7 +2406,7 @@ class AdminPage {
     updateMonitoringRowInTable(tempsId, record) {
         const row = document.querySelector(`tr[data-operation-id="${tempsId}"]`);
         if (!row) {
-            console.warn(`⚠️ Ligne non trouvée pour TempsId ${tempsId}, rechargement complet`);
+            this.logger.warn(`⚠️ Ligne non trouvée pour TempsId ${tempsId}, rechargement complet`);
             this.updateOperationsTable();
             return;
         }
@@ -2241,7 +2420,7 @@ class AdminPage {
             cells[5].textContent = formattedStartTime;
             cells[6].textContent = formattedEndTime;
             
-            console.log(`✅ Ligne ${tempsId} mise à jour dans le tableau:`, {
+            this.logger.log(`✅ Ligne ${tempsId} mise à jour dans le tableau:`, {
                 StartTime: formattedStartTime,
                 EndTime: formattedEndTime
             });
@@ -2253,7 +2432,7 @@ class AdminPage {
         if (!dateString) return '-';
         
         if (this.debugTime) {
-            console.log(`🔧 formatDateTime input: "${dateString}" (type: ${typeof dateString}) and value:`, dateString);
+            this.logger.log(`🔧 formatDateTime input: "${dateString}" (type: ${typeof dateString}) and value:`, dateString);
         }
         
         // Si c'est déjà au format HH:mm, le retourner directement
@@ -2263,7 +2442,7 @@ class AdminPage {
                 const hours = timeMatch[1].padStart(2, '0');
                 const minutes = timeMatch[2];
                 const result = `${hours}:${minutes}`;
-                if (this.debugTime) console.log(`✅ formatDateTime: ${dateString} → ${result}`);
+                if (this.debugTime) this.logger.log(`✅ formatDateTime: ${dateString} → ${result}`);
                 return result;
             }
             
@@ -2273,7 +2452,7 @@ class AdminPage {
                 const hours = timeWithSecondsMatch[1].padStart(2, '0');
                 const minutes = timeWithSecondsMatch[2];
                 const result = `${hours}:${minutes}`;
-                if (this.debugTime) console.log(`✅ formatDateTime: ${dateString} → ${result}`);
+                if (this.debugTime) this.logger.log(`✅ formatDateTime: ${dateString} → ${result}`);
                 return result;
             }
         }
@@ -2286,7 +2465,7 @@ class AdminPage {
                 minute: '2-digit',
                 hour12: false
             });
-            if (this.debugTime) console.log(`✅ formatDateTime: Date → ${result}`);
+            if (this.debugTime) this.logger.log(`✅ formatDateTime: Date → ${result}`);
             return result;
         }
         
@@ -2301,15 +2480,15 @@ class AdminPage {
                     minute: '2-digit',
                     hour12: false
                 });
-                if (this.debugTime) console.log(`✅ formatDateTime: Date string → ${result}`);
+                if (this.debugTime) this.logger.log(`✅ formatDateTime: Date string → ${result}`);
                 return result;
             }
         } catch (error) {
-            console.warn('Erreur formatage heure:', dateString, error);
+            this.logger.warn('Erreur formatage heure:', dateString, error);
         }
         
         // En dernier recours, retourner la valeur originale ou un tiret
-        console.warn(`⚠️ Format non reconnu: ${dateString}`);
+        this.logger.warn(`⚠️ Format non reconnu: ${dateString}`);
         return dateString || '-';
     }
 
@@ -2335,7 +2514,7 @@ class AdminPage {
                 this.processAutoSave();
             }, this.autoSaveInterval);
             
-            console.log(`🔄 Sauvegarde automatique activée (${this.autoSaveInterval/1000}s)`);
+            this.logger.log(`🔄 Sauvegarde automatique activée (${this.autoSaveInterval/1000}s)`);
         }
     }
     
@@ -2343,7 +2522,7 @@ class AdminPage {
         if (this.autoSaveTimer) {
             clearInterval(this.autoSaveTimer);
             this.autoSaveTimer = null;
-            console.log('⏹️ Sauvegarde automatique désactivée');
+            this.logger.log('⏹️ Sauvegarde automatique désactivée');
         }
     }
     
@@ -2355,7 +2534,7 @@ class AdminPage {
         const operationChanges = this.pendingChanges.get(operationId);
         operationChanges[field] = value;
         
-        console.log(`📝 Modification en attente pour ${operationId}:`, operationChanges);
+        this.logger.log(`📝 Modification en attente pour ${operationId}:`, operationChanges);
         
         // Sauvegarde immédiate pour les modifications critiques
         if (field === 'startTime' || field === 'endTime') {
@@ -2368,7 +2547,7 @@ class AdminPage {
             return;
         }
         
-        console.log(`💾 Sauvegarde automatique de ${this.pendingChanges.size} modifications...`);
+        this.logger.log(`💾 Sauvegarde automatique de ${this.pendingChanges.size} modifications...`);
         
         const savePromises = [];
         
@@ -2381,13 +2560,13 @@ class AdminPage {
         try {
             await Promise.all(savePromises);
             this.pendingChanges.clear();
-            console.log('✅ Sauvegarde automatique terminée');
+            this.logger.log('✅ Sauvegarde automatique terminée');
             
             // Notification discrète
             this.showAutoSaveNotification('Modifications sauvegardées automatiquement');
             
         } catch (error) {
-            console.error('❌ Erreur sauvegarde automatique:', error);
+            this.logger.error('❌ Erreur sauvegarde automatique:', error);
             this.showAutoSaveNotification('Erreur lors de la sauvegarde automatique', 'error');
         }
     }
@@ -2396,9 +2575,9 @@ class AdminPage {
         try {
             await this.saveOperationChanges(operationId, changes);
             this.pendingChanges.delete(operationId);
-            console.log(`⚡ Sauvegarde immédiate réussie pour ${operationId}`);
+            this.logger.log(`⚡ Sauvegarde immédiate réussie pour ${operationId}`);
         } catch (error) {
-            console.error(`❌ Erreur sauvegarde immédiate ${operationId}:`, error);
+            this.logger.error(`❌ Erreur sauvegarde immédiate ${operationId}:`, error);
         }
     }
     
@@ -2418,7 +2597,7 @@ class AdminPage {
         if (result.success) {
             // Mettre à jour l'opération locale
             Object.assign(operation, changes);
-            console.log(`✅ Opération ${operationId} mise à jour:`, changes);
+            this.logger.log(`✅ Opération ${operationId} mise à jour:`, changes);
         } else {
             throw new Error(result.error || 'Erreur lors de la mise à jour');
         }
@@ -2431,7 +2610,7 @@ class AdminPage {
             this.notificationManager.show(message, type, 3000);
         } else {
             // Fallback si pas de notification manager
-            console.log(`📢 ${message}`);
+            this.logger.log(`📢 ${message}`);
         }
     }
     
@@ -2446,7 +2625,7 @@ class AdminPage {
             const result = await this.apiService.validateLancementCode(code);
             return result;
         } catch (error) {
-            console.error('❌ Erreur validation code:', error);
+            this.logger.error('❌ Erreur validation code:', error);
             return { valid: false, error: 'Erreur de validation' };
         }
     }
@@ -2498,13 +2677,14 @@ class AdminPage {
         inputElement.classList.add('validation-success');
         
         // Ajouter un tooltip avec les infos
-        const tooltip = document.createElement('div');
-        tooltip.className = 'validation-tooltip success';
-        tooltip.innerHTML = `
-            <strong>✅ Code valide</strong><br>
-            ${data.designation}<br>
-            <small>Statut: ${data.statut}</small>
-        `;
+        const tooltip = createElement('div', { className: 'validation-tooltip success' });
+        const strong = createElement('strong', {}, '✅ Code valide');
+        tooltip.appendChild(strong);
+        tooltip.appendChild(createElement('br'));
+        tooltip.appendChild(document.createTextNode(data.designation));
+        tooltip.appendChild(createElement('br'));
+        const small = createElement('small', {}, `Statut: ${data.statut}`);
+        tooltip.appendChild(small);
         
         inputElement.parentNode.appendChild(tooltip);
         
@@ -2521,9 +2701,9 @@ class AdminPage {
         inputElement.classList.add('validation-error');
         
         // Ajouter un tooltip d'erreur
-        const tooltip = document.createElement('div');
-        tooltip.className = 'validation-tooltip error';
-        tooltip.innerHTML = `<strong>❌ ${error}</strong>`;
+        const tooltip = createElement('div', { className: 'validation-tooltip error' });
+        const strong = createElement('strong', {}, `❌ ${error}`);
+        tooltip.appendChild(strong);
         
         inputElement.parentNode.appendChild(tooltip);
         
@@ -2564,25 +2744,25 @@ class AdminPage {
             return `${hours}:${minutes}`;
         }
         
-        console.warn(`⚠️ Format d'heure non reconnu pour nettoyage: "${timeString}"`);
+        this.logger.warn(`⚠️ Format d'heure non reconnu pour nettoyage: "${timeString}"`);
         return '';
     }
 
     formatTimeForInput(timeString) {
         if (!timeString) return '';
         
-        if (this.debugTime) console.log(`🔧 formatTimeForInput: "${timeString}"`);
+        if (this.debugTime) this.logger.log(`🔧 formatTimeForInput: "${timeString}"`);
         
         // Si c'est déjà au format HH:mm, le retourner directement
         if (typeof timeString === 'string' && /^\d{2}:\d{2}$/.test(timeString)) {
-            if (this.debugTime) console.log(`✅ Format HH:mm direct: ${timeString}`);
+            if (this.debugTime) this.logger.log(`✅ Format HH:mm direct: ${timeString}`);
             return timeString;
         }
         
         // Si c'est au format HH:mm:ss, enlever les secondes
         if (typeof timeString === 'string' && /^\d{2}:\d{2}:\d{2}$/.test(timeString)) {
             const result = timeString.substring(0, 5);
-            if (this.debugTime) console.log(`✅ Format HH:mm:ss → HH:mm: ${timeString} → ${result}`);
+            if (this.debugTime) this.logger.log(`✅ Format HH:mm:ss → HH:mm: ${timeString} → ${result}`);
             return result;
         }
         
@@ -2598,11 +2778,11 @@ class AdminPage {
                         minute: '2-digit',
                         hour12: false
                     });
-                    if (this.debugTime) console.log(`✅ Date complète → HH:mm: ${timeString} → ${formattedTime}`);
+                    if (this.debugTime) this.logger.log(`✅ Date complète → HH:mm: ${timeString} → ${formattedTime}`);
                     return formattedTime;
                 }
             } catch (error) {
-                console.warn('Erreur parsing date:', timeString, error);
+                this.logger.warn('Erreur parsing date:', timeString, error);
             }
         }
         
@@ -2614,11 +2794,11 @@ class AdminPage {
                 minute: '2-digit',
                 hour12: false
             });
-            if (this.debugTime) console.log(`✅ Date object → HH:mm: ${timeString} → ${formattedTime}`);
+            if (this.debugTime) this.logger.log(`✅ Date object → HH:mm: ${timeString} → ${formattedTime}`);
             return formattedTime;
         }
         
-        console.warn(`⚠️ Format d'heure non reconnu: "${timeString}" (type: ${typeof timeString})`);
+        this.logger.warn(`⚠️ Format d'heure non reconnu: "${timeString}" (type: ${typeof timeString})`);
         return '';
     }
 
@@ -2636,7 +2816,7 @@ class AdminPage {
         // Sinon, essayer de traiter comme une date complète
         const date = new Date(dateString);
         if (isNaN(date.getTime())) {
-            console.warn('Date invalide reçue:', dateString);
+            this.logger.warn('Date invalide reçue:', dateString);
             return '';
         }
         
@@ -2722,7 +2902,7 @@ class AdminPage {
             const row = document.querySelector(`tr[data-operation-id="${id}"]`);
             
             if (!row) {
-                console.warn('⚠️ Ligne non trouvée pour l\'opération', id);
+                this.logger.warn('⚠️ Ligne non trouvée pour l\'opération', id);
                 this.notificationManager.warning('Ligne non trouvée');
                 this.updateOperationsTable();
                 return;
@@ -2738,7 +2918,7 @@ class AdminPage {
             const statusSelect = row.querySelector('select[data-field="status"]') ||
                                row.querySelector('.status-select[data-field="status"]');
 
-            console.log('🔍 Recherche des inputs:', {
+            this.logger.log('🔍 Recherche des inputs:', {
                 id,
                 rowFound: !!row,
                 startTimeInputFound: !!startTimeInput,
@@ -2748,8 +2928,8 @@ class AdminPage {
             });
 
             if (!startTimeInput || !endTimeInput) {
-                console.warn('⚠️ Impossible de trouver les champs d\'heure pour la ligne', id);
-                console.log('🔍 Contenu de la ligne:', row.innerHTML);
+                this.logger.warn('⚠️ Impossible de trouver les champs d\'heure pour la ligne', id);
+                this.logger.log('🔍 Contenu de la ligne:', row.innerHTML);
                 this.notificationManager.warning('Aucune édition active pour cette ligne - Rechargement du tableau');
                 this.updateOperationsTable();
                 return;
@@ -2757,7 +2937,7 @@ class AdminPage {
             
             // Le statut est optionnel (peut ne pas être en mode édition)
             if (!statusSelect) {
-                console.log('ℹ️ Aucun select de statut trouvé - mode édition partielle');
+                this.logger.log('ℹ️ Aucun select de statut trouvé - mode édition partielle');
             }
 
             // Récupérer les valeurs originales
@@ -2775,7 +2955,7 @@ class AdminPage {
                 
                 if (endTimeObj <= startTimeObj) {
                     this.notificationManager.error('❌ L\'heure de fin doit être postérieure à l\'heure de début');
-                    console.warn('⚠️ Heure de fin antérieure à l\'heure de début:', { startTime, endTime });
+                    this.logger.warn('⚠️ Heure de fin antérieure à l\'heure de début:', { startTime, endTime });
                     return;
                 }
             }
@@ -2785,7 +2965,7 @@ class AdminPage {
             const endTimeChanged = endTimeInput.value !== originalEndTime;
             const statusChanged = statusSelect ? (statusSelect.value !== originalStatus) : false;
             
-            console.log(`🔧 Comparaison des valeurs pour ${id}:`, {
+            this.logger.log(`🔧 Comparaison des valeurs pour ${id}:`, {
                 startTime: {
                     original: originalStartTime,
                     current: startTimeInput.value,
@@ -2805,7 +2985,7 @@ class AdminPage {
             
             // Si aucune valeur n'a changé, ne pas envoyer de requête mais restaurer l'état normal
             if (!startTimeChanged && !endTimeChanged && !statusChanged) {
-                console.log(`ℹ️ Aucune modification détectée pour l'opération ${id}`);
+                this.logger.log(`ℹ️ Aucune modification détectée pour l'opération ${id}`);
                 this.notificationManager.info('Aucune modification détectée');
                 // Recharger les données pour restaurer l'état normal (sortir du mode édition)
                 await this.loadData();
@@ -2838,7 +3018,7 @@ class AdminPage {
             // Ajouter le statut s'il a changé
             if (statusChanged && statusSelect) {
                 updateData.status = statusSelect.value;
-                console.log(`🔧 Statut changé: ${originalStatus} → ${statusSelect.value}`);
+                this.logger.log(`🔧 Statut changé: ${originalStatus} → ${statusSelect.value}`);
             }
             
             // Validation de cohérence des heures
@@ -2848,7 +3028,7 @@ class AdminPage {
                 }
             }
 
-            console.log(`💾 Sauvegarde opération ${id}:`, updateData);
+            this.logger.log(`💾 Sauvegarde opération ${id}:`, updateData);
 
             // Vérifier si c'est un enregistrement de monitoring (ABTEMPS_OPERATEURS) ou historique (ABHISTORIQUE_OPERATEURS)
             // Utiliser la ligne déjà trouvée (row déclarée plus haut)
@@ -2900,17 +3080,17 @@ class AdminPage {
                 
                 // Vérifier que la mise à jour en mémoire a bien fonctionné
                 const updatedOperation = this.operations.find(op => (op.TempsId == id || op.id == id));
-                console.log('🔍 Opération après mise à jour en mémoire:', updatedOperation);
+                this.logger.log('🔍 Opération après mise à jour en mémoire:', updatedOperation);
                 
                 // Recharger complètement les données pour restaurer l'état normal (sortir du mode édition)
                 await this.loadData();
             } else {
                 const errorMessage = response.error || 'Erreur lors de la mise à jour';
                 this.notificationManager.error(`Erreur: ${errorMessage}`);
-                console.error('Erreur de mise à jour:', response);
+                this.logger.error('Erreur de mise à jour:', response);
             }
         } catch (error) {
-            console.error('Erreur sauvegarde:', error);
+            this.logger.error('Erreur sauvegarde:', error);
             
             let errorMessage = 'Erreur lors de la sauvegarde';
             if (error.message.includes('fetch')) {
@@ -2927,23 +3107,23 @@ class AdminPage {
     }
 
     updateOperationInMemory(operationId, updateData) {
-        console.log(`🔄 Mise à jour en mémoire de l'opération ${operationId}:`, updateData);
+        this.logger.log(`🔄 Mise à jour en mémoire de l'opération ${operationId}:`, updateData);
         
         const operation = this.operations.find(op => op.id == operationId);
         if (!operation) {
-            console.error(`❌ Opération ${operationId} non trouvée en mémoire`);
+            this.logger.error(`❌ Opération ${operationId} non trouvée en mémoire`);
             return;
         }
         
         // Mettre à jour les champs modifiés
         if (updateData.startTime !== undefined) {
             operation.startTime = updateData.startTime;
-            console.log(`✅ startTime mis à jour: ${operation.startTime}`);
+            this.logger.log(`✅ startTime mis à jour: ${operation.startTime}`);
         }
         
         if (updateData.endTime !== undefined) {
             operation.endTime = updateData.endTime;
-            console.log(`✅ endTime mis à jour: ${operation.endTime}`);
+            this.logger.log(`✅ endTime mis à jour: ${operation.endTime}`);
         }
         
         // Mettre à jour le statut si modifié
@@ -2958,29 +3138,29 @@ class AdminPage {
                 'FORCE_STOP': 'Arrêt forcé'
             };
             operation.status = statusLabels[updateData.status] || updateData.status;
-            console.log(`✅ Statut mis à jour: ${operation.statusCode} (${operation.status})`);
+            this.logger.log(`✅ Statut mis à jour: ${operation.statusCode} (${operation.status})`);
         }
         
         // Mettre à jour le timestamp de dernière modification
         operation.lastUpdate = new Date().toISOString();
         
-        console.log(`✅ Opération ${operationId} mise à jour en mémoire`);
+        this.logger.log(`✅ Opération ${operationId} mise à jour en mémoire`);
     }
 
     updateSingleRowInTable(operationId) {
-        console.log(`🔄 Mise à jour de la ligne ${operationId} dans le tableau`);
+        this.logger.log(`🔄 Mise à jour de la ligne ${operationId} dans le tableau`);
         
         // Chercher l'opération par id ou TempsId (pour les opérations non consolidées)
         const operation = this.operations.find(op => op.id == operationId || op.TempsId == operationId);
         if (!operation) {
-            console.error(`❌ Opération ${operationId} non trouvée pour mise à jour du tableau`);
+            this.logger.error(`❌ Opération ${operationId} non trouvée pour mise à jour du tableau`);
             return;
         }
         
         // Trouver la ligne existante
         const existingRow = document.querySelector(`tr[data-operation-id="${operationId}"]`);
         if (!existingRow) {
-            console.warn(`⚠️ Ligne non trouvée pour l'opération ${operationId}, rechargement complet`);
+            this.logger.warn(`⚠️ Ligne non trouvée pour l'opération ${operationId}, rechargement complet`);
             this.updateOperationsTable();
             return;
         }
@@ -2991,12 +3171,14 @@ class AdminPage {
             // Cellule heure début (index 5) - utiliser startTime ou StartTime
             const startTimeValue = operation.startTime || operation.StartTime;
             const formattedStartTime = this.formatDateTime(startTimeValue);
-            cells[5].innerHTML = formattedStartTime;
+            clearElement(cells[5]);
+            cells[5].textContent = formattedStartTime;
             
             // Cellule heure fin (index 6) - utiliser endTime ou EndTime
             const endTimeValue = operation.endTime || operation.EndTime;
             const formattedEndTime = this.formatDateTime(endTimeValue);
-            cells[6].innerHTML = formattedEndTime;
+            clearElement(cells[6]);
+            cells[6].textContent = formattedEndTime;
             
             // Cellule statut (index 7)
             // Utiliser le statut de l'opération, mais ne pas utiliser 'EN_COURS' par défaut si le statut est explicitement défini
@@ -3019,18 +3201,20 @@ class AdminPage {
                 statusLabel = 'En cours';
             }
             
-            console.log(`🔍 Mise à jour statut pour ${operationId}:`, {
+            this.logger.log(`🔍 Mise à jour statut pour ${operationId}:`, {
                 statusCode: statusCode,
                 statusLabel: statusLabel,
                 operationStatusCode: operation.statusCode,
                 operationStatus: operation.status
             });
             
-            cells[7].innerHTML = `<span class="status-badge status-${statusCode}">${statusLabel}</span>`;
+            clearElement(cells[7]);
+            const statusBadge = createBadge(statusLabel, `status-badge status-${statusCode}`);
+            cells[7].appendChild(statusBadge);
             
-            console.log(`✅ Ligne ${operationId} mise à jour: ${formattedStartTime} -> ${formattedEndTime}, statut: ${statusCode} (${statusLabel})`);
+            this.logger.log(`✅ Ligne ${operationId} mise à jour: ${formattedStartTime} -> ${formattedEndTime}, statut: ${statusCode} (${statusLabel})`);
         } else {
-            console.error(`❌ Pas assez de cellules dans la ligne ${operationId}: ${cells.length}`);
+            this.logger.error(`❌ Pas assez de cellules dans la ligne ${operationId}: ${cells.length}`);
         }
     }
 
@@ -3039,12 +3223,12 @@ class AdminPage {
         const row = document.querySelector(`tr[data-operation-id="${operationId}"]`);
         
         if (!operation) {
-            console.error(`❌ Opération ${operationId} non trouvée en mémoire`);
+            this.logger.error(`❌ Opération ${operationId} non trouvée en mémoire`);
             return;
         }
         
         if (!row) {
-            console.error(`❌ Ligne ${operationId} non trouvée dans le DOM`);
+            this.logger.error(`❌ Ligne ${operationId} non trouvée dans le DOM`);
             return;
         }
         
@@ -3052,7 +3236,7 @@ class AdminPage {
         const displayedStartTime = cells[5] ? cells[5].textContent : 'N/A';
         const displayedEndTime = cells[6] ? cells[6].textContent : 'N/A';
         
-        console.log(`🔍 Debug synchronisation ${operationId}:`, {
+        this.logger.log(`🔍 Debug synchronisation ${operationId}:`, {
             memory: {
                 startTime: operation.startTime,
                 endTime: operation.endTime
@@ -3082,11 +3266,11 @@ class AdminPage {
             
             // Validation des valeurs
             if (hours < 0 || hours > 23) {
-                console.error(`Heures invalides: ${hours}`);
+                this.logger.error(`Heures invalides: ${hours}`);
                 return null;
             }
             if (minutes < 0 || minutes > 59) {
-                console.error(`Minutes invalides: ${minutes}`);
+                this.logger.error(`Minutes invalides: ${minutes}`);
                 return null;
             }
             
@@ -3094,7 +3278,7 @@ class AdminPage {
             return `${hours.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')}`;
         }
         
-        console.error(`Format d'heure invalide: ${timeString}`);
+        this.logger.error(`Format d'heure invalide: ${timeString}`);
         return null;
     }
 
@@ -3228,7 +3412,7 @@ class AdminPage {
 
     async loadTablesData() {
         try {
-            console.log('  Chargement des données des tables ERP...');
+            this.logger.log('  Chargement des données des tables ERP...');
             
             const data = await this.apiService.getTablesInfo();
             
@@ -3239,15 +3423,16 @@ class AdminPage {
                 this.notificationManager.error('Erreur lors du chargement des tables ERP');
             }
         } catch (error) {
-            console.error('Erreur lors du chargement des tables:', error);
-            this.notificationManager.error('Erreur de connexion lors du chargement des tables ERP');
+            this.errorHandler.handle(error, 'loadTablesData', 'Erreur de connexion lors du chargement des tables ERP');
         }
     }
 
     updateTablesDisplay(data, counts) {
         // Mise à jour des compteurs
-        document.getElementById('pauseCount').textContent = counts.pause;
-        document.getElementById('tempCount').textContent = counts.temp;
+        const pauseCount = this.domCache.get('pauseCount');
+        const tempCount = this.domCache.get('tempCount');
+        if (pauseCount) pauseCount.textContent = counts.pause;
+        if (tempCount) tempCount.textContent = counts.temp;
 
         // Mise à jour de la table abetemps_Pause
         this.updateErpTable('pauseTableBody', data.abetemps_Pause);
@@ -3257,32 +3442,61 @@ class AdminPage {
     }
 
     updateErpTable(tableBodyId, tableData) {
-        const tableBody = document.getElementById(tableBodyId);
-        tableBody.innerHTML = '';
+        const tableBody = this.domCache.get(tableBodyId);
+        if (!tableBody) return;
+        
+        clearElement(tableBody);
 
         if (!tableData || tableData.length === 0) {
-            const row = document.createElement('tr');
-            row.innerHTML = `
-                <td colspan="7" style="text-align: center; padding: 1rem; color: #666;">
-                    Aucune donnée trouvée
-                </td>
-            `;
+            const row = createElement('tr');
+            const cell = createTableCell('Aucune donnée trouvée', {
+                colspan: '7',
+                style: { textAlign: 'center', padding: '1rem', color: '#666' }
+            });
+            row.appendChild(cell);
             tableBody.appendChild(row);
             return;
         }
 
         tableData.forEach(item => {
-            const row = document.createElement('tr');
-            row.innerHTML = `
-                <td>${item.NoEnreg || '-'}</td>
-                <td><span class="badge badge-${this.getIdentBadgeClass(item.Ident)}">${item.Ident || '-'}</span></td>
-                <td>${this.formatDateTime(item.DateTravail) || '-'}</td>
-                <td>${item.CodeLanctImprod || '-'}</td>
-                <td>${item.Phase || '-'}</td>
-                <td>${item.CodePoste || '-'}</td>
-                <td><strong>${item.CodeOperateur || '-'}</strong></td>
-                <td>${item.NomOperateur || 'Non assigné'}</td>
-            `;
+            const row = createElement('tr');
+            
+            // Cellule NoEnreg
+            const cell1 = createTableCell(item.NoEnreg || '-');
+            row.appendChild(cell1);
+            
+            // Cellule Ident avec badge
+            const cell2 = createTableCell('');
+            const badge = createBadge(item.Ident || '-', `badge-${this.getIdentBadgeClass(item.Ident)}`);
+            cell2.appendChild(badge);
+            row.appendChild(cell2);
+            
+            // Cellule DateTravail
+            const cell3 = createTableCell(this.formatDateTime(item.DateTravail) || '-');
+            row.appendChild(cell3);
+            
+            // Cellule CodeLanctImprod
+            const cell4 = createTableCell(item.CodeLanctImprod || '-');
+            row.appendChild(cell4);
+            
+            // Cellule Phase
+            const cell5 = createTableCell(item.Phase || '-');
+            row.appendChild(cell5);
+            
+            // Cellule CodePoste
+            const cell6 = createTableCell(item.CodePoste || '-');
+            row.appendChild(cell6);
+            
+            // Cellule CodeOperateur (en gras)
+            const cell7 = createTableCell('');
+            const strong = createElement('strong', {}, item.CodeOperateur || '-');
+            cell7.appendChild(strong);
+            row.appendChild(cell7);
+            
+            // Cellule NomOperateur
+            const cell8 = createTableCell(item.NomOperateur || 'Non assigné');
+            row.appendChild(cell8);
+            
             tableBody.appendChild(row);
         });
     }
@@ -3315,15 +3529,14 @@ class AdminPage {
                 this.updatePaginationInfo();
             }
         } catch (error) {
-            console.error('Erreur lors du chargement de la page:', error);
-            this.notificationManager.error('Erreur lors du chargement de la page');
+            this.errorHandler.handle(error, 'loadPage', 'Erreur lors du chargement de la page');
         } finally {
             this.isLoading = false;
         }
     }
 
     updatePaginationInfo() {
-        const paginationInfo = document.getElementById('paginationInfo');
+        const paginationInfo = this.domCache.get('paginationInfo');
         if (paginationInfo && this.pagination) {
             // Fix: éviter "Page 1 sur 0 (0 éléments)" quand on affiche des lignes (regroupement par opérateur)
             const displayedRows = Number(this._lastDisplayCounts?.rowsDisplayed || 0);
@@ -3338,24 +3551,36 @@ class AdminPage {
             if (currentPage > totalPages) currentPage = totalPages;
             if (!Number.isFinite(totalItems) || totalItems < 1) totalItems = fallbackTotalItems;
 
-            paginationInfo.innerHTML = `
-                <div class="pagination-info">
-                    <span>Page ${currentPage} sur ${totalPages}</span>
-                    <span>(${totalItems} éléments au total)</span>
-                    <div class="pagination-controls">
-                        <button class="btn btn-sm btn-outline-primary" 
-                                onclick="window.adminPage.loadPage(${currentPage - 1})"
-                                ${!this.pagination.hasPrevPage ? 'disabled' : ''}>
-                            ← Précédent
-                        </button>
-                        <button class="btn btn-sm btn-outline-primary"
-                                onclick="window.adminPage.loadPage(${currentPage + 1})"
-                                ${!this.pagination.hasNextPage ? 'disabled' : ''}>
-                            Suivant →
-                        </button>
-                    </div>
-                </div>
-            `;
+            clearElement(paginationInfo);
+            
+            const paginationDiv = createElement('div', { className: 'pagination-info' });
+            
+            const span1 = createElement('span', {}, `Page ${currentPage} sur ${totalPages}`);
+            paginationDiv.appendChild(span1);
+            
+            const span2 = createElement('span', {}, `(${totalItems} éléments au total)`);
+            paginationDiv.appendChild(span2);
+            
+            const controlsDiv = createElement('div', { className: 'pagination-controls' });
+            
+            const prevBtn = createButton({
+                className: 'btn btn-sm btn-outline-primary',
+                onClick: () => this.loadPage(currentPage - 1)
+            });
+            prevBtn.appendChild(document.createTextNode('← Précédent'));
+            if (!this.pagination.hasPrevPage) prevBtn.disabled = true;
+            controlsDiv.appendChild(prevBtn);
+            
+            const nextBtn = createButton({
+                className: 'btn btn-sm btn-outline-primary',
+                onClick: () => this.loadPage(currentPage + 1)
+            });
+            nextBtn.appendChild(document.createTextNode('Suivant →'));
+            if (!this.pagination.hasNextPage) nextBtn.disabled = true;
+            controlsDiv.appendChild(nextBtn);
+            
+            paginationDiv.appendChild(controlsDiv);
+            paginationInfo.appendChild(paginationDiv);
         }
     }
 }
