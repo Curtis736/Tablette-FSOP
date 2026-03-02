@@ -1,8 +1,8 @@
 // Classe principale de l'application
-// Bump version to bust browser cache when OperateurInterface changes (timer, phases select, etc.)
-import OperateurInterface from './OperateurInterface.js?v=20260209-timer-fix';
-// Bump to bust cache when AdminPage merging logic changes (duplicates after transfer, per-step keys, etc.)
-import AdminPage from './AdminPage.js?v=20260128-admin-editlt2';
+// Bump version to bust browser cache when OperateurInterface changes (sleep/wake prompt removal, timer, etc.)
+import OperateurInterface from './OperateurInterface.js?v=20260302-no-wake-popup';
+// Bump to bust cache when AdminPage logic changes (auto consolidation, etc.)
+import AdminPage from './AdminPage.js?v=20260302-auto-consolidate';
 import ApiService from '../services/ApiService.js?v=20260128-admin-editlt2';
 import StorageService from '../services/StorageService.js?v=20251007-final';
 import notificationManager from '../utils/NotificationManager.js';

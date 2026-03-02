@@ -882,23 +882,66 @@ router.post('/start', async (req, res) => {
         const phase = context?.Phase || 'PRODUCTION';
         const codeRubrique = context?.CodeRubrique || operatorId;
 
-        // ✅ Autoriser plusieurs "cycles" dans la journée (DEBUT...FIN, puis redémarrage),
+        // ✅ Autoriser plusieurs cycles DEBUT..FIN (plusieurs jours possibles),
         // mais empêcher de démarrer si la DERNIÈRE action pour cette étape est déjà active.
         // (Sinon on crée des DEBUT doublons et ensuite /stop peut se retrouver incohérent.)
         const lastEventCheck = `
-            SELECT TOP 1 Ident, Statut
+            SELECT TOP 1 Ident, Statut,
+                   CONVERT(VARCHAR(8), HeureDebut, 108) AS HeureDebut,
+                   CONVERT(VARCHAR(10), DateCreation, 23) AS DateCreation
             FROM [SEDI_APP_INDEPENDANTE].[dbo].[ABHISTORIQUE_OPERATEURS]
             WHERE CodeLanctImprod = @lancementCode
               AND OperatorCode = @operatorId
               AND Phase = @phase
               AND CodeRubrique = @codeRubrique
-              AND CAST(DateCreation AS DATE) = CAST(GETDATE() AS DATE)
             ORDER BY DateCreation DESC, NoEnreg DESC
         `;
         const lastEventRows = await executeQuery(lastEventCheck, { operatorId, lancementCode, phase, codeRubrique });
         const last = lastEventRows && lastEventRows[0] ? lastEventRows[0] : null;
         const lastIdent = String(last?.Ident || '').toUpperCase();
         const lastStatut = String(last?.Statut || '').toUpperCase();
+        const lastDate = String(last?.DateCreation || '').slice(0, 10);
+        const lastHeure = String(last?.HeureDebut || '').slice(0, 8);
+
+        // Cas "fin de journée": si l'opérateur a laissé le lancement en PAUSE la veille,
+        // on clôture automatiquement la veille (FIN à l'heure de pause) puis on autorise un nouveau DEBUT aujourd'hui.
+        if ((lastIdent === 'PAUSE' || lastStatut === 'EN_PAUSE') && lastDate && lastDate !== String(currentDate)) {
+            try {
+                await executeNonQuery(
+                    `
+                    INSERT INTO [SEDI_APP_INDEPENDANTE].[dbo].[ABHISTORIQUE_OPERATEURS]
+                    (OperatorCode, CodeLanctImprod, CodeRubrique, Ident, Phase, Statut, HeureDebut, HeureFin, DateCreation, SessionId, RequestId, CreatedAt)
+                    VALUES (
+                        @operatorId,
+                        @lancementCode,
+                        @codeRubrique,
+                        'FIN',
+                        @phase,
+                        'TERMINE',
+                        NULL,
+                        CAST(@heureFin AS TIME),
+                        CAST(@dateCreation AS DATE),
+                        @sessionId,
+                        @requestId,
+                        GETDATE()
+                    )
+                    `,
+                    {
+                        operatorId,
+                        lancementCode,
+                        codeRubrique,
+                        phase,
+                        heureFin: lastHeure || '23:59:00',
+                        dateCreation: lastDate,
+                        sessionId: activeSession ? activeSession.SessionId : null,
+                        requestId
+                    }
+                );
+                console.log(`✅ Auto-FIN (veille) pour ${operatorId}/${lancementCode} à ${lastHeure || '23:59:00'} (${lastDate})`);
+            } catch (e) {
+                console.warn('⚠️ Auto-FIN (veille) non bloquant:', e?.message || e);
+            }
+        }
         if (lastIdent && lastIdent !== 'FIN' && (lastStatut === 'EN_COURS' || lastStatut === 'EN_PAUSE' || lastIdent === 'DEBUT' || lastIdent === 'PAUSE' || lastIdent === 'REPRISE')) {
             return res.status(409).json({
                 success: false,
@@ -1019,29 +1062,7 @@ router.post('/pause', async (req, res) => {
             throw e;
         }
         
-        // 🔒 VÉRIFICATION DE SÉCURITÉ : S'assurer que l'opérateur possède ce lancement
-        // Vérifier qu'il existe un événement DEBUT pour ce lancement et cet opérateur aujourd'hui
-        const ownershipCheck = `
-            SELECT TOP 1 OperatorCode, Ident, Statut
-            FROM [SEDI_APP_INDEPENDANTE].[dbo].[ABHISTORIQUE_OPERATEURS]
-            WHERE CodeLanctImprod = @lancementCode
-              AND OperatorCode = @operatorId
-              AND Phase = @phase
-              AND CodeRubrique = @codeRubrique
-              AND Ident = 'DEBUT'
-              AND CAST(DateCreation AS DATE) = CAST(GETDATE() AS DATE)
-            ORDER BY DateCreation DESC
-        `;
-        const ownership = await executeQuery(ownershipCheck, { operatorId, lancementCode, phase, codeRubrique });
-        if (ownership.length === 0) {
-            return res.status(403).json({
-                success: false,
-                error: `Vous ne pouvez pas mettre en pause ce lancement. Il ne vous appartient pas ou n'est pas en cours.`,
-                security: 'DATA_OWNERSHIP_VIOLATION'
-            });
-        }
-        
-        // Vérifier que le dernier événement n'est pas déjà PAUSE (pour éviter les doublons)
+        // État courant (sans filtre de date) pour éviter les incohérences jour+1
         const lastEventCheck = `
             SELECT TOP 1 Ident, Statut
             FROM [SEDI_APP_INDEPENDANTE].[dbo].[ABHISTORIQUE_OPERATEURS]
@@ -1049,15 +1070,31 @@ router.post('/pause', async (req, res) => {
               AND OperatorCode = @operatorId
               AND Phase = @phase
               AND CodeRubrique = @codeRubrique
-              AND CAST(DateCreation AS DATE) = CAST(GETDATE() AS DATE)
             ORDER BY DateCreation DESC, NoEnreg DESC
         `;
         const lastEvent = await executeQuery(lastEventCheck, { operatorId, lancementCode, phase, codeRubrique });
-        if (lastEvent.length > 0 && (lastEvent[0].Ident === 'PAUSE' || lastEvent[0].Statut === 'PAUSE' || lastEvent[0].Statut === 'EN_PAUSE')) {
+        const last = lastEvent && lastEvent[0] ? lastEvent[0] : null;
+        const lastIdent = String(last?.Ident || '').toUpperCase();
+        const lastStatut = String(last?.Statut || '').toUpperCase();
+        if (!lastIdent) {
+            return res.status(403).json({
+                success: false,
+                error: `Vous ne pouvez pas mettre en pause ce lancement. Il n'est pas démarré.`,
+                security: 'NOT_STARTED'
+            });
+        }
+        if (lastIdent === 'PAUSE' || lastStatut === 'EN_PAUSE') {
             return res.status(403).json({
                 success: false,
                 error: `Ce lancement est déjà en pause.`,
                 security: 'ALREADY_PAUSED'
+            });
+        }
+        if (!(lastIdent === 'DEBUT' || lastIdent === 'REPRISE' || lastStatut === 'EN_COURS')) {
+            return res.status(403).json({
+                success: false,
+                error: `Vous ne pouvez pas mettre en pause ce lancement. Il n'est pas en cours.`,
+                security: 'INVALID_STATE'
             });
         }
         
@@ -1076,23 +1113,24 @@ router.post('/pause', async (req, res) => {
         // phase/codeRubrique déjà résolus plus haut
         
         // Enregistrer l'événement PAUSE dans ABHISTORIQUE_OPERATEURS avec l'heure française
-        const insertQuery = `
+        await executeNonQuery(
+            `
             INSERT INTO [SEDI_APP_INDEPENDANTE].[dbo].[ABHISTORIQUE_OPERATEURS]
             (OperatorCode, CodeLanctImprod, CodeRubrique, Ident, Phase, Statut, HeureDebut, HeureFin, DateCreation)
             VALUES (
-                '${operatorId}',
-                '${lancementCode}',
-                '${codeRubrique}',
+                @operatorId,
+                @lancementCode,
+                @codeRubrique,
                 'PAUSE',
-                '${phase}',
+                @phase,
                 'EN_PAUSE',
-                CAST('${currentTime}' AS TIME),
+                CAST(@currentTime AS TIME),
                 NULL,
-                CAST('${currentDate}' AS DATE)
+                CAST(@currentDate AS DATE)
             )
-        `;
-        
-        await executeQuery(insertQuery);
+            `,
+            { operatorId, lancementCode, codeRubrique, phase, currentTime, currentDate }
+        );
         
         console.log(` Lancement ${lancementCode} mis en pause par opérateur ${operatorId}`);
         
@@ -1135,41 +1173,90 @@ router.post('/resume', async (req, res) => {
             throw e;
         }
         
-        // 🔒 VÉRIFICATION DE SÉCURITÉ : S'assurer que l'opérateur possède ce lancement
-        // Vérifier qu'il existe un événement DEBUT pour ce lancement et cet opérateur aujourd'hui
-        const ownershipCheck = `
-            SELECT TOP 1 OperatorCode, Ident, Statut
-            FROM [SEDI_APP_INDEPENDANTE].[dbo].[ABHISTORIQUE_OPERATEURS]
-            WHERE CodeLanctImprod = @lancementCode
-              AND OperatorCode = @operatorId
-              AND Phase = @phase
-              AND CodeRubrique = @codeRubrique
-              AND Ident = 'DEBUT'
-              AND CAST(DateCreation AS DATE) = CAST(GETDATE() AS DATE)
-            ORDER BY DateCreation DESC
-        `;
-        const ownership = await executeQuery(ownershipCheck, { operatorId, lancementCode, phase, codeRubrique });
-        if (ownership.length === 0) {
-            return res.status(403).json({
-                success: false,
-                error: `Vous ne pouvez pas reprendre ce lancement. Il ne vous appartient pas ou n'est pas en pause.`,
-                security: 'DATA_OWNERSHIP_VIOLATION'
-            });
-        }
-        
-        // Vérifier que le dernier événement est bien PAUSE (pour permettre la reprise)
+        // État courant (sans filtre de date) pour gérer "pause veille" et éviter les doublons
         const lastEventCheck = `
-            SELECT TOP 1 Ident, Statut
+            SELECT TOP 1 Ident, Statut,
+                   CONVERT(VARCHAR(8), HeureDebut, 108) AS HeureDebut,
+                   CONVERT(VARCHAR(10), DateCreation, 23) AS DateCreation
             FROM [SEDI_APP_INDEPENDANTE].[dbo].[ABHISTORIQUE_OPERATEURS]
             WHERE CodeLanctImprod = @lancementCode
               AND OperatorCode = @operatorId
               AND Phase = @phase
               AND CodeRubrique = @codeRubrique
-              AND CAST(DateCreation AS DATE) = CAST(GETDATE() AS DATE)
             ORDER BY DateCreation DESC, NoEnreg DESC
         `;
         const lastEvent = await executeQuery(lastEventCheck, { operatorId, lancementCode, phase, codeRubrique });
-        if (lastEvent.length === 0 || (lastEvent[0].Ident !== 'PAUSE' && lastEvent[0].Statut !== 'PAUSE' && lastEvent[0].Statut !== 'EN_PAUSE')) {
+        const last = lastEvent && lastEvent[0] ? lastEvent[0] : null;
+        const lastIdent = String(last?.Ident || '').toUpperCase();
+        const lastStatut = String(last?.Statut || '').toUpperCase();
+        const lastDate = String(last?.DateCreation || '').slice(0, 10);
+        const lastHeure = String(last?.HeureDebut || '').slice(0, 8);
+
+        if (!lastIdent) {
+            return res.status(403).json({
+                success: false,
+                error: `Vous ne pouvez pas reprendre ce lancement. Il n'est pas démarré.`,
+                security: 'NOT_STARTED'
+            });
+        }
+
+        // Obtenir l'heure française actuelle
+        const { time: currentTime, date: currentDate } = TimeUtils.getCurrentDateTime();
+
+        // Si la pause date d'hier (fin de journée), on clôture automatiquement la veille puis on redémarre aujourd'hui.
+        if ((lastIdent === 'PAUSE' || lastStatut === 'EN_PAUSE') && lastDate && lastDate !== String(currentDate)) {
+            try {
+                await executeNonQuery(
+                    `
+                    INSERT INTO [SEDI_APP_INDEPENDANTE].[dbo].[ABHISTORIQUE_OPERATEURS]
+                    (OperatorCode, CodeLanctImprod, CodeRubrique, Ident, Phase, Statut, HeureDebut, HeureFin, DateCreation)
+                    VALUES (
+                        @operatorId,
+                        @lancementCode,
+                        @codeRubrique,
+                        'FIN',
+                        @phase,
+                        'TERMINE',
+                        NULL,
+                        CAST(@heureFin AS TIME),
+                        CAST(@dateCreation AS DATE)
+                    )
+                    `,
+                    { operatorId, lancementCode, codeRubrique, phase, heureFin: lastHeure || '23:59:00', dateCreation: lastDate }
+                );
+                console.log(`✅ Auto-FIN (veille) via /resume pour ${operatorId}/${lancementCode} (${lastDate})`);
+            } catch (e) {
+                console.warn('⚠️ Auto-FIN (veille) via /resume non bloquant:', e?.message || e);
+            }
+
+            // Démarrer un nouveau cycle aujourd'hui (équivalent métier d'une reprise après fin de journée)
+            await executeNonQuery(
+                `
+                INSERT INTO [SEDI_APP_INDEPENDANTE].[dbo].[ABHISTORIQUE_OPERATEURS]
+                (OperatorCode, CodeLanctImprod, CodeRubrique, Ident, Phase, Statut, HeureDebut, HeureFin, DateCreation)
+                VALUES (
+                    @operatorId,
+                    @lancementCode,
+                    @codeRubrique,
+                    'DEBUT',
+                    @phase,
+                    'EN_COURS',
+                    CAST(@currentTime AS TIME),
+                    NULL,
+                    CAST(@currentDate AS DATE)
+                )
+                `,
+                { operatorId, lancementCode, codeRubrique, phase, currentTime, currentDate }
+            );
+
+            return res.json({
+                success: true,
+                message: 'Nouvelle journée: lancement redémarré',
+                data: { operatorId, lancementCode, action: 'DEBUT', timestamp: new Date().toISOString() }
+            });
+        }
+
+        if (!(lastIdent === 'PAUSE' || lastStatut === 'EN_PAUSE')) {
             return res.status(403).json({
                 success: false,
                 error: `Vous ne pouvez pas reprendre ce lancement. Il n'est pas en pause.`,
@@ -1184,31 +1271,29 @@ router.post('/resume', async (req, res) => {
             });
         }
         
-        // Obtenir l'heure française actuelle
-        const { time: currentTime, date: currentDate } = TimeUtils.getCurrentDateTime();
-        
         TimeUtils.log(`▶️ Reprise lancement ${lancementCode} par opérateur ${operatorId} à ${currentTime}`);
 
         // phase/codeRubrique déjà résolus plus haut
         
         // Enregistrer l'événement REPRISE dans ABHISTORIQUE_OPERATEURS avec l'heure française
-        const insertQuery = `
+        await executeNonQuery(
+            `
             INSERT INTO [SEDI_APP_INDEPENDANTE].[dbo].[ABHISTORIQUE_OPERATEURS]
             (OperatorCode, CodeLanctImprod, CodeRubrique, Ident, Phase, Statut, HeureDebut, HeureFin, DateCreation)
             VALUES (
-                '${operatorId}',
-                '${lancementCode}',
-                '${codeRubrique}',
+                @operatorId,
+                @lancementCode,
+                @codeRubrique,
                 'REPRISE',
-                '${phase}',
+                @phase,
                 'EN_COURS',
-                CAST('${currentTime}' AS TIME),
+                CAST(@currentTime AS TIME),
                 NULL,
-                CAST('${currentDate}' AS DATE)
+                CAST(@currentDate AS DATE)
             )
-        `;
-        
-        await executeQuery(insertQuery);
+            `,
+            { operatorId, lancementCode, codeRubrique, phase, currentTime, currentDate }
+        );
         
         console.log(` Lancement ${lancementCode} repris par opérateur ${operatorId}`);
         
