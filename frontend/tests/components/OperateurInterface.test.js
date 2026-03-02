@@ -472,50 +472,6 @@ describe('OperateurInterface', () => {
         });
     });
 
-    describe('Option C (confirmation à la reprise)', () => {
-        it('doit terminer si l’utilisateur choisit "Annuler"', async () => {
-            window.confirm.mockReturnValue(false);
-            mockApiService.getCurrentOperation.mockResolvedValue({
-                success: true,
-                data: {
-                    lancementCode: 'LT1234567',
-                    status: 'EN_COURS',
-                    lastEvent: 'DEBUT',
-                    stepId: '010|ConnectX'
-                }
-            });
-            mockApiService.stopOperation.mockResolvedValue({});
-
-            operInterface = new OperateurInterface(mockOperator, mockApp);
-            operInterface.setFinalEndTime = vi.fn();
-            await operInterface.checkCurrentOperation({ promptIfRunning: true });
-
-            expect(mockApiService.stopOperation).toHaveBeenCalledWith('OP001', 'LT1234567', { codeOperation: '010|ConnectX' });
-            expect(operInterface.isRunning).toBe(false);
-        });
-
-        it('doit continuer si l’utilisateur choisit "OK"', async () => {
-            window.confirm.mockReturnValue(true);
-            mockApiService.getCurrentOperation.mockResolvedValue({
-                success: true,
-                data: {
-                    lancementCode: 'LT1234567',
-                    status: 'EN_COURS',
-                    lastEvent: 'DEBUT',
-                    dateCreation: new Date().toISOString(),
-                    stepId: '010|ConnectX'
-                }
-            });
-
-            operInterface = new OperateurInterface(mockOperator, mockApp);
-            operInterface.resumeRunningOperation = vi.fn();
-            await operInterface.checkCurrentOperation({ promptIfRunning: true });
-
-            expect(mockApiService.pauseOperation).not.toHaveBeenCalled();
-            expect(operInterface.resumeRunningOperation).toHaveBeenCalled();
-        });
-    });
-
     describe('handleScannedCode', () => {
         beforeEach(() => {
             operInterface = new OperateurInterface(mockOperator, mockApp);

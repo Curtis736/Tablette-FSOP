@@ -25,6 +25,12 @@ export const ADMIN_CONFIG = {
     
     // Délais de mise à jour
     MIN_UPDATE_INTERVAL: 10000,        // 10 secondes minimum entre mises à jour
+
+    // Veille / Réveil tablette (visibility)
+    /** Délai minimum (ms) pendant lequel la page doit avoir été cachée pour considérer un "réveil" (évite refresh sur simple changement d'onglet) */
+    SLEEP_WAKE_MIN_HIDDEN_MS: 2000,
+    /** Délai (ms) avant de rafraîchir après réveil (laisse le réseau se rétablir) */
+    SLEEP_WAKE_REFRESH_DELAY_MS: 400,
 };
 
 export const STATUS_CODES = {

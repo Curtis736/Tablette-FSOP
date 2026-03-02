@@ -19,10 +19,6 @@ class OperateurInterface {
         this.pendingForceReplace = false; // Flag pour forcer le remplacement après confirmation
         this.cachedOperators = null; // Cache pour la liste des opérateurs
 
-        // Option C: pas d'auto-pause au verrouillage, mais confirmation à la reprise (écran redevient visible / refresh)
-        this._wasHidden = false;
-        this._resumePromptLock = false; // évite les prompts multiples en parallèle
-        
         // Debouncing pour éviter les clics répétés
         this.lastActionTime = 0;
         this.actionCooldown = 1000; // 1 seconde entre les actions
@@ -33,8 +29,7 @@ class OperateurInterface {
         this.initializeElements();
         this.setupEventListeners();
         this.initializeLancementInput();
-        // Option C: à l'arrivée sur l'écran opérateur, si une op est EN_COURS, demander Continuer / Terminer
-        this.checkCurrentOperation({ promptIfRunning: true });
+        this.checkCurrentOperation({ promptIfRunning: false });
         this.loadOperatorHistory();
     }
 
@@ -320,70 +315,6 @@ class OperateurInterface {
             }
         });
 
-        // Option C: au retour (unlock / onglet visible / restauration), demander quoi faire si une op est EN_COURS
-        document.addEventListener('visibilitychange', () => {
-            if (document.hidden) {
-                this._wasHidden = true;
-                return;
-            }
-            if (this._wasHidden) {
-                this._wasHidden = false;
-                this.checkCurrentOperation({ promptIfRunning: true });
-            }
-        });
-
-        // Quand la page est restaurée depuis le back/forward cache (mobile), re-check
-        window.addEventListener('pageshow', (e) => {
-            if (e && e.persisted) {
-                this.checkCurrentOperation({ promptIfRunning: true });
-            }
-        });
-    }
-
-    async maybePromptResumeOrPause(current) {
-        // current: objet backend (camelCase) avec lancementCode/status/stepId
-        if (this._resumePromptLock) return { action: 'skip' };
-        this._resumePromptLock = true;
-        try {
-            const lancementCode = current?.lancementCode || current?.CodeLancement || '';
-            const stepId = String(current?.stepId || '').trim(); // "PHASE|RUBRIQUE" si connu
-            const msg =
-                `Vous avez une opération EN COURS sur ${lancementCode}.\n\n` +
-                `OK = Continuer\n` +
-                `Annuler = Terminer`;
-            const shouldContinue = window.confirm(msg);
-
-            if (shouldContinue) {
-                return { action: 'continue' };
-            }
-
-            // Terminer (uniquement suite au choix utilisateur)
-            const operatorCode = this.operator.code || this.operator.id;
-            await this.apiService.stopOperation(
-                operatorCode,
-                lancementCode,
-                stepId ? { codeOperation: stepId } : {}
-            );
-
-            // Mettre l'UI en terminé
-            this.isRunning = false;
-            this.isPaused = false;
-            this.stopTimer();
-            this.resetControls();
-            if (this.statusDisplay) this.statusDisplay.textContent = 'Terminé';
-            this.setFinalEndTime();
-            this.notificationManager.success('Opération terminée');
-            this.loadOperatorHistory();
-
-            return { action: 'stop' };
-        } catch (e) {
-            // Ne pas bloquer l'utilisateur: si pause échoue, on continue l'affichage
-            console.error('❌ Erreur option C (stop sur reprise):', e);
-            this.notificationManager.warning('Impossible de terminer. Opération laissée en cours.');
-            return { action: 'continue' };
-        } finally {
-            this._resumePromptLock = false;
-        }
     }
 
     getCurrentLaunchNumberForFsop() {
@@ -1602,16 +1533,6 @@ class OperateurInterface {
                 const status = String(current?.status || current?.Statut || '').toUpperCase();
 
                 if (String(lastEvent).toUpperCase() === 'DEBUT' || status === 'EN_COURS') {
-                    if (promptIfRunning) {
-                        const decision = await this.maybePromptResumeOrPause({ ...current, lancementCode });
-                        // Si un prompt est déjà en cours, ne rien faire (évite de "reprendre" par erreur).
-                        if (decision.action === 'skip') {
-                            return;
-                        }
-                        if (decision.action === 'stop') {
-                            return;
-                        }
-                    }
                     // Opération en cours
                     this.resumeRunningOperation(current);
                 } else if (String(lastEvent).toUpperCase() === 'PAUSE' || status === 'EN_PAUSE') {
@@ -1626,6 +1547,9 @@ class OperateurInterface {
 
     resumeRunningOperation(operation) {
         this.isRunning = true;
+        this.isPaused = false;
+        this.totalPausedTime = 0;
+        this.pauseStartTime = null;
         const parseLocalDateOnly = (dc) => {
             // dc: "YYYY-MM-DD" (ne pas utiliser new Date(dc) => UTC => 01:00 en hiver)
             const s = String(dc || '').trim();
@@ -1677,8 +1601,8 @@ class OperateurInterface {
         if (this.timerInterval) clearInterval(this.timerInterval);
         this.timerInterval = setInterval(() => this.updateTimer(), 1000);
         this.lancementInput.disabled = true;
-        
-        // Mettre à jour l'heure de fin immédiatement
+        // Mettre à jour l’affichage du temps immédiatement (sinon il reste à 00:00:00 jusqu’au premier tick)
+        this.updateTimer();
         this.updateEndTime();
     }
 
@@ -1718,6 +1642,11 @@ class OperateurInterface {
         const code = this.lancementInput.value.trim();
         if (!code) {
             this.notificationManager.error('Veuillez saisir un code de lancement');
+            return;
+        }
+        // Ne jamais créer un second DEBUT si une opération est déjà en cours (éviter lancement non consolidé / doublons)
+        if (this.isRunning && !this.isPaused) {
+            this.notificationManager.warning('Une opération est déjà en cours.');
             return;
         }
 
@@ -1881,6 +1810,7 @@ class OperateurInterface {
             clearInterval(this.timerInterval);
         }
         this.timerInterval = setInterval(() => this.updateTimer(), 1000);
+        this.updateTimer();
     }
 
     pauseTimer() {
@@ -1914,7 +1844,7 @@ class OperateurInterface {
 
     updateTimer() {
         if (!this.isRunning || !this.startTime) return;
-        
+        if (!this.timerDisplay) return;
         const now = new Date();
         const elapsed = Math.floor((now - this.startTime - this.totalPausedTime) / 1000);
         this.timerDisplay.textContent = TimeUtils.formatDuration(Math.max(0, elapsed));

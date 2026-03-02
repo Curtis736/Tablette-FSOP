@@ -282,6 +282,7 @@ class AdminPage {
                 this.updateOperatorsStatus();
             }
         }, ADMIN_CONFIG.OPERATORS_UPDATE_INTERVAL);
+
     }
 
     async loadData(enableAutoConsolidate = true) {
@@ -514,6 +515,39 @@ class AdminPage {
             });
             
             this.operations = Array.from(mergedMap.values());
+            
+            // Consolidation automatique des opérations terminées sans TempsId (éviter les "lancement non consolidé")
+            if (enableAutoConsolidate && !this._isConsolidating) {
+                const terminatedWithoutTempsId = this.operations.filter(op =>
+                    this.isOperationTerminated(op) && !op.TempsId && (op._isUnconsolidated === true || op.OperatorCode)
+                );
+                if (terminatedWithoutTempsId.length > 0) {
+                    this._isConsolidating = true;
+                    const seen = new Set();
+                    const toConsolidate = terminatedWithoutTempsId
+                        .map(op => ({ OperatorCode: op.OperatorCode, LancementCode: op.LancementCode }))
+                        .filter(({ OperatorCode, LancementCode }) => {
+                            const key = `${OperatorCode}|${LancementCode}`;
+                            if (seen.has(key)) return false;
+                            seen.add(key);
+                            return true;
+                        });
+                    this.apiService.consolidateMonitoringBatch(toConsolidate)
+                        .then(async (consolidateResult) => {
+                            const ok = consolidateResult?.results?.success || [];
+                            if (ok.length > 0) {
+                                this.logger.log(`Consolidation auto: ${ok.length} opération(s) consolidée(s)`);
+                                await this.loadData(false);
+                            }
+                        })
+                        .catch((err) => {
+                            this.logger.warn('Consolidation auto (arrière-plan) échouée:', err?.message || err);
+                        })
+                        .finally(() => {
+                            this._isConsolidating = false;
+                        });
+                }
+            }
             
             // Réinitialiser le compteur d'erreurs en cas de succès
             this.consecutiveErrors = 0;

@@ -1616,6 +1616,22 @@ router.put('/operations/:id', async (req, res) => {
             } catch (e) {
                 // non bloquant
             }
+
+        }
+        // Consolider dès qu'une heure de fin a été renseignée (FIN créé ou mis à jour) pour ne pas laisser de lancement non consolidé
+        if (formattedEndTimeForFinEvent) {
+            try {
+                const ConsolidationService = require('../services/ConsolidationService');
+                const baseDateStr = base.DateCreation ? (typeof base.DateCreation === 'string' ? base.DateCreation.split('T')[0] : null) : null;
+                await ConsolidationService.consolidateOperation(baseOperatorCode, baseLancementCode, {
+                    autoFix: true,
+                    phase: base.Phase || 'ADMIN',
+                    codeRubrique: base.CodeRubrique || baseOperatorCode,
+                    dateCreation: baseDateStr || baseDate
+                });
+            } catch (consErr) {
+                console.warn('Consolidation après édition (non bloquant):', consErr?.message || consErr);
+            }
         }
         
         console.log(`✅ Opération ${id} modifiée avec succès`);

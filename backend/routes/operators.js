@@ -1333,29 +1333,33 @@ router.post('/stop', async (req, res) => {
         
         console.log(`✅ Lancement ${lancementCode} terminé par opérateur ${operatorId}`);
         
-        // Consolidation automatique en arrière-plan (sans bloquer le FIN)
-        // Nécessaire pour que le transfert fonctionne côté admin
-        try {
-            const ConsolidationService = require('../services/ConsolidationService');
-            // Passer phase/codeRubrique/date pour consolider le BON cycle (et éviter de tomber sur un ancien jour)
-            const consolidationResult = await ConsolidationService.consolidateOperation(operatorId, lancementCode, { 
-                autoFix: true,
-                phase,
-                codeRubrique,
-                dateCreation: currentDate
-            });
-            
-            if (consolidationResult.success) {
-                console.log(`✅ Consolidation automatique réussie: TempsId=${consolidationResult.tempsId}`);
-            } else {
-                // Ne pas bloquer le FIN si la consolidation échoue, mais logger l'erreur
-                console.error(`⚠️ Consolidation automatique échouée (sera réessayée plus tard): ${consolidationResult.error}`);
-                // L'opération peut être consolidée manuellement plus tard par l'admin
+        // Consolidation obligatoire pour ne pas laisser de lancement non consolidé (retry si échec)
+        const ConsolidationService = require('../services/ConsolidationService');
+        const maxAttempts = 3;
+        const delayMs = 400;
+        let consolidated = false;
+        for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+            try {
+                const consolidationResult = await ConsolidationService.consolidateOperation(operatorId, lancementCode, {
+                    autoFix: true,
+                    phase,
+                    codeRubrique,
+                    dateCreation: currentDate
+                });
+                if (consolidationResult.success) {
+                    console.log(`✅ Consolidation réussie: TempsId=${consolidationResult.tempsId} (tentative ${attempt})`);
+                    consolidated = true;
+                    break;
+                }
+                if (attempt < maxAttempts) await new Promise(r => setTimeout(r, delayMs));
+                else console.error(`⚠️ Consolidation échouée après ${maxAttempts} tentatives: ${consolidationResult.error}`);
+            } catch (err) {
+                if (attempt < maxAttempts) await new Promise(r => setTimeout(r, delayMs));
+                else console.error(`⚠️ Erreur consolidation après ${maxAttempts} tentatives:`, err?.message || err);
             }
-        } catch (consolidationError) {
-            // Ne pas bloquer le FIN si la consolidation échoue, mais logger l'erreur
-            console.error(`⚠️ Erreur lors de la consolidation automatique (sera réessayée plus tard):`, consolidationError);
-            // L'opération peut être consolidée manuellement plus tard par l'admin
+        }
+        if (!consolidated) {
+            console.warn(`⚠️ Lancement ${lancementCode} non consolidé après arrêt; sera consolidé au prochain chargement admin ou transfert.`);
         }
         
         res.json({
@@ -1592,17 +1596,49 @@ router.get('/current/:operatorCode', authenticateOperator, async (req, res) => {
             return res.json({ success: true, data: null });
         }
 
-        // Timestamp fiable pour le timer côté tablette:
-        // - préférer CreatedAt si présent (datetime complet),
-        // - sinon reconstruire un datetime à partir de DateCreation (date) + HeureDebut (time).
-        // NOTE: DateCreation est un DATE (pas d'heure), d'où les affichages 01:00 si on parse côté JS.
-        let startedAt = operation.CreatedAt || null;
-        if (!startedAt && operation.DateCreation && operation.HeureDebut) {
-            // Construire une string ISO-like: YYYY-MM-DDTHH:mm:ss (sans timezone) pour un parse stable
-            const datePart = String(operation.DateCreation || '').slice(0, 10);
-            const timeStr = String(operation.HeureDebut || '').length >= 5 ? String(operation.HeureDebut) : null;
-            if (datePart && timeStr) {
-                startedAt = `${datePart}T${timeStr}`;
+        // Pour le timer: utiliser l’heure de début du CYCLE (événement DEBUT), pas du dernier event (REPRISE/PAUSE)
+        let startedAt = null;
+        if (lastEvent === 'DEBUT') {
+            startedAt = operation.CreatedAt || null;
+            if (!startedAt && operation.DateCreation && operation.HeureDebut) {
+                const datePart = String(operation.DateCreation || '').slice(0, 10);
+                const timeStr = String(operation.HeureDebut || '').length >= 5 ? String(operation.HeureDebut) : null;
+                if (datePart && timeStr) startedAt = `${datePart}T${timeStr}`;
+            }
+        } else {
+            // Dernier event = PAUSE ou REPRISE: récupérer le DEBUT du même jour/phase/rubrique pour le timer
+            const debutQuery = `
+                SELECT TOP 1 CreatedAt, DateCreation, HeureDebut
+                FROM [SEDI_APP_INDEPENDANTE].[dbo].[ABHISTORIQUE_OPERATEURS]
+                WHERE OperatorCode = @operatorCode AND CodeLanctImprod = @lancementCode
+                  AND Ident = 'DEBUT' AND Phase = @phase AND CodeRubrique = @codeRubrique
+                  AND CAST(DateCreation AS DATE) = CAST(@dateCreation AS DATE)
+                ORDER BY DateCreation ASC, NoEnreg ASC
+            `;
+            const debutParams = {
+                operatorCode,
+                lancementCode: operation.CodeLanctImprod,
+                phase: operation.Phase || 'PRODUCTION',
+                codeRubrique: operation.CodeRubrique || operation.OperatorCode,
+                dateCreation: operation.DateCreation
+            };
+            const debutRows = await executeQuery(debutQuery, debutParams);
+            const debut = debutRows && debutRows[0] ? debutRows[0] : null;
+            if (debut) {
+                startedAt = debut.CreatedAt || null;
+                if (!startedAt && debut.DateCreation && debut.HeureDebut) {
+                    const datePart = String(debut.DateCreation || '').slice(0, 10);
+                    const timeStr = String(debut.HeureDebut || '').length >= 5 ? String(debut.HeureDebut) : null;
+                    if (datePart && timeStr) startedAt = `${datePart}T${timeStr}`;
+                }
+            }
+            if (!startedAt) {
+                startedAt = operation.CreatedAt || null;
+                if (!startedAt && operation.DateCreation && operation.HeureDebut) {
+                    const datePart = String(operation.DateCreation || '').slice(0, 10);
+                    const timeStr = String(operation.HeureDebut || '').length >= 5 ? String(operation.HeureDebut) : null;
+                    if (datePart && timeStr) startedAt = `${datePart}T${timeStr}`;
+                }
             }
         }
         
