@@ -324,9 +324,12 @@ function processLancementEventsSingleLine(events) {
     const processedItems = [];
     
     Object.keys(lancementGroups).forEach(key => {
-        const groupEvents = lancementGroups[key].sort((a, b) => 
-            new Date(a.DateCreation) - new Date(b.DateCreation)
-        );
+        const groupEvents = lancementGroups[key].sort((a, b) => {
+            const da = new Date(a.CreatedAt || a.DateCreation).getTime();
+            const db = new Date(b.CreatedAt || b.DateCreation).getTime();
+            if (da !== db) return da - db;
+            return (a.NoEnreg || 0) - (b.NoEnreg || 0);
+        });
         
         console.log(`🔍 Traitement du groupe ${key}:`, groupEvents.map(e => ({
             ident: e.Ident,
@@ -336,10 +339,21 @@ function processLancementEventsSingleLine(events) {
         })));
         
         // Trouver les événements clés
-        const debutEvent = groupEvents.find(e => e.Ident === 'DEBUT');
-        const finEvent = groupEvents.find(e => e.Ident === 'FIN');
-        const pauseEvents = groupEvents.filter(e => e.Ident === 'PAUSE');
-        const repriseEvents = groupEvents.filter(e => e.Ident === 'REPRISE');
+        // ⚠️ Important: un même opérateur peut faire plusieurs cycles DEBUT..FIN pour le même lancement.
+        // Pour l'affichage "actuel" (admin + historique opérateur), on prend toujours le DERNIER cycle,
+        // sinon un ancien FIN masque un nouveau DEBUT (et l'admin n'affiche jamais "En cours").
+        let lastDebutIdx = -1;
+        for (let i = groupEvents.length - 1; i >= 0; i--) {
+            if (groupEvents[i]?.Ident === 'DEBUT') {
+                lastDebutIdx = i;
+                break;
+            }
+        }
+        const cycleEvents = lastDebutIdx >= 0 ? groupEvents.slice(lastDebutIdx) : [];
+        const debutEvent = cycleEvents.find(e => e.Ident === 'DEBUT');
+        const finEvent = cycleEvents.find(e => e.Ident === 'FIN');
+        const pauseEvents = cycleEvents.filter(e => e.Ident === 'PAUSE');
+        const repriseEvents = cycleEvents.filter(e => e.Ident === 'REPRISE');
         
         if (debutEvent) {
             let status, statusLabel;
@@ -416,9 +430,12 @@ function processLancementEventsWithPauses(events) {
     const processedItems = [];
     
     Object.keys(lancementGroups).forEach(key => {
-        const groupEvents = lancementGroups[key].sort((a, b) => 
-            new Date(a.DateCreation) - new Date(b.DateCreation)
-        );
+        const groupEvents = lancementGroups[key].sort((a, b) => {
+            const da = new Date(a.CreatedAt || a.DateCreation).getTime();
+            const db = new Date(b.CreatedAt || b.DateCreation).getTime();
+            if (da !== db) return da - db;
+            return (a.NoEnreg || 0) - (b.NoEnreg || 0);
+        });
         
         console.log(`🔍 Traitement du groupe ${key}:`, groupEvents.map(e => ({
             ident: e.Ident,
@@ -430,10 +447,20 @@ function processLancementEventsWithPauses(events) {
         // Logique : Une seule ligne par opérateur/lancement, pas de doublons
         console.log(`🔍 Traitement de ${groupEvents.length} événements pour ${key}`);
         
-        const debutEvent = groupEvents.find(e => e.Ident === 'DEBUT');
-        const finEvent = groupEvents.find(e => e.Ident === 'FIN');
-        const pauseEvents = groupEvents.filter(e => e.Ident === 'PAUSE');
-        const repriseEvents = groupEvents.filter(e => e.Ident === 'REPRISE');
+        // ⚠️ Un opérateur peut relancer le même lancement plusieurs fois (plusieurs cycles DEBUT..FIN).
+        // On ne doit pas laisser un ancien FIN masquer un nouveau DEBUT.
+        let lastDebutIdx = -1;
+        for (let i = groupEvents.length - 1; i >= 0; i--) {
+            if (groupEvents[i]?.Ident === 'DEBUT') {
+                lastDebutIdx = i;
+                break;
+            }
+        }
+        const cycleEvents = lastDebutIdx >= 0 ? groupEvents.slice(lastDebutIdx) : [];
+        const debutEvent = cycleEvents.find(e => e.Ident === 'DEBUT');
+        const finEvent = cycleEvents.find(e => e.Ident === 'FIN');
+        const pauseEvents = cycleEvents.filter(e => e.Ident === 'PAUSE');
+        const repriseEvents = cycleEvents.filter(e => e.Ident === 'REPRISE');
         
         // Déterminer le statut final (une seule ligne par opérateur/lancement)
         // PRIORITÉ : Utiliser le statut de la base de données s'il a été modifié manuellement
@@ -443,16 +470,16 @@ function processLancementEventsWithPauses(events) {
         
         // PRIORITÉ : Vérifier si l'événement DEBUT a un statut modifié manuellement
         // Le statut est modifié sur l'événement DEBUT (le plus récent si plusieurs)
-        const debutEvents = groupEvents.filter(e => e.Ident === 'DEBUT').sort((a, b) => 
+        const debutEvents = cycleEvents.filter(e => e.Ident === 'DEBUT').sort((a, b) => 
             new Date(b.DateCreation) - new Date(a.DateCreation)
         );
         const lastDebutEvent = debutEvents[0];
         
         // Trouver le dernier événement pour déterminer le statut actuel (priorité sur le statut de DEBUT)
-        const lastEvent = groupEvents[groupEvents.length - 1];
+        const lastEvent = cycleEvents[cycleEvents.length - 1];
         
         // PRIORITÉ 1 : Vérifier le dernier événement pour déterminer le statut réel
-        if (finEvent) {
+        if (lastEvent && lastEvent.Ident === 'FIN') {
             currentStatus = 'TERMINE';
             statusLabel = 'Terminé';
         } else if (lastEvent && lastEvent.Ident === 'PAUSE') {
@@ -465,11 +492,6 @@ function processLancementEventsWithPauses(events) {
             currentStatus = 'EN_COURS';
             statusLabel = 'En cours';
             console.log(`✅ Statut déterminé depuis dernier événement REPRISE: ${currentStatus}`);
-        } else if (pauseEvents.length > repriseEvents.length) {
-            // Si il y a plus de pauses que de reprises, l'opération est en pause
-            currentStatus = 'EN_PAUSE';
-            statusLabel = 'En pause';
-            console.log(`✅ Statut déterminé depuis nombre de pauses: ${currentStatus}`);
         } else if (lastDebutEvent && lastDebutEvent.Statut && lastDebutEvent.Statut.trim() !== '') {
             // Utiliser le statut de DEBUT seulement si aucun événement récent ne l'a modifié
             const dbStatus = lastDebutEvent.Statut.toUpperCase().trim();
@@ -527,7 +549,7 @@ function processLancementEventsWithPauses(events) {
             console.log(`🔍 Pauses trouvées: ${pauseEvents.length}, Reprises trouvées: ${repriseEvents.length}`);
             
             // Créer une seule ligne avec toutes les informations
-            processedItems.push(createLancementItem(debutEvent, groupEvents, currentStatus, statusLabel, endTime, pauseEvents, repriseEvents));
+            processedItems.push(createLancementItem(debutEvent, cycleEvents, currentStatus, statusLabel, endTime, pauseEvents, repriseEvents));
         }
         
         console.log(`🔍 Créé 1 item pour ${key}`);
