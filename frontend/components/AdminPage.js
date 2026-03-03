@@ -1362,8 +1362,8 @@ class AdminPage {
         }
         
         // Utiliser les opérations filtrées pour l'affichage
-        // ✅ L'utilisateur veut 1 ligne par opérateur (un opérateur peut travailler sur le même LT qu'un autre)
-        // On regroupe donc par OperatorCode et on choisit l'opération la plus pertinente.
+        // ✅ Nouveau comportement: 1 ligne par CYCLE/ENREGISTREMENT (et non plus 1 seule ligne par opérateur).
+        // On ne regroupe plus par OperatorCode: chaque enregistrement retourné par le backend apparaît dans le tableau.
         const getOperatorCode = (op) => String(op?.OperatorCode || op?.operatorCode || op?.operatorId || '').trim();
         const getLancementCode = (op) => String(op?.LancementCode || op?.lancementCode || '').trim().toUpperCase();
         const getRowId = (op) => {
@@ -1385,42 +1385,17 @@ class AdminPage {
             if (end && end !== '-' && String(end).trim() !== '' && end !== 'N/A') return 'TERMINE';
             return '';
         };
-        const statusRank = (code) => {
-            if (code === 'EN_COURS') return 300;
-            if (code === 'EN_PAUSE' || code === 'PAUSE') return 200;
-            if (code === 'TERMINE') return 100;
-            return 0;
-        };
-        const scoreForOperatorPick = (op) => {
-            let score = 0;
-            const st = getStatusCode(op);
-            score += statusRank(st);
-            if (op?.TempsId) score += 10; // consolidé
-            const start = this.formatDateTime(op?.StartTime ?? op?.startTime);
-            if (start && start !== '-' && start !== '00:00') score += 5;
-            score += Math.min(getRowId(op), 1_000_000) / 1_000_000; // tie-break stable
-            return score;
-        };
-
-        const groups = new Map(); // operatorCode -> ops[]
-        filteredOperations.forEach(op => {
-            const k = getOperatorCode(op) || '(unknown)';
-            if (!groups.has(k)) groups.set(k, []);
-            groups.get(k).push(op);
-        });
-
-        const operationsToDisplay = Array.from(groups.values()).map(list => {
-            // Choisir la meilleure op du groupe
-            let best = list[0];
-            let bestScore = scoreForOperatorPick(best);
-            for (let i = 1; i < list.length; i++) {
-                const s = scoreForOperatorPick(list[i]);
-                if (s > bestScore) {
-                    best = list[i];
-                    bestScore = s;
-                }
-            }
-            return best;
+        // Trier les opérations pour un affichage stable (opérateur, lancement, heure de début)
+        const operationsToDisplay = [...filteredOperations].sort((a, b) => {
+            const opA = getOperatorCode(a);
+            const opB = getOperatorCode(b);
+            if (opA !== opB) return opA.localeCompare(opB);
+            const ltA = getLancementCode(a);
+            const ltB = getLancementCode(b);
+            if (ltA !== ltB) return ltA.localeCompare(ltB);
+            const startA = this.formatDateTime(a?.StartTime ?? a?.startTime) || '';
+            const startB = this.formatDateTime(b?.StartTime ?? b?.startTime) || '';
+            return startA.localeCompare(startB);
         });
 
         // Mémoriser des compteurs d'affichage pour la pagination (fallback)

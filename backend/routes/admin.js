@@ -444,115 +444,114 @@ function processLancementEventsWithPauses(events) {
             heureFin: e.HeureFin
         })));
         
-        // Logique : Une seule ligne par opérateur/lancement, pas de doublons
+        // Logique : une ligne par CYCLE (DEBUT..FIN ou DEBUT..PAUSE/REPRISE), pas seulement la dernière.
         console.log(`🔍 Traitement de ${groupEvents.length} événements pour ${key}`);
-        
-        // ⚠️ Un opérateur peut relancer le même lancement plusieurs fois (plusieurs cycles DEBUT..FIN).
-        // On ne doit pas laisser un ancien FIN masquer un nouveau DEBUT.
-        let lastDebutIdx = -1;
-        for (let i = groupEvents.length - 1; i >= 0; i--) {
+
+        // Identifier tous les indices de DEBUT pour découper en cycles successifs
+        const debutIndices = [];
+        for (let i = 0; i < groupEvents.length; i++) {
             if (groupEvents[i]?.Ident === 'DEBUT') {
-                lastDebutIdx = i;
-                break;
+                debutIndices.push(i);
             }
         }
-        const cycleEvents = lastDebutIdx >= 0 ? groupEvents.slice(lastDebutIdx) : [];
-        const debutEvent = cycleEvents.find(e => e.Ident === 'DEBUT');
-        const finEvent = cycleEvents.find(e => e.Ident === 'FIN');
-        const pauseEvents = cycleEvents.filter(e => e.Ident === 'PAUSE');
-        const repriseEvents = cycleEvents.filter(e => e.Ident === 'REPRISE');
-        
-        // Déterminer le statut final (une seule ligne par opérateur/lancement)
-        // PRIORITÉ : Utiliser le statut de la base de données s'il a été modifié manuellement
-        // Sinon, calculer à partir des événements
-        let currentStatus = 'EN_COURS';
-        let statusLabel = 'En cours';
-        
-        // PRIORITÉ : Vérifier si l'événement DEBUT a un statut modifié manuellement
-        // Le statut est modifié sur l'événement DEBUT (le plus récent si plusieurs)
-        const debutEvents = cycleEvents.filter(e => e.Ident === 'DEBUT').sort((a, b) => 
-            new Date(b.DateCreation) - new Date(a.DateCreation)
-        );
-        const lastDebutEvent = debutEvents[0];
-        
-        // Trouver le dernier événement pour déterminer le statut actuel (priorité sur le statut de DEBUT)
-        const lastEvent = cycleEvents[cycleEvents.length - 1];
-        
-        // PRIORITÉ 1 : Vérifier le dernier événement pour déterminer le statut réel
-        if (lastEvent && lastEvent.Ident === 'FIN') {
-            currentStatus = 'TERMINE';
-            statusLabel = 'Terminé';
-        } else if (lastEvent && lastEvent.Ident === 'PAUSE') {
-            // Si le dernier événement est PAUSE, l'opération est en pause (priorité absolue)
-            currentStatus = 'EN_PAUSE';
-            statusLabel = 'En pause';
-            console.log(`✅ Statut déterminé depuis dernier événement PAUSE: ${currentStatus}`);
-        } else if (lastEvent && lastEvent.Ident === 'REPRISE') {
-            // Si le dernier événement est REPRISE, l'opération est en cours
-            currentStatus = 'EN_COURS';
-            statusLabel = 'En cours';
-            console.log(`✅ Statut déterminé depuis dernier événement REPRISE: ${currentStatus}`);
-        } else if (lastDebutEvent && lastDebutEvent.Statut && lastDebutEvent.Statut.trim() !== '') {
-            // Utiliser le statut de DEBUT seulement si aucun événement récent ne l'a modifié
-            const dbStatus = lastDebutEvent.Statut.toUpperCase().trim();
-            const statusMap = {
-                'EN_COURS': 'En cours',
-                'EN_PAUSE': 'En pause',
-                'PAUSE': 'En pause',
-                'TERMINE': 'Terminé',
-                'TERMINÉ': 'Terminé',
-                'PAUSE_TERMINEE': 'Pause terminée',
-                'PAUSE_TERMINÉE': 'Pause terminée',
-                'FORCE_STOP': 'Arrêt forcé'
-            };
-            
-            if (statusMap[dbStatus] || dbStatus === 'TERMINE' || dbStatus === 'TERMINÉ') {
-                currentStatus = dbStatus;
-                statusLabel = statusMap[dbStatus] || (dbStatus === 'TERMINE' || dbStatus === 'TERMINÉ' ? 'Terminé' : dbStatus);
-                console.log(`✅ Utilisation du statut de la base de données depuis événement DEBUT: ${currentStatus} (${statusLabel})`);
+
+        if (debutIndices.length === 0) {
+            console.warn(`⚠️ Aucun DEBUT trouvé pour ${key}, groupe ignoré.`);
+            return;
+        }
+
+        debutIndices.forEach((startIdx, idx) => {
+            const endIdx = (idx + 1 < debutIndices.length) 
+                ? debutIndices[idx + 1] - 1 
+                : groupEvents.length - 1;
+            const cycleEvents = groupEvents.slice(startIdx, endIdx + 1);
+
+            const debutEvent = cycleEvents.find(e => e.Ident === 'DEBUT');
+            const finEvent = cycleEvents.find(e => e.Ident === 'FIN');
+            const pauseEvents = cycleEvents.filter(e => e.Ident === 'PAUSE');
+            const repriseEvents = cycleEvents.filter(e => e.Ident === 'REPRISE');
+
+            // Déterminer le statut final pour CE cycle
+            let currentStatus = 'EN_COURS';
+            let statusLabel = 'En cours';
+
+            const debutEvents = cycleEvents
+                .filter(e => e.Ident === 'DEBUT')
+                .sort((a, b) => new Date(b.DateCreation) - new Date(a.DateCreation));
+            const lastDebutEvent = debutEvents[0];
+
+            const lastEvent = cycleEvents[cycleEvents.length - 1];
+
+            if (lastEvent && lastEvent.Ident === 'FIN') {
+                currentStatus = 'TERMINE';
+                statusLabel = 'Terminé';
+            } else if (lastEvent && lastEvent.Ident === 'PAUSE') {
+                currentStatus = 'EN_PAUSE';
+                statusLabel = 'En pause';
+                console.log(`✅ Statut déterminé depuis dernier événement PAUSE: ${currentStatus}`);
+            } else if (lastEvent && lastEvent.Ident === 'REPRISE') {
+                currentStatus = 'EN_COURS';
+                statusLabel = 'En cours';
+                console.log(`✅ Statut déterminé depuis dernier événement REPRISE: ${currentStatus}`);
+            } else if (lastDebutEvent && lastDebutEvent.Statut && lastDebutEvent.Statut.trim() !== '') {
+                const dbStatus = lastDebutEvent.Statut.toUpperCase().trim();
+                const statusMap = {
+                    'EN_COURS': 'En cours',
+                    'EN_PAUSE': 'En pause',
+                    'PAUSE': 'En pause',
+                    'TERMINE': 'Terminé',
+                    'TERMINÉ': 'Terminé',
+                    'PAUSE_TERMINEE': 'Pause terminée',
+                    'PAUSE_TERMINÉE': 'Pause terminée',
+                    'FORCE_STOP': 'Arrêt forcé'
+                };
+
+                if (statusMap[dbStatus] || dbStatus === 'TERMINE' || dbStatus === 'TERMINÉ') {
+                    currentStatus = dbStatus;
+                    statusLabel = statusMap[dbStatus] || (dbStatus === 'TERMINE' || dbStatus === 'TERMINÉ' ? 'Terminé' : dbStatus);
+                    console.log(`✅ Utilisation du statut de la base de données depuis événement DEBUT: ${currentStatus} (${statusLabel})`);
+                } else {
+                    currentStatus = 'EN_COURS';
+                    statusLabel = 'En cours';
+                }
             } else {
                 currentStatus = 'EN_COURS';
                 statusLabel = 'En cours';
             }
-        } else {
-            // Par défaut, en cours
-            currentStatus = 'EN_COURS';
-            statusLabel = 'En cours';
-        }
 
-        // 🔒 RÈGLE: On n'affiche jamais "Terminé" sans événement FIN (sinon on se retrouve avec endTime = '-' malgré un statut terminé).
-        // La source de vérité d'une opération terminée est la présence d'un événement FIN.
-        const statusUpper = String(currentStatus || '').toUpperCase();
-        if ((statusUpper === 'TERMINE' || statusUpper === 'TERMINÉ') && !finEvent) {
-            console.warn(`⚠️ Statut terminé détecté sans FIN pour ${key} → forcé à EN_COURS (cohérence EndTime).`);
-            currentStatus = 'EN_COURS';
-            statusLabel = 'En cours';
-        }
-        
-        // Créer UNE SEULE ligne par opérateur/lancement (pas de doublons)
-        // On n'affiche que les heures RÉELLES :
-        // - Heure de début = événement DEBUT
-        // - Heure de fin   = événement FIN (s'il existe), sinon vide
-        if (debutEvent) {
-            let endTime = null;
-            
-            if (finEvent) {
-                // IMPORTANT:
-                // - DateCreation est souvent un champ DATE (sans heure) => si on le convertit en Date, on obtient une "heure" artificielle (01:00/02:00),
-                // - Utiliser HeureFin si disponible (déjà converti en VARCHAR(5) par SQL)
-                // - Sinon utiliser CreatedAt (DATETIME2) plutôt que DateCreation (DATE) pour éviter les problèmes de timezone
-                // - CreatedAt contient la vraie datetime, et colle à ce que voit l'utilisateur sur son poste
-                endTime = finEvent.HeureFin ? formatDateTime(finEvent.HeureFin) : formatDateTime(finEvent.CreatedAt || finEvent.DateCreation);
+            // Règle: jamais "Terminé" sans FIN explicite
+            const statusUpper = String(currentStatus || '').toUpperCase();
+            if ((statusUpper === 'TERMINE' || statusUpper === 'TERMINÉ') && !finEvent) {
+                console.warn(`⚠️ Statut terminé détecté sans FIN pour ${key} (cycle ${idx}) → forcé à EN_COURS.`);
+                currentStatus = 'EN_COURS';
+                statusLabel = 'En cours';
             }
-            
-            console.log(`🔍 Ligne principale pour ${key}:`, currentStatus);
-            console.log(`🔍 Pauses trouvées: ${pauseEvents.length}, Reprises trouvées: ${repriseEvents.length}`);
-            
-            // Créer une seule ligne avec toutes les informations
-            processedItems.push(createLancementItem(debutEvent, cycleEvents, currentStatus, statusLabel, endTime, pauseEvents, repriseEvents));
-        }
-        
-        console.log(`🔍 Créé 1 item pour ${key}`);
+
+            if (debutEvent) {
+                let endTime = null;
+
+                if (finEvent) {
+                    endTime = finEvent.HeureFin
+                        ? formatDateTime(finEvent.HeureFin)
+                        : formatDateTime(finEvent.CreatedAt || finEvent.DateCreation);
+                }
+
+                console.log(`🔍 Ligne pour ${key}, cycle ${idx}:`, currentStatus);
+                console.log(`🔍 Pauses trouvées: ${pauseEvents.length}, Reprises trouvées: ${repriseEvents.length}`);
+
+                processedItems.push(
+                    createLancementItem(
+                        debutEvent,
+                        cycleEvents,
+                        currentStatus,
+                        statusLabel,
+                        endTime,
+                        pauseEvents,
+                        repriseEvents
+                    )
+                );
+            }
+        });
     });
     
     console.log(`🔍 Total d'items créés: ${processedItems.length}`);
