@@ -229,7 +229,7 @@ class MaintenanceManager {
     }
 
     async validateDataIntegrity() {
-        this.log('🔍 Validation de l'intégrité des données...');
+        this.log("🔍 Validation de l'intégrité des données...");
         
         const issues = [];
         
