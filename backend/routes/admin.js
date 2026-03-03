@@ -1157,29 +1157,10 @@ async function getAdminOperations(date, page = 1, limit = 25) {
         // IMPORTANT: DateCreation est renvoyé en 'YYYY-MM-DD' (string) pour éviter les décalages timezone.
         let filteredEvents = allEvents.filter(event => String(event.DateCreation || '') === targetDate);
 
-        // Exclure uniquement les opérations DÉFINITIVEMENT traitées dans ABTEMPS_OPERATEURS pour qu'elles disparaissent du dashboard.
-        // Important pour l'admin : les lignes en statut 'O' (en attente / à vérifier) doivent rester visibles.
-        // Seules les lignes en statut 'T' (transmises/traitées par SILOG) sont masquées.
-        try {
-            const statutSql = "= 'T'";
-
-            const transmittedQuery = `
-                SELECT OperatorCode, LancementCode, Phase, CodeRubrique
-                FROM [SEDI_APP_INDEPENDANTE].[dbo].[ABTEMPS_OPERATEURS]
-                WHERE StatutTraitement ${statutSql}
-                  AND DateCreation >= @date AND DateCreation < DATEADD(day, 1, @date)
-            `;
-            const transmitted = await executeQuery(transmittedQuery, { date: targetDate });
-            const transmittedSet = new Set(
-                transmitted.map(t => `${t.OperatorCode}_${t.LancementCode}_${String(t.Phase || '').trim()}_${String(t.CodeRubrique || '').trim()}`)
-            );
-            filteredEvents = filteredEvents.filter(e => {
-                const k = `${e.OperatorCode}_${e.CodeLanctImprod}_${String(e.Phase || '').trim()}_${String(e.CodeRubrique || '').trim()}`;
-                return !transmittedSet.has(k);
-            });
-        } catch (e) {
-            console.warn('⚠️ Impossible de filtrer les opérations transmises pour les opérations admin:', e.message);
-        }
+        // Ne plus exclure les opérations déjà transmises vers ABTEMPS_OPERATEURS :
+        // l'ADMIN doit pouvoir voir et vérifier toutes les opérations de la journée,
+        // même après transfert technique (StatutTraitement = 'O' ou 'T').
+        // On garde toutefois le try/catch précédent comme référence historique.
 
         // Regrouper les événements par lancement mais garder les pauses séparées
         console.log('🔍 Événements avant regroupement:', filteredEvents.length);
