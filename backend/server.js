@@ -19,6 +19,7 @@ const { metricsMiddleware, getMetrics, register } = require('./middleware/metric
 const { auditMiddleware } = require('./middleware/audit');
 const apmService = require('./services/APMService');
 const cacheService = require('./services/CacheService');
+const MaintenanceManager = require('./scripts/maintenance');
 
 
 const app = express();
@@ -338,6 +339,43 @@ function startPeriodicCleanup() {
     }, 60 * 60 * 1000); // Toutes les heures
 }
 
+// Planification quotidienne de la clôture automatique des opérations (par défaut à 19h heure serveur)
+function scheduleDailyAutoCloseOperations() {
+    const enabled = String(process.env.ENABLE_AUTO_CLOSE_OPS || 'true').toLowerCase() === 'true';
+    if (!enabled) {
+        console.log('⏰ Clôture automatique des opérations désactivée (ENABLE_AUTO_CLOSE_OPS!=true)');
+        return;
+    }
+
+    const maintenance = new MaintenanceManager();
+
+    const scheduleNextRun = () => {
+        const now = new Date();
+        const next = new Date(now);
+        // Heure cible: 19h00:00 heure serveur
+        next.setHours(19, 0, 0, 0);
+        if (next <= now) {
+            // Si on a déjà dépassé 19h aujourd'hui, programmer pour demain
+            next.setDate(next.getDate() + 1);
+        }
+        const delay = next.getTime() - now.getTime();
+        console.log(`⏰ Prochaine clôture automatique des opérations planifiée à ${next.toISOString()} (dans ${Math.round(delay / 1000)} secondes).`);
+
+        setTimeout(async () => {
+            try {
+                await maintenance.autoCloseOpenOperations();
+            } catch (error) {
+                console.error('❌ Erreur lors de la clôture automatique quotidienne des opérations:', error);
+            } finally {
+                // Replanifier pour le lendemain
+                scheduleNextRun();
+            }
+        }, delay);
+    };
+
+    scheduleNextRun();
+}
+
 if (shouldStartServer()) {
     // Utiliser le port 3033 pour le développement local, sinon utiliser PORT (3001)
     const devPort = process.env.NODE_ENV === 'development' ? 3033 : PORT;
@@ -359,6 +397,9 @@ if (shouldStartServer()) {
                 } else {
                     console.log('🧹 Nettoyage périodique désactivé (ENABLE_PERIODIC_CLEANUP!=true)');
                 }
+
+                // Planifier la clôture automatique quotidienne des opérations (par défaut activée)
+                scheduleDailyAutoCloseOperations();
                 
                 resolve(serverInstance);
             });

@@ -35,6 +35,64 @@ class MaintenanceManager {
         fs.appendFileSync(this.logFile, logMessage);
     }
 
+    async autoCloseOpenOperations() {
+        this.log('⏰ Fermeture automatique des opérations encore en cours pour la journée...');
+        try {
+            const closeQuery = `
+                ;WITH LastEvents AS (
+                    SELECT
+                        OperatorCode,
+                        CodeLanctImprod,
+                        COALESCE(Phase, 'PRODUCTION') AS Phase,
+                        CodeRubrique,
+                        Ident,
+                        Statut,
+                        DateCreation,
+                        NoEnreg,
+                        ROW_NUMBER() OVER (
+                            PARTITION BY OperatorCode,
+                                         CodeLanctImprod,
+                                         COALESCE(Phase, 'PRODUCTION'),
+                                         CodeRubrique,
+                                         CAST(DateCreation AS DATE)
+                            ORDER BY DateCreation DESC, NoEnreg DESC
+                        ) AS rn
+                    FROM [SEDI_APP_INDEPENDANTE].[dbo].[ABHISTORIQUE_OPERATEURS]
+                    WHERE CAST(DateCreation AS DATE) = CAST(GETDATE() AS DATE)
+                      AND OperatorCode IS NOT NULL
+                      AND OperatorCode != ''
+                      AND OperatorCode != '0'
+                )
+                INSERT INTO [SEDI_APP_INDEPENDANTE].[dbo].[ABHISTORIQUE_OPERATEURS]
+                (OperatorCode, CodeLanctImprod, CodeRubrique, Ident, Phase, Statut, HeureDebut, HeureFin, DateCreation)
+                SELECT
+                    OperatorCode,
+                    CodeLanctImprod,
+                    ISNULL(CodeRubrique, OperatorCode) AS CodeRubrique,
+                    'FIN' AS Ident,
+                    Phase,
+                    'TERMINE' AS Statut,
+                    NULL AS HeureDebut,
+                    CAST(CONVERT(VARCHAR(8), GETDATE(), 108) AS TIME) AS HeureFin,
+                    CAST(DateCreation AS DATE) AS DateCreation
+                FROM LastEvents
+                WHERE rn = 1
+                  AND (Ident IN ('DEBUT', 'REPRISE', 'PAUSE') OR Statut IN ('EN_COURS', 'EN_PAUSE'))
+                  AND NOT (Ident = 'FIN' OR Statut IN ('TERMINE', 'TERMINÉ'));
+            `;
+
+            const result = await executeQuery(closeQuery);
+            const affected = Array.isArray(result?.rowsAffected)
+                ? result.rowsAffected.reduce((a, b) => a + b, 0)
+                : (result?.rowsAffected || 0);
+
+            this.log(`✅ ${affected} opération(s) clôturée(s) automatiquement pour la journée en cours.`);
+        } catch (error) {
+            this.log(`❌ Erreur lors de la clôture automatique des opérations: ${error.message}`);
+            throw error;
+        }
+    }
+
     async cleanupInconsistentData() {
         this.log('🧹 Début du nettoyage des données incohérentes...');
         
@@ -317,6 +375,9 @@ async function main() {
             case 'report':
                 await maintenance.generateHealthReport();
                 break;
+            case 'auto-close-ops':
+                await maintenance.autoCloseOpenOperations();
+                break;
             case 'all':
                 await maintenance.cleanupInconsistentData();
                 await maintenance.fixDuplicatePauses();
@@ -331,6 +392,7 @@ Commands:
   fix-duplicates - Corriger les doublons de pauses
   validate       - Valider l'intégrité des données
   report         - Générer un rapport de santé
+  auto-close-ops - Clôturer automatiquement les opérations encore en cours pour la journée
   all            - Exécuter toutes les tâches de maintenance
                 `);
         }

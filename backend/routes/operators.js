@@ -668,7 +668,7 @@ async function resolvePhaseRubriqueForAction(lancementCode, operatorId, codeOper
         };
     }
 
-    // 2) Sinon, inférer depuis le dernier événement de l'opérateur sur ce lancement aujourd'hui
+    // 2) Sinon, inférer depuis le dernier événement de l'opérateur sur ce lancement (toute période)
     const q = `
         SELECT TOP 1
             COALESCE(Phase, 'PRODUCTION') AS Phase,
@@ -676,7 +676,6 @@ async function resolvePhaseRubriqueForAction(lancementCode, operatorId, codeOper
         FROM [SEDI_APP_INDEPENDANTE].[dbo].[ABHISTORIQUE_OPERATEURS]
         WHERE CodeLanctImprod = @lancementCode
           AND OperatorCode = @operatorId
-          AND CAST(DateCreation AS DATE) = CAST(GETDATE() AS DATE)
         ORDER BY DateCreation DESC, NoEnreg DESC
     `;
     const rows = await executeQuery(q, { lancementCode, operatorId });
@@ -1337,7 +1336,7 @@ router.post('/stop', async (req, res) => {
         }
         
         // 🔒 VÉRIFICATION DE SÉCURITÉ : S'assurer que l'opérateur possède ce lancement
-        // Vérifier qu'il existe un événement DEBUT pour ce lancement et cet opérateur aujourd'hui
+        // Vérifier qu'il existe un événement DEBUT pour ce lancement et cet opérateur (peu importe la date)
         const ownershipCheck = `
             SELECT TOP 1 OperatorCode, Ident, Statut
             FROM [SEDI_APP_INDEPENDANTE].[dbo].[ABHISTORIQUE_OPERATEURS]
@@ -1346,7 +1345,6 @@ router.post('/stop', async (req, res) => {
               AND Phase = @phase
               AND CodeRubrique = @codeRubrique
               AND Ident = 'DEBUT'
-              AND CAST(DateCreation AS DATE) = CAST(GETDATE() AS DATE)
             ORDER BY DateCreation DESC
         `;
         const ownership = await executeQuery(ownershipCheck, { operatorId, lancementCode, phase, codeRubrique });
@@ -1372,7 +1370,7 @@ router.post('/stop', async (req, res) => {
 
         // phase/codeRubrique déjà résolus plus haut
 
-        // ✅ Autoriser plusieurs cycles dans la journée:
+        // ✅ Autoriser plusieurs cycles dans la journée (et sur plusieurs jours):
         // On ne bloque que si la DERNIÈRE action de l'étape est déjà FIN.
         // (L'ancien check bloquait dès qu'il existait un FIN quelconque dans la journée.)
         const lastEventCheck = `
@@ -1382,7 +1380,6 @@ router.post('/stop', async (req, res) => {
               AND OperatorCode = @operatorId
               AND Phase = @phase
               AND CodeRubrique = @codeRubrique
-              AND CAST(DateCreation AS DATE) = CAST(GETDATE() AS DATE)
             ORDER BY DateCreation DESC, NoEnreg DESC
         `;
         const lastEventRows = await executeQuery(lastEventCheck, { operatorId, lancementCode, phase, codeRubrique });
