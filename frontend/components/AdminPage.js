@@ -1284,6 +1284,18 @@ class AdminPage {
             }
         }
         
+        // Filtre opérateur
+        const operatorSelect = this.domCache.get('operatorFilter');
+        const selectedOperatorCode = operatorSelect?.value?.toString().trim();
+        if (selectedOperatorCode) {
+            this.logger.log('👤 Filtrage par opérateur:', selectedOperatorCode);
+            filteredOperations = filteredOperations.filter(op => {
+                const opCode = (op.OperatorCode || op.operatorCode || op.operatorId || '').toString().trim();
+                return opCode === selectedOperatorCode;
+            });
+            this.logger.log(`📊 Après filtrage opérateur: ${filteredOperations.length} opérations`);
+        }
+        
         // Filtre de recherche (code lancement)
         const searchFilter = this.domCache.get('searchFilter');
         if (searchFilter && searchFilter.value.trim()) {
