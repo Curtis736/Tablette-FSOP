@@ -946,26 +946,12 @@ async function getAdminStats(date) {
                   AND LTRIM(RTRIM(h.OperatorCode)) <> ''
                   AND h.OperatorCode <> '0'
             )
-            SELECT COUNT(DISTINCT active_operators.OperatorCode) AS totalOperators
-            FROM (
-                -- Opérateurs connectés (session ACTIVE)
-                SELECT s.OperatorCode
-                FROM [SEDI_APP_INDEPENDANTE].[dbo].[ABSESSIONS_OPERATEURS] s WITH (NOLOCK)
-                WHERE s.SessionStatus = 'ACTIVE'
-                  AND s.DateCreation >= CONVERT(date, GETDATE())
-                  AND s.DateCreation <  DATEADD(day, 1, CONVERT(date, GETDATE()))
-                  -- Ne compter "en ligne" que si activité récente (évite les sessions laissées actives)
-                  AND COALESCE(s.LastActivityTime, s.LoginTime, s.DateCreation) >= DATEADD(minute, -@activeTtlMinutes, GETDATE())
-
-                UNION
-
-                -- Opérateurs avec une opération réellement en cours (dernier event != FIN/TERMINE)
-                SELECT l.OperatorCode
-                FROM last_per_operator l
-                WHERE l.rn = 1
-                  AND UPPER(LTRIM(RTRIM(COALESCE(l.Ident, '')))) <> 'FIN'
-                  AND UPPER(LTRIM(RTRIM(COALESCE(l.Statut, '')))) IN ('EN_COURS', 'EN_PAUSE')
-            ) active_operators
+            -- ✅ Nouveau besoin: "en ligne" = uniquement sur un lancement (EN_COURS/EN_PAUSE)
+            SELECT COUNT(DISTINCT l.OperatorCode) AS totalOperators
+            FROM last_per_operator l
+            WHERE l.rn = 1
+              AND UPPER(LTRIM(RTRIM(COALESCE(l.Ident, '')))) <> 'FIN'
+              AND UPPER(LTRIM(RTRIM(COALESCE(l.Statut, '')))) IN ('EN_COURS', 'EN_PAUSE')
         `;
         
         // Récupérer les événements depuis ABHISTORIQUE_OPERATEURS pour la date spécifiée
@@ -2004,27 +1990,11 @@ router.get('/operators', async (req, res) => {
 
         console.log('🔍 Récupération des opérateurs connectés depuis ABSESSIONS_OPERATEURS...');
 
-        // IMPORTANT:
-        // On considère "connecté" un opérateur qui a une session ACTIVE,
-        // et "en opération" uniquement si le DERNIER événement du jour n'est pas FIN/TERMINE.
-        // (Sinon, un ancien DEBUT (Statut=EN_COURS) ferait apparaître l'opérateur actif alors qu'il a terminé.)
+        // IMPORTANT (nouveau besoin):
+        // On considère "en ligne" UNIQUEMENT si l'opérateur est sur un lancement:
+        // dernier événement du jour = EN_COURS / EN_PAUSE et Ident != FIN.
         const operatorsQuery = `
-            WITH active_sessions AS (
-                SELECT DISTINCT
-                    s.OperatorCode,
-                    s.LoginTime,
-                    s.LastActivityTime,
-                    s.SessionStatus,
-                    s.DeviceInfo
-                FROM [SEDI_APP_INDEPENDANTE].[dbo].[ABSESSIONS_OPERATEURS] s WITH (NOLOCK)
-                WHERE s.SessionStatus = 'ACTIVE'
-                  -- ⚡ SARGABLE date filter
-                  AND s.DateCreation >= CONVERT(date, GETDATE())
-                  AND s.DateCreation <  DATEADD(day, 1, CONVERT(date, GETDATE()))
-                  -- Ne compter "connecté" que si activité récente (évite les sessions laissées actives)
-                  AND COALESCE(s.LastActivityTime, s.LoginTime, s.DateCreation) >= DATEADD(minute, -@activeTtlMinutes, GETDATE())
-            ),
-            last_per_operator AS (
+            WITH last_per_operator AS (
                 SELECT
                     h.OperatorCode,
                     h.Ident,
@@ -2047,47 +2017,22 @@ router.get('/operators', async (req, res) => {
                 FROM last_per_operator
                 WHERE rn = 1
             ),
-            all_operators AS (
-                -- Liste: opérateurs avec session active OU avec une opération réellement en cours
-                SELECT OperatorCode FROM active_sessions
-                UNION
-                SELECT le.OperatorCode
-                FROM last_event le
-                WHERE UPPER(LTRIM(RTRIM(COALESCE(le.Ident, '')))) <> 'FIN'
-                  AND UPPER(LTRIM(RTRIM(COALESCE(le.Statut, '')))) IN ('EN_COURS', 'EN_PAUSE')
-            )
             SELECT
-                ao.OperatorCode AS OperatorCode,
-                COALESCE(r.Designation1, 'Opérateur ' + CAST(ao.OperatorCode AS VARCHAR)) AS NomOperateur,
-                s.LoginTime,
-                COALESCE(s.SessionStatus, 'ACTIVE') AS SessionStatus,
-                CASE
-                    WHEN le.OperatorCode IS NOT NULL
-                         AND UPPER(LTRIM(RTRIM(COALESCE(le.Ident, '')))) <> 'FIN'
-                         AND UPPER(LTRIM(RTRIM(COALESCE(le.Statut, '')))) IN ('EN_COURS', 'EN_PAUSE')
-                    THEN 'EN_OPERATION'
-                    WHEN s.OperatorCode IS NOT NULL THEN 'CONNECTE'
-                    ELSE 'INACTIVE'
-                END AS ActivityStatus,
-                COALESCE(s.LastActivityTime, s.LoginTime, le.DateCreation) AS LastActivityTime,
+                le.OperatorCode AS OperatorCode,
+                COALESCE(r.Designation1, 'Opérateur ' + CAST(le.OperatorCode AS VARCHAR)) AS NomOperateur,
+                CAST(NULL AS DATETIME2) AS LoginTime,
+                CAST('ACTIVE' AS VARCHAR(20)) AS SessionStatus,
+                CAST('EN_OPERATION' AS VARCHAR(20)) AS ActivityStatus,
+                le.DateCreation AS LastActivityTime,
                 r.Coderessource AS RessourceCode,
-                s.DeviceInfo,
-                CASE
-                    WHEN le.OperatorCode IS NOT NULL
-                         AND UPPER(LTRIM(RTRIM(COALESCE(le.Ident, '')))) <> 'FIN'
-                         AND UPPER(LTRIM(RTRIM(COALESCE(le.Statut, '')))) IN ('EN_COURS', 'EN_PAUSE')
-                    THEN 'EN_OPERATION'
-                    WHEN s.OperatorCode IS NOT NULL THEN 'CONNECTE'
-                    ELSE 'INACTIVE'
-                END AS CurrentStatus
-            FROM all_operators ao
-            LEFT JOIN active_sessions s
-              ON ao.OperatorCode = s.OperatorCode
-            LEFT JOIN last_event le
-              ON ao.OperatorCode = le.OperatorCode
+                CAST(NULL AS VARCHAR(255)) AS DeviceInfo,
+                CAST('EN_OPERATION' AS VARCHAR(20)) AS CurrentStatus
+            FROM last_event le
             LEFT JOIN [SEDI_ERP].[dbo].[RESSOURC] r WITH (NOLOCK)
-              ON ao.OperatorCode = r.Coderessource
-            ORDER BY ao.OperatorCode
+              ON le.OperatorCode = r.Coderessource
+            WHERE UPPER(LTRIM(RTRIM(COALESCE(le.Ident, '')))) <> 'FIN'
+              AND UPPER(LTRIM(RTRIM(COALESCE(le.Statut, '')))) IN ('EN_COURS', 'EN_PAUSE')
+            ORDER BY le.OperatorCode
         `;
 
         const operators = await executeQuery(operatorsQuery, { activeTtlMinutes });
@@ -2133,20 +2078,43 @@ router.get('/operators/all', async (req, res) => {
         console.log('🔍 Récupération de tous les opérateurs depuis RESSOURC...');
 
         const allOperatorsQuery = `
+            WITH last_per_operator AS (
+                SELECT
+                    h.OperatorCode,
+                    h.Ident,
+                    h.Statut,
+                    ROW_NUMBER() OVER (
+                        PARTITION BY h.OperatorCode
+                        ORDER BY h.DateCreation DESC, h.NoEnreg DESC
+                    ) AS rn
+                FROM [SEDI_APP_INDEPENDANTE].[dbo].[ABHISTORIQUE_OPERATEURS] h WITH (NOLOCK)
+                WHERE h.DateCreation >= CONVERT(date, GETDATE())
+                  AND h.DateCreation <  DATEADD(day, 1, CONVERT(date, GETDATE()))
+                  AND h.OperatorCode IS NOT NULL
+                  AND LTRIM(RTRIM(h.OperatorCode)) <> ''
+                  AND h.OperatorCode <> '0'
+            ),
+            last_event AS (
+                SELECT OperatorCode, Ident, Statut
+                FROM last_per_operator
+                WHERE rn = 1
+            )
             SELECT TOP 500
                 r.Coderessource as OperatorCode,
                 r.Designation1 as NomOperateur,
                 r.Typeressource,
                 CASE 
-                    WHEN s.OperatorCode IS NOT NULL THEN 'CONNECTE'
+                    WHEN le.OperatorCode IS NOT NULL
+                     AND UPPER(LTRIM(RTRIM(COALESCE(le.Ident, '')))) <> 'FIN'
+                     AND UPPER(LTRIM(RTRIM(COALESCE(le.Statut, '')))) IN ('EN_COURS', 'EN_PAUSE')
+                    THEN 'CONNECTE'
                     ELSE 'INACTIVE'
                 END as ConnectionStatus,
-                s.LoginTime,
-                s.SessionStatus
+                CAST(NULL AS DATETIME2) AS LoginTime,
+                CAST(NULL AS VARCHAR(20)) AS SessionStatus
             FROM [SEDI_ERP].[dbo].[RESSOURC] r
-            LEFT JOIN [SEDI_APP_INDEPENDANTE].[dbo].[ABSESSIONS_OPERATEURS] s 
-                ON r.Coderessource = s.OperatorCode 
-                AND s.SessionStatus = 'ACTIVE'
+            LEFT JOIN last_event le
+              ON r.Coderessource = le.OperatorCode
             WHERE r.Typeressource IN ('OP', 'OPERATEUR', 'O')
             ORDER BY r.Coderessource
         `;
