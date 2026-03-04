@@ -755,10 +755,10 @@ class AdminPage {
         }
     }
 
-    updateStats() {
+    updateStats(opsOverride = null) {
         // Calculer les statistiques depuis les opérations affichées dans le tableau
         // Cela garantit la cohérence entre le tableau et les statistiques
-        const allOps = this.operations || [];
+        const allOps = Array.isArray(opsOverride) ? opsOverride : (this._lastFilteredOperationsForStats || this.operations || []);
 
         const getOperatorCode = (op) => {
             // Best-effort selon les différentes sources (admin ops vs monitoring)
@@ -1305,6 +1305,10 @@ class AdminPage {
             });
             this.logger.log(`📊 Après filtrage recherche: ${filteredOperations.length} opérations`);
         }
+
+        // Mémoriser pour stats cohérentes avec le tableau
+        this._lastFilteredOperationsForStats = filteredOperations;
+        this.updateStats(filteredOperations);
         
         clearElement(this.operationsTableBody);
         this.logger.log('🧹 TABLEAU VIDE');
@@ -1332,7 +1336,8 @@ class AdminPage {
                 };
                 const statusLabel = transferLabels[transferStatusFilter.value] || transferStatusFilter.value.toLowerCase();
                 emptyMessage = 'Aucun enregistrement trouvé';
-                emptySubMessage = `Il n'y a pas d'enregistrements ${statusLabel} pour la période sélectionnée`;
+                const opPart = (statusFilter && statusFilter.value) ? ` et ${String(statusFilter.value).toLowerCase()}` : '';
+                emptySubMessage = `Il n'y a pas d'enregistrements ${statusLabel}${opPart} pour la période sélectionnée`;
             } else if (statusFilter && statusFilter.value) {
                 const opLabels = {
                     'EN_COURS': 'en cours',
