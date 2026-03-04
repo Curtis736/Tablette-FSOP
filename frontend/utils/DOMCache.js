@@ -21,6 +21,7 @@ class DOMCache {
             'operationsTableBody',
             'operatorFilter',
             'statusFilter',
+            'transferStatusFilter',
             'periodFilter',
             'searchFilter',
             'clearFiltersBtn',

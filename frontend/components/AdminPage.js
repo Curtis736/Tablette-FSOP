@@ -149,7 +149,17 @@ class AdminPage {
                 const statusFilter = this.domCache.get('statusFilter');
                 if (statusFilter) {
                     statusFilter.addEventListener('change', () => {
-                        // Recharger depuis le backend car ABTEMPS_OPERATEURS est filtré côté API
+                        // Statut opération: filtrage local
+                        this.updateOperationsTable();
+                        this.updateStats();
+                    });
+                }
+
+                // Filtre statut de transfert (ABTEMPS_OPERATEURS)
+                const transferStatusFilter = this.domCache.get('transferStatusFilter');
+                if (transferStatusFilter) {
+                    transferStatusFilter.addEventListener('change', () => {
+                        // Peut impacter la partie monitoring => recharger
                         this.loadData();
                     });
                 }
@@ -178,6 +188,7 @@ class AdminPage {
                     clearFiltersBtn.addEventListener('click', () => {
                         if (operatorSelect) operatorSelect.value = '';
                         if (statusFilter) statusFilter.value = '';
+                        if (transferStatusFilter) transferStatusFilter.value = '';
                         if (periodFilter) periodFilter.value = 'today';
                         if (searchFilter) searchFilter.value = '';
                         this.loadData();
@@ -375,10 +386,10 @@ class AdminPage {
             const data = adminData;
             
             // Charger les opérations consolidées depuis ABTEMPS_OPERATEURS
-            const statusFilter = this.domCache.get('statusFilter');
+            const transferStatusFilter = this.domCache.get('transferStatusFilter');
             const operatorFilter = this.domCache.get('operatorFilter');
             const searchFilter = this.domCache.get('searchFilter');
-            const statutTraitement = statusFilter?.value || undefined;
+            const statutTraitement = transferStatusFilter?.value || undefined;
             const operatorCode = operatorFilter?.value || undefined;
             const lancementCode = searchFilter?.value?.trim() || undefined;
 
@@ -492,16 +503,8 @@ class AdminPage {
                 return a; // stable
             };
             
-            // Vérifier si l'utilisateur veut voir les opérations transmises
-            const showTransmitted = statusFilter?.value === 'T';
-            
             // D'abord ajouter les opérations de monitoring (consolidées)
-            // Exclure par défaut les opérations transmises (StatutTraitement = 'T')
             consolidatedOps.forEach(op => {
-                // Si on ne veut pas voir les transmises et que cette opération est transmise, la sauter
-                if (!showTransmitted && op.StatutTraitement === 'T') {
-                    return; // Skip cette opération
-                }
                 const key = normalizeKey(op);
                 const existing = mergedMap.get(key);
                 mergedMap.set(key, existing ? chooseBest(existing, op) : op);
@@ -730,7 +733,7 @@ class AdminPage {
     // Le chargement principal est fait dans loadData() pour éviter les doubles appels API
     async loadMonitoringRecords(date) {
         try {
-            const statutTraitement = document.getElementById('statusFilter')?.value || undefined;
+            const statutTraitement = document.getElementById('transferStatusFilter')?.value || undefined;
             const operatorCode = document.getElementById('operatorFilter')?.value || undefined;
             const lancementCode = document.getElementById('searchFilter')?.value?.trim() || undefined;
 
@@ -1251,37 +1254,32 @@ class AdminPage {
         // Appliquer les filtres
         let filteredOperations = [...this.operations];
         
-        // Par défaut, exclure les opérations transmises (StatutTraitement = 'T')
-        // Sauf si l'utilisateur a explicitement sélectionné le filtre "Transmis"
+        // Filtre statut opération (EN_COURS / EN_PAUSE / TERMINE)
         const statusFilter = document.getElementById('statusFilter');
-        const selectedStatus = statusFilter?.value?.toUpperCase().trim();
-        
-        if (selectedStatus === 'T') {
-            // Si l'utilisateur veut voir les transmises, ne filtrer que celles-ci
+        const selectedOpStatus = statusFilter?.value?.toUpperCase().trim();
+
+        // Filtre statut de transfert (NULL / O / A / T) - optionnel
+        const transferStatusFilter = document.getElementById('transferStatusFilter');
+        const selectedTransferStatus = transferStatusFilter?.value?.toUpperCase().trim();
+
+        if (selectedTransferStatus && selectedTransferStatus !== '') {
             filteredOperations = filteredOperations.filter(op => {
                 const st = (op.StatutTraitement === null || op.StatutTraitement === undefined)
                     ? 'NULL'
                     : String(op.StatutTraitement).toUpperCase().trim();
-                return st === 'T';
+                return st === selectedTransferStatus;
             });
-        } else {
-            // Par défaut, exclure les opérations transmises
+        }
+
+        if (selectedOpStatus && selectedOpStatus !== '') {
             filteredOperations = filteredOperations.filter(op => {
-                const st = (op.StatutTraitement === null || op.StatutTraitement === undefined)
-                    ? 'NULL'
-                    : String(op.StatutTraitement).toUpperCase().trim();
-                return st !== 'T'; // Exclure les transmises
+                const sc = (op?.StatusCode || op?.statusCode || '').toString().trim().toUpperCase();
+                const statusLabel = (op?.Status || op?.status || '').toString().trim().toUpperCase();
+                if (selectedOpStatus === 'EN_COURS') return sc === 'EN_COURS' || statusLabel.includes('EN COURS');
+                if (selectedOpStatus === 'EN_PAUSE') return sc === 'EN_PAUSE' || sc === 'PAUSE' || statusLabel.includes('PAUSE');
+                if (selectedOpStatus === 'TERMINE') return sc === 'TERMINE' || sc === 'TERMINÉ' || statusLabel.includes('TERMIN');
+                return true;
             });
-            
-            // Si un autre filtre de statut est sélectionné, l'appliquer
-            if (selectedStatus && selectedStatus !== '') {
-                filteredOperations = filteredOperations.filter(op => {
-                    const st = (op.StatutTraitement === null || op.StatutTraitement === undefined)
-                        ? 'NULL'
-                        : String(op.StatutTraitement).toUpperCase().trim();
-                    return st === selectedStatus;
-                });
-            }
         }
         
         // Filtre opérateur
@@ -1319,19 +1317,29 @@ class AdminPage {
             this.logger.log('⚠️ AUCUNE OPERATION APRES FILTRAGE - AFFICHAGE MESSAGE');
             this.logger.log('🔍 Filtres actifs:', {
                 statusFilter: statusFilter?.value || 'aucun',
+                transferStatusFilter: transferStatusFilter?.value || 'aucun',
                 searchFilter: searchFilter?.value || 'aucun',
                 totalOperations: this.operations.length
             });
             
             // Message personnalisé selon les filtres actifs
-            if (statusFilter && statusFilter.value) {
-                const statusLabels = {
+            if (transferStatusFilter && transferStatusFilter.value) {
+                const transferLabels = {
                     'NULL': 'non traités',
                     'O': 'validés',
                     'A': 'en attente',
                     'T': 'transmis'
                 };
-                const statusLabel = statusLabels[statusFilter.value] || statusFilter.value.toLowerCase();
+                const statusLabel = transferLabels[transferStatusFilter.value] || transferStatusFilter.value.toLowerCase();
+                emptyMessage = 'Aucun enregistrement trouvé';
+                emptySubMessage = `Il n'y a pas d'enregistrements ${statusLabel} pour la période sélectionnée`;
+            } else if (statusFilter && statusFilter.value) {
+                const opLabels = {
+                    'EN_COURS': 'en cours',
+                    'EN_PAUSE': 'en pause',
+                    'TERMINE': 'terminés'
+                };
+                const statusLabel = opLabels[statusFilter.value] || statusFilter.value.toLowerCase();
                 emptyMessage = 'Aucun enregistrement trouvé';
                 emptySubMessage = `Il n'y a pas d'enregistrements ${statusLabel} pour la période sélectionnée`;
             } else if (searchFilter && searchFilter.value.trim()) {
@@ -1817,12 +1825,12 @@ class AdminPage {
                 const result = await this.apiService.validateAndTransmitMonitoringBatch(ids, { triggerEdiJob });
                 if (result?.success) {
                     this.notificationManager.success(`Transfert terminé: ${result.count || ids.length} opération(s) transférée(s)`);
-                    // Recharger les données pour mettre à jour l'affichage (les opérations transmises seront masquées)
+                    // Recharger les données pour mettre à jour l'affichage
                     await this.loadData(false); // Désactiver autoConsolidate après transfert
-                    // S'assurer que le filtre de statut n'est pas sur "Transmis" pour masquer les opérations transférées
-                    const statusFilter = this.domCache.get('statusFilter');
-                    if (statusFilter && statusFilter.value === 'T') {
-                        statusFilter.value = ''; // Réinitialiser le filtre pour masquer les transmises
+                    // Éviter de rester bloqué sur un filtre transfert trop restrictif
+                    const transferStatusFilter = this.domCache.get('transferStatusFilter');
+                    if (transferStatusFilter && transferStatusFilter.value === 'T') {
+                        transferStatusFilter.value = '';
                     }
                     // Mettre à jour le tableau pour refléter les changements
                     this.updateOperationsTable();
