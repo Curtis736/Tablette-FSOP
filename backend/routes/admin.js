@@ -1994,7 +1994,7 @@ router.get('/operators', async (req, res) => {
         // On considère "en ligne" UNIQUEMENT si l'opérateur est sur un lancement:
         // dernier événement du jour = EN_COURS / EN_PAUSE et Ident != FIN.
         const operatorsQuery = `
-            WITH last_per_operator AS (
+            ;WITH last_per_operator AS (
                 SELECT
                     h.OperatorCode,
                     h.Ident,
@@ -2016,7 +2016,7 @@ router.get('/operators', async (req, res) => {
                 SELECT OperatorCode, Ident, Statut, DateCreation, NoEnreg
                 FROM last_per_operator
                 WHERE rn = 1
-            ),
+            )
             SELECT
                 le.OperatorCode AS OperatorCode,
                 COALESCE(r.Designation1, 'Opérateur ' + CAST(le.OperatorCode AS VARCHAR)) AS NomOperateur,
