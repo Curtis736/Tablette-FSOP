@@ -923,6 +923,7 @@ router.get('/export/:format', async (req, res) => {
 // Fonction pour récupérer les statistiques avec les vraies tables
 async function getAdminStats(date) {
     try {
+        const activeTtlMinutes = Math.max(1, Math.min(parseInt(process.env.ACTIVE_SESSION_TTL_MINUTES || '120', 10) || 120, 24 * 60));
         // Compter les opérateurs actifs (connectés OU avec lancement en cours)
         // IMPORTANT:
         // Ne pas compter "actif" si un ancien DEBUT (Statut=EN_COURS) existe mais qu'un FIN est arrivé après.
@@ -953,6 +954,8 @@ async function getAdminStats(date) {
                 WHERE s.SessionStatus = 'ACTIVE'
                   AND s.DateCreation >= CONVERT(date, GETDATE())
                   AND s.DateCreation <  DATEADD(day, 1, CONVERT(date, GETDATE()))
+                  -- Ne compter "en ligne" que si activité récente (évite les sessions laissées actives)
+                  AND COALESCE(s.LastActivityTime, s.LoginTime, s.DateCreation) >= DATEADD(minute, -@activeTtlMinutes, GETDATE())
 
                 UNION
 
@@ -975,7 +978,7 @@ async function getAdminStats(date) {
         
         // Exécuter la requête des opérateurs en parallèle
         const [operatorStats] = await Promise.all([
-            executeQuery(operatorsQuery)
+            executeQuery(operatorsQuery, { activeTtlMinutes })
         ]);
         
         if (!validationResult.valid) {
@@ -1993,6 +1996,7 @@ router.delete('/operations/:id', async (req, res) => {
 // Route pour récupérer les opérateurs connectés depuis ABSESSIONS_OPERATEURS
 router.get('/operators', async (req, res) => {
     try {
+        const activeTtlMinutes = Math.max(1, Math.min(parseInt(process.env.ACTIVE_SESSION_TTL_MINUTES || '120', 10) || 120, 24 * 60));
         // Éviter le cache (sinon le navigateur peut recevoir 304 sans body JSON)
         res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
         res.setHeader('Pragma', 'no-cache');
@@ -2006,12 +2010,19 @@ router.get('/operators', async (req, res) => {
         // (Sinon, un ancien DEBUT (Statut=EN_COURS) ferait apparaître l'opérateur actif alors qu'il a terminé.)
         const operatorsQuery = `
             WITH active_sessions AS (
-                SELECT DISTINCT s.OperatorCode, s.LoginTime, s.SessionStatus, s.DeviceInfo
+                SELECT DISTINCT
+                    s.OperatorCode,
+                    s.LoginTime,
+                    s.LastActivityTime,
+                    s.SessionStatus,
+                    s.DeviceInfo
                 FROM [SEDI_APP_INDEPENDANTE].[dbo].[ABSESSIONS_OPERATEURS] s WITH (NOLOCK)
                 WHERE s.SessionStatus = 'ACTIVE'
                   -- ⚡ SARGABLE date filter
                   AND s.DateCreation >= CONVERT(date, GETDATE())
                   AND s.DateCreation <  DATEADD(day, 1, CONVERT(date, GETDATE()))
+                  -- Ne compter "connecté" que si activité récente (évite les sessions laissées actives)
+                  AND COALESCE(s.LastActivityTime, s.LoginTime, s.DateCreation) >= DATEADD(minute, -@activeTtlMinutes, GETDATE())
             ),
             last_per_operator AS (
                 SELECT
@@ -2058,7 +2069,7 @@ router.get('/operators', async (req, res) => {
                     WHEN s.OperatorCode IS NOT NULL THEN 'CONNECTE'
                     ELSE 'INACTIVE'
                 END AS ActivityStatus,
-                COALESCE(s.LoginTime, le.DateCreation) AS LastActivityTime,
+                COALESCE(s.LastActivityTime, s.LoginTime, le.DateCreation) AS LastActivityTime,
                 r.Coderessource AS RessourceCode,
                 s.DeviceInfo,
                 CASE
@@ -2079,7 +2090,7 @@ router.get('/operators', async (req, res) => {
             ORDER BY ao.OperatorCode
         `;
 
-        const operators = await executeQuery(operatorsQuery);
+        const operators = await executeQuery(operatorsQuery, { activeTtlMinutes });
         
         console.log(`✅ ${operators.length} opérateurs connectés récupérés`);
 

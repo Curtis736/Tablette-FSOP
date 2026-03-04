@@ -1513,8 +1513,9 @@ router.get('/:operatorCode/operations',
             -- ⚡ OPTIMISATION : Utiliser h.Phase directement (plus simple et fiable)
             -- Si Phase n'est pas dans h, on utilise 'PRODUCTION' par défaut
             WHERE h.OperatorCode = @operatorCode
-              -- Masquer pour l'opérateur toutes les opérations déjà transférées (peu importe le statut O/T)
-              AND t.StatutTraitement IS NULL
+              -- Masquer pour l'opérateur uniquement les opérations réellement transmises/traitées (StatutTraitement = 'T').
+              -- Les enregistrements en attente (ex: 'O') doivent rester visibles tant que l'admin n'a pas validé le transfert final.
+              AND (t.StatutTraitement IS NULL OR t.StatutTraitement != 'T')
             ORDER BY h.DateCreation DESC, h.NoEnreg DESC
         `;
         
