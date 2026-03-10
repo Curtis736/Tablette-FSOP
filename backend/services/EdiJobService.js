@@ -127,6 +127,25 @@ class EdiJobService {
             let stderr = '';
             let exitCode = null;
 
+            const runCommand = async (command, execOptions) => {
+                try {
+                    const r = await execAsync(command, execOptions);
+                    return { stdout: r.stdout || '', stderr: r.stderr || '', exitCode: 0 };
+                } catch (e) {
+                    // Timeout / killed => remonter à l'appelant (erreur réelle)
+                    if (e && (e.code === 'ETIMEDOUT' || e.killed)) throw e;
+                    // exec() rejette sur exitCode != 0. Dans ce cas, on capture stdout/stderr + code.
+                    if (typeof e?.code === 'number') {
+                        return {
+                            stdout: e.stdout || '',
+                            stderr: e.stderr || '',
+                            exitCode: e.code
+                        };
+                    }
+                    throw e;
+                }
+            };
+
             if (process.platform === 'win32' && config.useStartProcess) {
                 // Utiliser Start-Process -Wait pour reproduire le comportement PowerShell (UNC + working directory)
                 const filePath = this._psSingleQuote(config.silogExe);
@@ -142,12 +161,13 @@ class EdiJobService {
                 const command = `powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command "${ps}"`;
                 console.log(`📝 PowerShell: ${this._maskCommandForLogs(command)}`);
 
-                const r = await execAsync(command, {
+                const r = await runCommand(command, {
                     timeout: config.timeoutMs,
                     maxBuffer: 10 * 1024 * 1024
                 });
                 stdout = r.stdout || '';
                 stderr = r.stderr || '';
+                exitCode = r.exitCode;
             } else if (process.platform !== 'win32') {
                 // Runner distant (SSH) vers un hôte Windows qui exécutera PowerShell/Start-Process
                 const sshHost = String(process.env.SILOG_SSH_HOST || options.sshHost || '').trim();
@@ -191,49 +211,53 @@ class EdiJobService {
                 const sshCommand = parts.join(' ');
                 console.log(`📝 SSH: ${this._maskCommandForLogs(sshCommand)}`);
 
-                const r = await execAsync(sshCommand, {
+                const r = await runCommand(sshCommand, {
                     timeout: config.timeoutMs,
                     maxBuffer: 10 * 1024 * 1024
                 });
                 stdout = r.stdout || '';
                 stderr = r.stderr || '';
+                exitCode = r.exitCode;
             } else {
                 // Fallback: exécution directe (peut suffire en environnement non-Windows ou si Start-Process est désactivé)
                 const directCmd = `"${config.silogExe}" ${silogArgs.join(' ')}`;
-                const r = await execAsync(directCmd, {
+                const r = await runCommand(directCmd, {
                     timeout: config.timeoutMs,
                     maxBuffer: 10 * 1024 * 1024,
                     cwd: config.workDir || undefined
                 });
                 stdout = r.stdout || '';
                 stderr = r.stderr || '';
+                exitCode = r.exitCode;
             }
             
             // Analyser le résultat
-            const success = !stderr || stderr.trim().length === 0;
+            const warnings = !!(stderr && String(stderr).trim().length > 0);
+            const success = exitCode === 0;
             
             if (success) {
-                console.log(`✅ EDI_JOB exécuté avec succès pour codeTache=${config.codeTache}`);
+                console.log(`✅ EDI_JOB exécuté avec succès pour codeTache=${config.codeTache} (exitCode=0)`);
                 return {
                     success: true,
-                    message: 'EDI_JOB exécuté avec succès',
+                    message: warnings ? 'EDI_JOB exécuté avec des avertissements' : 'EDI_JOB exécuté avec succès',
                     codeTache: config.codeTache,
                     stdout: stdout,
-                    stderr: stderr || null,
-                    exitCode
-                };
-            } else {
-                console.warn(`⚠️ EDI_JOB exécuté avec des avertissements pour codeTache=${config.codeTache}`);
-                return {
-                    success: true, // Considéré comme succès même avec des avertissements
-                    message: 'EDI_JOB exécuté avec des avertissements',
-                    codeTache: config.codeTache,
-                    stdout: stdout,
-                    stderr: stderr,
-                    warnings: true,
-                    exitCode
+                    stderr: warnings ? stderr : null,
+                    warnings: warnings || undefined,
+                    exitCode: exitCode
                 };
             }
+
+            console.warn(`❌ EDI_JOB en échec pour codeTache=${config.codeTache} (exitCode=${exitCode})`);
+            return {
+                success: false,
+                error: 'EDI_JOB_FAILED',
+                message: `EDI_JOB a échoué (exitCode=${exitCode})`,
+                codeTache: config.codeTache,
+                stdout,
+                stderr: stderr || null,
+                exitCode
+            };
             
         } catch (error) {
             console.error(`❌ Erreur lors de l'exécution de l'EDI_JOB:`, error);
@@ -259,7 +283,8 @@ class EdiJobService {
                 success: false,
                 error: errorMessage,
                 details: errorDetails,
-                codeTache: codeTache || null
+                codeTache: codeTache || null,
+                exitCode: typeof error?.code === 'number' ? error.code : null
             };
         }
     }

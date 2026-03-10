@@ -51,6 +51,34 @@ class ApiService {
         console.log(`🔍 Host détecté: ${currentHost}:${currentPort}`);
     }
 
+    clearMemoryCacheByPrefix(prefix) {
+        try {
+            const p = String(prefix || '');
+            if (!p) return;
+            for (const k of this.cache.keys()) {
+                if (String(k).startsWith(p)) this.cache.delete(k);
+            }
+        } catch (e) {
+            // Non bloquant
+        }
+    }
+
+    invalidateAfterMutation(endpoint) {
+        const ep = String(endpoint || '');
+
+        // Toute mutation opérateur / opérations peut impacter les vues admin (connectés / opérations)
+        if (
+            ep.startsWith('/operators/start') ||
+            ep.startsWith('/operators/pause') ||
+            ep.startsWith('/operators/resume') ||
+            ep.startsWith('/operators/stop') ||
+            ep.startsWith('/operators/login') ||
+            ep.startsWith('/operators/logout')
+        ) {
+            this.clearMemoryCacheByPrefix('/admin/operators');
+        }
+    }
+
     // Méthode générique pour les requêtes avec rate limiting
     async request(endpoint, options = {}) {
         return new Promise((resolve, reject) => {
@@ -94,7 +122,7 @@ class ApiService {
         const url = `${this.baseUrl}${endpoint}`;
 
         // Admin auth token (si présent) - envoyé uniquement sur /auth et /admin
-        const adminToken = window.localStorage?.getItem('sedi_admin_token') || '';
+        const adminToken = window.sessionStorage?.getItem('sedi_admin_token') || '';
         const shouldAttachAdminToken = adminToken && (endpoint.startsWith('/admin') || endpoint.startsWith('/auth'));
         const authHeaders = shouldAttachAdminToken ? { Authorization: `Bearer ${adminToken}` } : {};
 
@@ -188,7 +216,12 @@ class ApiService {
                 throw error;
             }
 
-            return await response.json();
+            const data = await response.json();
+            // Invalider les caches mémoire qui deviennent faux après mutation
+            if ((options.method || 'GET').toUpperCase() !== 'GET') {
+                this.invalidateAfterMutation(endpoint);
+            }
+            return data;
         } catch (error) {
             // Ne pas logger les erreurs de réseau pour les health checks (évite le spam)
             if (endpoint === '/health' && (error.name === 'TypeError' || error.message.includes('Failed to fetch'))) {
@@ -262,13 +295,18 @@ class ApiService {
         return this.get('/auth/verify');
     }
 
+    // Sessions opérateurs (pour cohérence et sécurité côté backend)
+    async operatorLogin(code) {
+        return this.post('/operators/login', { code });
+    }
+
+    async operatorLogout(code) {
+        return this.post('/operators/logout', { code });
+    }
+
     // Opérateurs
     async getOperator(code) {
         return this.get(`/operators/${code}`);
-    }
-
-    async getAllOperators() {
-        return this.get('/operators');
     }
 
     async createOperator(operatorData) {

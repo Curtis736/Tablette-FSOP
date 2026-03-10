@@ -1,7 +1,7 @@
 // Routes pour la gestion des opérateurs
 const express = require('express');
 const router = express.Router();
-const { executeQuery, executeNonQuery, executeProcedure } = require('../config/database');
+const { executeQuery, executeNonQuery, executeProcedure, executeInTransaction } = require('../config/database');
 const TimeUtils = require('../utils/timeUtils');
 const { authenticateOperator } = require('../middleware/auth');
 const dataIsolation = require('../middleware/dataIsolation');
@@ -11,6 +11,7 @@ const dataValidation = require('../services/DataValidationService');
 const SessionService = require('../services/SessionService');
 const AuditService = require('../services/AuditService');
 const { generateRequestId } = require('../middleware/audit');
+const ConsolidationService = require('../services/ConsolidationService');
 
 // ⚡ OPTIMISATION : Cache pour les validations de lancement (évite les requêtes répétées)
 const lancementCache = new Map();
@@ -59,7 +60,7 @@ async function cleanupInconsistentData(operatorId) {
                     AND OperatorCode != @operatorId
                 `;
                 
-                await executeQuery(deleteQuery, { lancementCode, operatorId });
+                await executeNonQuery(deleteQuery, { lancementCode, operatorId });
                 console.log(`✅ ${inconsistentEvents.length} événements incohérents supprimés pour ${lancementCode}`);
             }
         }
@@ -558,8 +559,13 @@ router.get('/lancements/search', async (req, res) => {
         console.log(`🔍 Recherche de lancements avec le terme: ${term}`);
         
         const searchTerm = `%${term}%`;
+        const rawLimit = parseInt(limit, 10);
+        const limitNum = Number.isFinite(rawLimit)
+            ? Math.min(Math.max(rawLimit, 1), 100)
+            : 10;
+
         const query = `
-            SELECT TOP ${parseInt(limit)} 
+            SELECT TOP (@limitNum)
                 [CodeLancement],
                 [CodeArticle],
                 [DesignationLct1],
@@ -567,13 +573,13 @@ router.get('/lancements/search', async (req, res) => {
                 [DesignationArt1],
                 [DesignationArt2]
             FROM [SEDI_ERP].[dbo].[LCTE]
-            WHERE [CodeLancement] LIKE '${searchTerm}'
-               OR [DesignationLct1] LIKE '${searchTerm}'
-               OR [CodeArticle] LIKE '${searchTerm}'
+            WHERE [CodeLancement] LIKE @searchTerm
+               OR [DesignationLct1] LIKE @searchTerm
+               OR [CodeArticle] LIKE @searchTerm
             ORDER BY [CodeLancement]
         `;
         
-        const result = await executeQuery(query);
+        const result = await executeQuery(query, { searchTerm, limitNum });
         
         console.log(`✅ ${result.length} lancements trouvés`);
         
@@ -599,7 +605,7 @@ async function quickCleanup() {
             DELETE FROM [SEDI_APP_INDEPENDANTE].[dbo].[ABSESSIONS_OPERATEURS]
             WHERE DateCreation < DATEADD(hour, -24, GETDATE())
         `;
-        await executeQuery(cleanupQuery);
+        await executeNonQuery(cleanupQuery);
     } catch (error) {
         console.error('⚠️ Erreur lors du nettoyage rapide:', error);
     }
@@ -776,7 +782,7 @@ router.get('/steps/:lancementCode', async (req, res) => {
 });
 
 // POST /api/operators/start - Démarrer un lancement
-router.post('/start', async (req, res) => {
+router.post('/start', validateOperatorSession, logSecurityAction, async (req, res) => {
     try {
         // Nettoyage rapide avant l'opération
         await quickCleanup();
@@ -859,14 +865,6 @@ router.post('/start', async (req, res) => {
                 operationCount: uniqueOps.length
             });
         }
-        // Compat: si l'ancien client envoie encore CodeOperation "Séchage"
-        if (false && codeOperation && String(codeOperation).trim().toUpperCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '') === 'SECHAGE') {
-            return res.status(400).json({
-                success: false,
-                error: 'FORBIDDEN_CODE_OPERATION',
-                message: 'CodeOperation "Séchage" est interdit.'
-            });
-        }
         if (steps.length > 0 && !context) {
             return res.status(400).json({
                 success: false,
@@ -880,6 +878,53 @@ router.post('/start', async (req, res) => {
 
         const phase = context?.Phase || 'PRODUCTION';
         const codeRubrique = context?.CodeRubrique || operatorId;
+
+        // ✅ Cohérence: empêcher un opérateur d'avoir 2 lancements en cours (source majeure d'incohérences)
+        // (Si besoin métier de multi-lancements, rendre ceci configurable via env.)
+        const operatorLastEventQuery = `
+            SELECT TOP 1
+                CodeLanctImprod,
+                Ident,
+                Statut,
+                COALESCE(Phase, 'PRODUCTION') AS Phase,
+                CodeRubrique
+            FROM [SEDI_APP_INDEPENDANTE].[dbo].[ABHISTORIQUE_OPERATEURS]
+            WHERE OperatorCode = @operatorId
+              AND CAST(DateCreation AS DATE) = CAST(@currentDate AS DATE)
+            ORDER BY DateCreation DESC, NoEnreg DESC
+        `;
+        const opLastRows = await executeQuery(operatorLastEventQuery, { operatorId, currentDate });
+        const opLast = opLastRows && opLastRows[0] ? opLastRows[0] : null;
+        const opLastIdent = String(opLast?.Ident || '').toUpperCase();
+        const opLastStatut = String(opLast?.Statut || '').toUpperCase();
+        const opLastLc = String(opLast?.CodeLanctImprod || '').trim();
+        const opLastPhase = String(opLast?.Phase || '').trim();
+        const opLastRub = String(opLast?.CodeRubrique || '').trim();
+        const opHasActive =
+            !!opLastLc &&
+            opLastIdent &&
+            opLastIdent !== 'FIN' &&
+            (opLastStatut === 'EN_COURS' || opLastStatut === 'EN_PAUSE' || opLastIdent === 'DEBUT' || opLastIdent === 'PAUSE' || opLastIdent === 'REPRISE');
+        if (opHasActive) {
+            const sameContext =
+                opLastLc === String(lancementCode || '').trim() &&
+                opLastPhase === String(phase || '').trim() &&
+                opLastRub === String(codeRubrique || '').trim();
+            if (!sameContext) {
+                return res.status(409).json({
+                    success: false,
+                    error: 'OPERATOR_ALREADY_HAS_ACTIVE_OPERATION',
+                    message: `L'opérateur ${operatorId} a déjà un lancement actif (${opLastLc}). Terminez-le avant d'en démarrer un autre.`,
+                    active: {
+                        lancementCode: opLastLc,
+                        lastEvent: opLastIdent,
+                        status: opLastStatut,
+                        phase: opLastPhase,
+                        codeRubrique: opLastRub
+                    }
+                });
+            }
+        }
 
         // ✅ Autoriser plusieurs cycles DEBUT..FIN (plusieurs jours possibles),
         // mais empêcher de démarrer si la DERNIÈRE action pour cette étape est déjà active.
@@ -1043,7 +1088,7 @@ router.post('/start', async (req, res) => {
 });
 
 // POST /api/operators/pause - Mettre en pause un lancement
-router.post('/pause', async (req, res) => {
+router.post('/pause', validateOperatorSession, logSecurityAction, async (req, res) => {
     try {
         const { operatorId, lancementCode, codeOperation } = req.body;
 
@@ -1154,7 +1199,7 @@ router.post('/pause', async (req, res) => {
 });
 
 // POST /api/operators/resume - Reprendre un lancement
-router.post('/resume', async (req, res) => {
+router.post('/resume', validateOperatorSession, logSecurityAction, async (req, res) => {
     try {
         const { operatorId, lancementCode, codeOperation } = req.body;
 
@@ -1317,9 +1362,16 @@ router.post('/resume', async (req, res) => {
 });
 
 // POST /api/operators/stop - Terminer un lancement
-router.post('/stop', async (req, res) => {
+router.post('/stop', validateOperatorSession, logSecurityAction, async (req, res) => {
     try {
         const { operatorId, lancementCode, codeOperation } = req.body;
+
+        if (!operatorId || !lancementCode) {
+            return res.status(400).json({
+                success: false,
+                error: 'operatorId et lancementCode requis'
+            });
+        }
 
         // Résoudre l'étape (Phase/CodeRubrique) pour terminer la bonne étape
         let phase = 'PRODUCTION';
@@ -1355,14 +1407,7 @@ router.post('/stop', async (req, res) => {
                 security: 'DATA_OWNERSHIP_VIOLATION'
             });
         }
-        
-        if (!operatorId || !lancementCode) {
-            return res.status(400).json({
-                success: false,
-                error: 'operatorId et lancementCode requis'
-            });
-        }
-        
+
         // Obtenir l'heure française actuelle
         const { time: currentTime, date: currentDate } = TimeUtils.getCurrentDateTime();
         
@@ -1394,54 +1439,76 @@ router.post('/stop', async (req, res) => {
             });
         }
         
-        // Enregistrer l'événement FIN dans ABHISTORIQUE_OPERATEURS avec l'heure française
-        const insertQuery = `
-            INSERT INTO [SEDI_APP_INDEPENDANTE].[dbo].[ABHISTORIQUE_OPERATEURS]
-            (OperatorCode, CodeLanctImprod, CodeRubrique, Ident, Phase, Statut, HeureDebut, HeureFin, DateCreation)
-            VALUES (
-                '${operatorId}',
-                '${lancementCode}',
-                '${codeRubrique}',
-                'FIN',
-                '${phase}',
-                'TERMINE',
-                NULL,
-                CAST('${currentTime}' AS TIME),
-                CAST('${currentDate}' AS DATE)
-            )
-        `;
-        
-        await executeQuery(insertQuery);
-        
-        console.log(`✅ Lancement ${lancementCode} terminé par opérateur ${operatorId}`);
-        
-        // Consolidation obligatoire pour ne pas laisser de lancement non consolidé (retry si échec)
-        const ConsolidationService = require('../services/ConsolidationService');
+        // ✅ Stop robuste: INSERT FIN + consolidation dans une transaction.
+        // Objectif: ne jamais laisser un FIN "orphelin" sans consolidation (sauf cas explicitement "skipped").
         const maxAttempts = 3;
         const delayMs = 400;
-        let consolidated = false;
+        let lastConsolidation = null;
         for (let attempt = 1; attempt <= maxAttempts; attempt++) {
             try {
-                const consolidationResult = await ConsolidationService.consolidateOperation(operatorId, lancementCode, {
-                    autoFix: true,
-                    phase,
-                    codeRubrique,
-                    dateCreation: currentDate
+                lastConsolidation = await executeInTransaction(async (tx) => {
+                    // 1) Insert FIN
+                    const insertQuery = `
+                        INSERT INTO [SEDI_APP_INDEPENDANTE].[dbo].[ABHISTORIQUE_OPERATEURS]
+                        (OperatorCode, CodeLanctImprod, CodeRubrique, Ident, Phase, Statut, HeureDebut, HeureFin, DateCreation)
+                        VALUES (
+                            @operatorId,
+                            @lancementCode,
+                            @codeRubrique,
+                            'FIN',
+                            @phase,
+                            'TERMINE',
+                            NULL,
+                            CAST(@currentTime AS TIME),
+                            CAST(@currentDate AS DATE)
+                        )
+                    `;
+                    await tx.executeNonQuery(insertQuery, {
+                        operatorId,
+                        lancementCode,
+                        codeRubrique,
+                        phase,
+                        currentTime,
+                        currentDate
+                    });
+
+                    // 2) Consolidation dans la même transaction (lit les events incluant FIN)
+                    const consolidationResult = await ConsolidationService.consolidateOperation(operatorId, lancementCode, {
+                        autoFix: true,
+                        phase,
+                        codeRubrique,
+                        dateCreation: currentDate,
+                        db: tx
+                    });
+
+                    // Cas explicitement "skipped" (ex: VLCTC missing): on commite FIN sans ABTEMPS
+                    if (consolidationResult?.skipped) return consolidationResult;
+
+                    if (!consolidationResult?.success) {
+                        const msg = consolidationResult?.error || consolidationResult?.message || 'Consolidation échouée';
+                        throw new Error(msg);
+                    }
+
+                    return consolidationResult;
                 });
-                if (consolidationResult.success) {
-                    console.log(`✅ Consolidation réussie: TempsId=${consolidationResult.tempsId} (tentative ${attempt})`);
-                    consolidated = true;
-                    break;
-                }
-                if (attempt < maxAttempts) await new Promise(r => setTimeout(r, delayMs));
-                else console.error(`⚠️ Consolidation échouée après ${maxAttempts} tentatives: ${consolidationResult.error}`);
+
+                console.log(`✅ Lancement ${lancementCode} terminé + consolidé (tentative ${attempt})`);
+                break;
             } catch (err) {
-                if (attempt < maxAttempts) await new Promise(r => setTimeout(r, delayMs));
-                else console.error(`⚠️ Erreur consolidation après ${maxAttempts} tentatives:`, err?.message || err);
+                if (attempt < maxAttempts) {
+                    await new Promise(r => setTimeout(r, delayMs));
+                } else {
+                    console.error(`⚠️ Stop transactionnel échoué après ${maxAttempts} tentatives:`, err?.message || err);
+                }
             }
         }
-        if (!consolidated) {
-            console.warn(`⚠️ Lancement ${lancementCode} non consolidé après arrêt; sera consolidé au prochain chargement admin ou transfert.`);
+
+        if (!lastConsolidation) {
+            return res.status(500).json({
+                success: false,
+                error: 'STOP_CONSOLIDATION_FAILED',
+                message: 'Impossible de terminer le lancement (consolidation échouée). Réessayez.'
+            });
         }
         
         res.json({
@@ -1451,6 +1518,7 @@ router.post('/stop', async (req, res) => {
                 operatorId,
                 lancementCode,
                 action: 'FIN',
+                consolidation: lastConsolidation,
                 timestamp: new Date().toISOString()
             }
         });

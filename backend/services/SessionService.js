@@ -6,6 +6,11 @@
 const { executeQuery, executeNonQuery } = require('../config/database');
 
 class SessionService {
+    static _getTtlHours() {
+        const ttlRaw = parseInt(process.env.OPERATOR_SESSION_TTL_HOURS || '12', 10);
+        return Number.isFinite(ttlRaw) && ttlRaw > 0 ? Math.min(ttlRaw, 72) : 12;
+    }
+
     /**
      * Mettre à jour la dernière activité d'une session (sans écraser LoginTime)
      */
@@ -26,15 +31,16 @@ class SessionService {
                 params = { sessionId };
             } else {
                 // Mise à jour par OperatorCode (fallback)
+                const ttlHours = this._getTtlHours();
                 query = `
                     UPDATE [SEDI_APP_INDEPENDANTE].[dbo].[ABSESSIONS_OPERATEURS]
                     SET LastActivityTime = GETDATE(),
                         ActivityStatus = 'ACTIVE'
                     WHERE OperatorCode = @operatorCode
                       AND SessionStatus = 'ACTIVE'
-                      AND CAST(DateCreation AS DATE) = CAST(GETDATE() AS DATE)
+                      AND COALESCE(LastActivityTime, LoginTime, DateCreation) >= DATEADD(hour, -@ttlHours, GETDATE())
                 `;
-                params = { operatorCode };
+                params = { operatorCode, ttlHours };
             }
             
             await executeNonQuery(query, params);
@@ -49,6 +55,7 @@ class SessionService {
      */
     static async getActiveSession(operatorCode) {
         try {
+            const ttlHours = this._getTtlHours();
             const query = `
                 SELECT TOP 1 
                     SessionId,
@@ -64,11 +71,11 @@ class SessionService {
                 FROM [SEDI_APP_INDEPENDANTE].[dbo].[ABSESSIONS_OPERATEURS]
                 WHERE OperatorCode = @operatorCode
                   AND SessionStatus = 'ACTIVE'
-                  AND CAST(DateCreation AS DATE) = CAST(GETDATE() AS DATE)
+                  AND COALESCE(LastActivityTime, LoginTime, DateCreation) >= DATEADD(hour, -@ttlHours, GETDATE())
                 ORDER BY DateCreation DESC
             `;
             
-            const result = await executeQuery(query, { operatorCode });
+            const result = await executeQuery(query, { operatorCode, ttlHours });
             return result.length > 0 ? result[0] : null;
         } catch (error) {
             console.error('❌ Erreur récupération session active:', error);
@@ -131,6 +138,7 @@ class SessionService {
                 `;
                 params = { sessionId };
             } else {
+                const ttlHours = this._getTtlHours();
                 query = `
                     UPDATE [SEDI_APP_INDEPENDANTE].[dbo].[ABSESSIONS_OPERATEURS]
                     SET LogoutTime = GETDATE(),
@@ -138,9 +146,9 @@ class SessionService {
                         ActivityStatus = 'INACTIVE'
                     WHERE OperatorCode = @operatorCode
                       AND SessionStatus = 'ACTIVE'
-                      AND CAST(DateCreation AS DATE) = CAST(GETDATE() AS DATE)
+                      AND COALESCE(LastActivityTime, LoginTime, DateCreation) >= DATEADD(hour, -@ttlHours, GETDATE())
                 `;
-                params = { operatorCode };
+                params = { operatorCode, ttlHours };
             }
             
             await executeNonQuery(query, params);

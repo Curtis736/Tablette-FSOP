@@ -3,7 +3,7 @@
 import OperateurInterface from './OperateurInterface.js?v=20260302-no-wake-popup';
 // Bump to bust cache when AdminPage logic changes (auto consolidation, etc.)
 import AdminPage from './AdminPage.js?v=20260302-auto-consolidate';
-import ApiService from '../services/ApiService.js?v=20260128-admin-editlt2';
+import ApiService from '../services/ApiService.js?v=20260309-operator-session-cache-v2';
 import StorageService from '../services/StorageService.js?v=20251007-final';
 import notificationManager from '../utils/NotificationManager.js';
 
@@ -26,27 +26,27 @@ class App {
     }
 
     async initializeApp() {
-        // Vérifier si un opérateur est déjà connecté
+        // Sur un reload de page (même tablette), on restaure l'opérateur sans recréer de session.
+        // La session reste valide côté serveur. Si elle a expiré, checkCurrentOperation() gérera
+        // le cas et l'opérateur devra se reconnecter explicitement.
         const savedOperator = this.storageService.getCurrentOperator();
         if (savedOperator) {
             try {
-                // Vérifier que l'opérateur est encore valide
-                console.log('🔍 Vérification de l\'opérateur sauvegardé:', savedOperator);
-                const validOperator = await this.apiService.getOperator(savedOperator.code || savedOperator.id);
-                
+                const code = savedOperator.code || savedOperator.id;
+                console.log('🔍 Restauration opérateur (reload page):', code);
+                // Simple vérification d'existence, sans créer de nouvelle session
+                const validOperator = await this.apiService.getOperator(code);
                 if (validOperator) {
-                    this.currentOperator = validOperator;
+                    this.currentOperator = { ...savedOperator, ...validOperator };
+                    this.storageService.setCurrentOperator(this.currentOperator);
                     this.showOperatorScreen();
                     console.log('✅ Opérateur restauré:', validOperator.nom);
                 } else {
-                    // Opérateur invalide, nettoyer le cache
                     this.storageService.clearCurrentOperator();
                     this.showLoginScreen();
-                    console.log('❌ Opérateur invalide, retour à la connexion');
                 }
             } catch (error) {
-                // Erreur de validation, nettoyer le cache
-                console.error('❌ Erreur lors de la validation de l\'opérateur:', error);
+                console.error('❌ Erreur restauration opérateur:', error);
                 this.storageService.clearCurrentOperator();
                 this.showLoginScreen();
             }
@@ -123,8 +123,12 @@ class App {
         
         try {
             this.showLoading(true);
-            const operator = await this.apiService.getOperator(operatorCode);
-            
+            const loginResp = await this.apiService.operatorLogin(operatorCode);
+            const operator = loginResp?.operator || loginResp?.data?.operator || null;
+            if (!operator) {
+                throw new Error('Connexion opérateur impossible');
+            }
+
             this.currentOperator = operator;
             this.storageService.setCurrentOperator(operator);
             this.showOperatorScreen();
@@ -157,7 +161,7 @@ class App {
             if (response.success) {
                 console.log('✅ Connexion admin réussie');
                 if (response.token) {
-                    window.localStorage?.setItem('sedi_admin_token', response.token);
+                    window.sessionStorage?.setItem('sedi_admin_token', response.token);
                 }
                 this.isAdmin = true;
                 this.showAdminScreen();
@@ -174,42 +178,57 @@ class App {
         }
     }
 
-    handleLogout() {
+    async handleLogout() {
+        // Fermer la session opérateur côté serveur (ne pas bloquer l'UI si erreur réseau)
+        try {
+            const code = this.currentOperator?.code || this.currentOperator?.id || null;
+            if (code) await this.apiService.operatorLogout(code);
+        } catch (e) {
+            // Non bloquant
+        }
         this.currentOperator = null;
         this.isAdmin = false;
-        window.localStorage?.removeItem('sedi_admin_token');
+        window.sessionStorage?.removeItem('sedi_admin_token');
         this.storageService.clearCurrentOperator();
         this.showLoginScreen();
         notificationManager.info('Déconnexion réussie');
     }
 
     showLoginScreen() {
+        // Détruire proprement l'interface opérateur courante (arrête timers, intervals, etc.)
+        if (this.operateurInterface) {
+            try { this.operateurInterface.destroy(); } catch (e) { /* non bloquant */ }
+            this.operateurInterface = null;
+        }
+
         this.hideAllScreens();
         document.getElementById('loginScreen').classList.add('active');
         document.getElementById('operatorCode').value = '';
         this.currentScreen = 'login';
-        
-        // Nettoyer les données de l'opérateur précédent
+
         this.currentOperator = null;
-        this.operateurInterface = null;
-        
+
         // Vider le cache local pour éviter les données persistantes
         this.storageService.clearCurrentOperator();
         this.storageService.clearAllCache();
-        console.log('🧹 Cache local vidé');
+        this.apiService.cache.clear();
+        console.log('🧹 Cache local + mémoire API vidés');
     }
 
     showOperatorScreen() {
         this.hideAllScreens();
         document.getElementById('operatorScreen').classList.add('active');
         this.currentScreen = 'operator';
-        
+
         if (this.currentOperator) {
             document.getElementById('currentOperator').textContent = this.currentOperator.nom;
-            
-            if (!this.operateurInterface) {
-                this.operateurInterface = new OperateurInterface(this.currentOperator, this);
+
+            // Toujours recréer une interface fraîche pour éviter les fuites de timers/état
+            if (this.operateurInterface) {
+                try { this.operateurInterface.destroy(); } catch (e) { /* non bloquant */ }
+                this.operateurInterface = null;
             }
+            this.operateurInterface = new OperateurInterface(this.currentOperator, this);
             this.operateurInterface.loadLancements();
         }
     }
@@ -265,16 +284,18 @@ class App {
         return this.storageService;
     }
 
-    getNotificationManager() {
-        return notificationManager;
-    }
-
     showNotification(message, type = 'info') {
         notificationManager.show(message, type);
     }
 
     showLoading(show) {
-        const buttons = document.querySelectorAll('button');
+        // Limiter le chargement aux boutons des formulaires de connexion
+        const selectors = ['#loginForm button', '#adminLoginForm button'];
+        let buttons = document.querySelectorAll(selectors.join(','));
+        if (!buttons || buttons.length === 0) {
+            // Fallback pour compatibilité si les sélecteurs ne trouvent rien
+            buttons = document.querySelectorAll('button');
+        }
         buttons.forEach(btn => {
             if (show) {
                 btn.disabled = true;

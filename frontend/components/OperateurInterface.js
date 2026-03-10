@@ -1,4 +1,4 @@
-// Interface simplifiée pour les opérateurs
+// Interface simplifiée pour les opérateurs - v20260309-no-cache-issues
 import TimeUtils from '../utils/TimeUtils.js';
 import ScannerManager from '../utils/ScannerManager.js?v=20251021-scanner-fix';
 import FsopForm from './FsopForm.js?v=20260203-ind-operator-fix';
@@ -22,16 +22,108 @@ class OperateurInterface {
         // Debouncing pour éviter les clics répétés
         this.lastActionTime = 0;
         this.actionCooldown = 1000; // 1 seconde entre les actions
-        
+
+        // Intervalles internes (nettoyés par destroy())
+        this._syncInterval = null;
+
         this.LANCEMENT_PREFIX = 'LT';
         this.MAX_LANCEMENT_DIGITS = 8;
-        
+
         this.initializeElements();
         this.setupEventListeners();
         this.initializeLancementInput();
         this.checkCurrentOperation({ promptIfRunning: false });
         this.loadOperatorHistory();
+
+        // Synchronisation périodique UI ↔ DB (toutes les 30s)
+        // Détecte les désynchronisations (coupure réseau, refresh partiel, etc.)
+        this._syncInterval = setInterval(() => this._syncStateFromDB(), 30000);
     }
+
+    // ─── Nettoyage / destruction propre ───────────────────────────────────────
+
+    /**
+     * Détruit proprement l'interface : arrête tous les timers et intervals.
+     * Doit être appelé par App avant de supprimer la référence.
+     */
+    destroy() {
+        if (this.timerInterval) {
+            clearInterval(this.timerInterval);
+            this.timerInterval = null;
+        }
+        if (this._syncInterval) {
+            clearInterval(this._syncInterval);
+            this._syncInterval = null;
+        }
+        // Réinitialiser tout l'état interne pour éviter les fuites
+        this._resetFullState();
+        console.log('🗑️ OperateurInterface détruite proprement');
+    }
+
+    /**
+     * Réinitialise TOUT l'état interne en un seul endroit.
+     * Appelé par destroy(), resetControls() et handleStop().
+     */
+    _resetFullState() {
+        this.isRunning = false;
+        this.isPaused = false;
+        this.currentLancement = null;
+        this.startTime = null;
+        this.totalPausedTime = 0;
+        this.pauseStartTime = null;
+        this.lastActionTime = 0;
+    }
+
+    /**
+     * Synchronise l'état UI avec la DB toutes les 30s.
+     * Corrige silencieusement les désynchronisations sans déranger l'opérateur.
+     */
+    async _syncStateFromDB() {
+        try {
+            const operatorCode = this.operator?.code || this.operator?.id;
+            if (!operatorCode) return;
+
+            const resp = await this.apiService.getCurrentOperation(operatorCode);
+            const current = resp?.data ?? resp;
+            const dbLancementCode = current?.data?.lancementCode || current?.lancementCode || null;
+            const dbLastEvent = String(current?.data?.lastEvent || current?.lastEvent || '').toUpperCase();
+            const dbStatus = String(current?.data?.status || current?.status || '').toUpperCase();
+
+            const dbActive = !!dbLancementCode && dbLastEvent !== 'FIN' &&
+                (dbStatus === 'EN_COURS' || dbStatus === 'EN_PAUSE' ||
+                 dbLastEvent === 'DEBUT' || dbLastEvent === 'PAUSE' || dbLastEvent === 'REPRISE');
+
+            // Cas 1: UI pense être en cours mais DB dit fini → reset UI
+            if ((this.isRunning || this.isPaused) && !dbActive) {
+                console.warn('⚠️ [SYNC] UI active mais DB inactive → reset UI propre');
+                this._resetFullState();
+                if (this.timerInterval) { clearInterval(this.timerInterval); this.timerInterval = null; }
+                if (this.startBtn) {
+                    this.startBtn.disabled = false;
+                    this.startBtn.innerHTML = '<i class="fas fa-play"></i> Démarrer';
+                }
+                if (this.pauseBtn) this.pauseBtn.disabled = true;
+                if (this.stopBtn) this.stopBtn.disabled = true;
+                if (this.statusDisplay) this.statusDisplay.textContent = 'En attente';
+                if (this.timerDisplay) this.timerDisplay.textContent = '00:00:00';
+                if (this.lancementInput) { this.lancementInput.disabled = false; this.lancementInput.value = ''; }
+                if (this.controlsSection) this.controlsSection.style.display = 'none';
+                this.notificationManager.warning('Synchronisation: opération terminée côté serveur');
+                return;
+            }
+
+            // Cas 2: UI idle mais DB dit actif → restaurer (désync après coupure réseau)
+            if (!this.isRunning && !this.isPaused && dbActive) {
+                console.warn('⚠️ [SYNC] DB active mais UI idle → restauration état');
+                await this.checkCurrentOperation({ promptIfRunning: false });
+            }
+
+        } catch (e) {
+            // Non bloquant, erreur silencieuse
+        }
+    }
+
+    // ─── Debouncing ──────────────────────────────────────────────────────────
 
     // Vérifier si une action peut être exécutée (debouncing)
     canPerformAction() {
@@ -1149,11 +1241,7 @@ class OperateurInterface {
     /**
      * Échapper le HTML pour éviter les injections
      */
-    escapeHtml(text) {
-        const div = document.createElement('div');
-        div.textContent = text;
-        return div.innerHTML;
-    }
+    // escapeHtml(text) est déjà définie plus haut dans la classe
 
     closeFsopFormModal() {
         if (!this.fsopFormModal) return;
@@ -1650,6 +1738,8 @@ class OperateurInterface {
             return;
         }
 
+        if (!this.canPerformAction()) return;
+
         try {
             const operatorCode = this.operator.code || this.operator.id;
             const stepGroupVisible = this.operationStepGroup && this.operationStepGroup.style.display !== 'none';
@@ -1742,13 +1832,12 @@ class OperateurInterface {
 
     async handleStop() {
         if (!this.currentLancement) return;
-        
+
         if (!this.canPerformAction()) return;
-        
+
         try {
-            // Définir l'heure de fin avant d'arrêter
             this.setFinalEndTime();
-            
+
             const operatorCode = this.operator.code || this.operator.id;
             const selectedStep = this.operationStepSelect ? String(this.operationStepSelect.value || '').trim() : '';
             const result = await this.apiService.stopOperation(
@@ -1756,40 +1845,40 @@ class OperateurInterface {
                 this.currentLancement.CodeLancement,
                 selectedStep ? { codeOperation: selectedStep } : {}
             );
-            
-            this.stopTimer();
-            this.resetControls();
-            this.statusDisplay.textContent = 'Terminé';
-            this.notificationManager.success(`Opération terminée - Durée: ${result.duration || 'N/A'}`);
-            
-            // Réinitialiser pour permettre un nouveau lancement
-            this.lancementInput.value = '';
-            this.lancementInput.disabled = false;
-            this.lancementInput.placeholder = "Saisir un nouveau code de lancement...";
-            this.controlsSection.style.display = 'none';
-            
-            // Actualiser l'historique après arrêt
+
+            // Réinitialisation complète UI + état interne
+            this._afterStopCleanup('Terminé');
+            this.notificationManager.success(`Opération terminée - Durée: ${result?.data?.duration || result?.duration || 'N/A'}`);
             this.loadOperatorHistory();
-            
+
         } catch (error) {
-            console.error('Erreur:', error);
-            
-            // Si le lancement est déjà terminé, c'est normal - on affiche juste un message informatif
-            if (error.message && error.message.includes('déjà terminé')) {
-                this.notificationManager.warning('Ce lancement est déjà terminé.');
-                // Réinitialiser quand même l'interface
-                this.stopTimer();
-                this.resetControls();
-                this.statusDisplay.textContent = 'Terminé';
-                this.lancementInput.value = '';
-                this.lancementInput.disabled = false;
-                this.lancementInput.placeholder = "Saisir un nouveau code de lancement...";
-                this.controlsSection.style.display = 'none';
+            console.error('Erreur stop:', error);
+
+            if (error.message && (error.message.includes('déjà terminé') || error.message.includes('ALREADY_FINISHED'))) {
+                this.notificationManager.warning('Ce lancement est déjà terminé côté serveur.');
+                this._afterStopCleanup('Terminé');
                 this.loadOperatorHistory();
             } else {
-            this.notificationManager.error(error.message || 'Erreur de connexion');
+                this.notificationManager.error(error.message || 'Erreur de connexion');
             }
         }
+    }
+
+    /**
+     * Réinitialise l'interface après un stop réussi (ou forcé).
+     * Centralise la logique pour éviter les doublons dans les blocs try/catch.
+     */
+    _afterStopCleanup(statusLabel = 'Terminé') {
+        this.resetControls(); // _resetFullState() + timers + boutons
+        if (this.statusDisplay) this.statusDisplay.textContent = statusLabel;
+        if (this.lancementInput) {
+            this.lancementInput.value = '';
+            this.lancementInput.disabled = false;
+            this.lancementInput.placeholder = 'Saisir un nouveau code de lancement...';
+        }
+        if (this.controlsSection) this.controlsSection.style.display = 'none';
+        this.hideOperationSteps();
+        this.enforceNumericLancementInput(false);
     }
 
     startTimer() {
@@ -1798,13 +1887,12 @@ class OperateurInterface {
             this.startTime = new Date();
         }
         this.isRunning = true;
-        
+
         if (this.pauseStartTime) {
-            // Ajouter le temps de pause au total
             this.totalPausedTime += (new Date() - this.pauseStartTime);
             this.pauseStartTime = null;
         }
-        
+
         // Éviter plusieurs intervals en parallèle
         if (this.timerInterval) {
             clearInterval(this.timerInterval);
@@ -1816,30 +1904,35 @@ class OperateurInterface {
     pauseTimer() {
         this.pauseStartTime = new Date();
         clearInterval(this.timerInterval);
+        this.timerInterval = null;
     }
 
     stopTimer() {
+        if (this.timerInterval) {
+            clearInterval(this.timerInterval);
+            this.timerInterval = null;
+        }
         this.isRunning = false;
-        clearInterval(this.timerInterval);
-        this.timerDisplay.textContent = '00:00:00';
-        // IMPORTANT: reset startTime, sinon un nouveau lancement peut réutiliser l'ancien temps
-        // (startTimer() n'écrase startTime que s'il est null/undefined).
         this.startTime = null;
         this.totalPausedTime = 0;
         this.pauseStartTime = null;
+        if (this.timerDisplay) this.timerDisplay.textContent = '00:00:00';
     }
 
     resetControls() {
-        this.startBtn.disabled = false;
-        this.startBtn.innerHTML = '<i class="fas fa-play"></i> Démarrer';
-        this.pauseBtn.disabled = true;
-        this.stopBtn.disabled = true;
+        // Réinitialiser TOUT l'état interne via _resetFullState
+        // (inclut currentLancement, isRunning, isPaused, timers de pause, etc.)
         this.stopTimer();
-        this.statusDisplay.textContent = 'En attente';
-        this.isPaused = false;
-        if (this.endTimeDisplay) {
-            this.endTimeDisplay.textContent = '--:--';
+        this._resetFullState();
+
+        if (this.startBtn) {
+            this.startBtn.disabled = false;
+            this.startBtn.innerHTML = '<i class="fas fa-play"></i> Démarrer';
         }
+        if (this.pauseBtn) this.pauseBtn.disabled = true;
+        if (this.stopBtn) this.stopBtn.disabled = true;
+        if (this.statusDisplay) this.statusDisplay.textContent = 'En attente';
+        if (this.endTimeDisplay) this.endTimeDisplay.textContent = '--:--';
     }
 
     updateTimer() {
@@ -2250,11 +2343,7 @@ class OperateurInterface {
         }
     }
 
-    escapeHtml(text) {
-        const div = document.createElement('div');
-        div.textContent = text;
-        return div.innerHTML;
-    }
+    // escapeHtml(text) est déjà définie plus haut dans la classe
 
     canDeleteComment(comment) {
         // L'opérateur peut supprimer ses propres commentaires

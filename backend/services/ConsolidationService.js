@@ -116,6 +116,13 @@ class ConsolidationService {
      */
     static async consolidateOperation(operatorCode, lancementCode, options = {}) {
         const { force = false, autoFix = true } = options;
+        const db = options.db || { executeQuery, executeNonQuery };
+
+        // Variables utiles au traitement d'erreurs (ex: contrainte UNIQUE)
+        let startTime = null;
+        let phase = null;
+        let codeRubrique = null;
+        let opDate = null;
         
         try {
             console.log(`🔄 Consolidation de ${operatorCode}/${lancementCode}...`);
@@ -129,7 +136,7 @@ class ConsolidationService {
                 ORDER BY DateCreation ASC, NoEnreg ASC
             `;
             
-            const allEvents = await executeQuery(eventsQuery, { operatorCode, lancementCode });
+            const allEvents = await db.executeQuery(eventsQuery, { operatorCode, lancementCode });
 
             if (!allEvents || allEvents.length === 0) {
                 return {
@@ -196,7 +203,7 @@ class ConsolidationService {
             const rawDateCreation = debutEvent?.DateCreation || finEvent?.DateCreation || new Date();
             // ⚠️ IMPORTANT: éviter de passer un objet Date JS (risque de décalage UTC sur un champ SQL DATE).
             // On passe une string YYYY-MM-DD stable, castée en DATE côté SQL.
-            const opDate = (() => {
+            opDate = (() => {
                 const k = this._localDateKey(rawDateCreation);
                 if (k) return k; // 'YYYY-MM-DD'
                 // fallback: aujourd'hui (local)
@@ -206,8 +213,8 @@ class ConsolidationService {
             // 6. Déterminer Phase et CodeRubrique (clés ERP)
             // - Si les événements contiennent déjà Phase/CodeRubrique (issus de l'ERP), on les utilise.
             // - Sinon, fallback historique : récupérer depuis V_LCTC.
-            let phase = debutEvent?.Phase || null;
-            let codeRubrique = debutEvent?.CodeRubrique || null;
+            phase = debutEvent?.Phase || null;
+            codeRubrique = debutEvent?.CodeRubrique || null;
 
             const hasErpKeysFromEvents = Boolean(
                 phase &&
@@ -226,7 +233,7 @@ class ConsolidationService {
                     WHERE CodeLancement = @lancementCode
                 `;
                 
-                const vlctcResult = await executeQuery(vlctcQuery, { lancementCode });
+                const vlctcResult = await db.executeQuery(vlctcQuery, { lancementCode });
                 
                 if (vlctcResult && vlctcResult.length > 0) {
                     // Prendre les valeurs EXACTEMENT telles quelles depuis V_LCTC (sans transformation)
@@ -307,7 +314,7 @@ class ConsolidationService {
                 return new Date();
             };
 
-            const startTime = buildDateTime(debutEvent, 'start');
+            startTime = buildDateTime(debutEvent, 'start');
             const endTime = buildDateTime(finEvent, 'end');
 
             // 8bis. Vérifier si déjà consolidé selon la contrainte UNIQUE réelle (souvent basée sur StartTime)
@@ -323,7 +330,7 @@ class ConsolidationService {
                           AND StartTime = @startTime
                         ORDER BY TempsId DESC
                     `;
-                    const rows = await executeQuery(byStartQuery, { operatorCode, lancementCode, startTime });
+                    const rows = await db.executeQuery(byStartQuery, { operatorCode, lancementCode, startTime });
                     if (rows && rows.length > 0) {
                         console.log(`ℹ️ Opération déjà consolidée (StartTime match): TempsId=${rows[0].TempsId}`);
                         return {
@@ -350,7 +357,7 @@ class ConsolidationService {
                       AND ISNULL(LTRIM(RTRIM(CodeRubrique)), '') = ISNULL(LTRIM(RTRIM(@codeRubrique)), '')
                       AND DateCreation = @dateCreation
                 `;
-                const existing = await executeQuery(existingQuery, {
+                const existing = await db.executeQuery(existingQuery, {
                     operatorCode,
                     lancementCode,
                     phase,
@@ -381,7 +388,7 @@ class ConsolidationService {
                       AND DateCreation = @dateCreation
                 `;
                 
-                const doubleCheck = await executeQuery(doubleCheckQuery, {
+                const doubleCheck = await db.executeQuery(doubleCheckQuery, {
                     operatorCode,
                     lancementCode,
                     phase,
@@ -418,7 +425,7 @@ class ConsolidationService {
                 VALUES (@operatorCode, @lancementCode, @startTime, @endTime, @totalDuration, @pauseDuration, @productiveDuration, @eventsCount, @phase, @codeRubrique, CAST(@dateCreation AS DATE), NULL)
             `;
             
-            const insertResult = await executeQuery(insertQuery, {
+            const insertResult = await db.executeQuery(insertQuery, {
                 operatorCode,
                 lancementCode,
                 startTime,
@@ -469,7 +476,7 @@ class ConsolidationService {
                               AND StartTime = @startTime
                             ORDER BY TempsId DESC
                         `;
-                        const byStart = await executeQuery(byStartQuery, { operatorCode, lancementCode, startTime });
+                        const byStart = await db.executeQuery(byStartQuery, { operatorCode, lancementCode, startTime });
                         if (byStart && byStart.length > 0) {
                             return {
                                 success: true,
@@ -496,7 +503,7 @@ class ConsolidationService {
                 `;
                 
                 try {
-                    const existing = await executeQuery(existingQuery, {
+                    const existing = await db.executeQuery(existingQuery, {
                         operatorCode,
                         lancementCode,
                         phase,

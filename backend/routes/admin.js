@@ -2665,12 +2665,22 @@ router.post('/maintenance/reset-history', async (req, res) => {
             sessionsC = countSess?.[0]?.c ?? 0;
         }
 
-        // Delete (no DROP)
-        await executeQuery(`DELETE FROM [SEDI_APP_INDEPENDANTE].[dbo].[ABHISTORIQUE_OPERATEURS]`);
-        await executeQuery(`DELETE FROM [SEDI_APP_INDEPENDANTE].[dbo].[ABTEMPS_OPERATEURS]`);
-        if (includeSessions) {
-            await executeQuery(`DELETE FROM [SEDI_APP_INDEPENDANTE].[dbo].[ABSESSIONS_OPERATEURS]`);
-        }
+        // Delete (no DROP) dans une transaction atomique
+        const resetQuery = `
+            BEGIN TRAN;
+            BEGIN TRY
+                DELETE FROM [SEDI_APP_INDEPENDANTE].[dbo].[ABHISTORIQUE_OPERATEURS];
+                DELETE FROM [SEDI_APP_INDEPENDANTE].[dbo].[ABTEMPS_OPERATEURS];
+                ${includeSessions ? 'DELETE FROM [SEDI_APP_INDEPENDANTE].[dbo].[ABSESSIONS_OPERATEURS];' : ''}
+                COMMIT TRAN;
+            END TRY
+            BEGIN CATCH
+                IF @@TRANCOUNT > 0 ROLLBACK TRAN;
+                THROW;
+            END CATCH
+        `;
+
+        await executeNonQuery(resetQuery);
 
         return res.json({
             success: true,
@@ -3050,10 +3060,27 @@ router.get('/validate-lancement/:code', async (req, res) => {
     }
 });
 
-// Route pour recréer les tables SEDI_APP_INDEPENDANTE avec la bonne structure
 // Route pour supprimer toutes les tables SEDI_APP_INDEPENDANTE
+// ⚠️ Extrêmement dangereux : nécessite une confirmation explicite ET un flag d'environnement.
 router.post('/delete-all-sedi-tables', async (req, res) => {
     try {
+        const { confirm } = req.body || {};
+        if (confirm !== 'DELETE_ALL_TABLES') {
+            return res.status(400).json({
+                success: false,
+                error: 'CONFIRM_REQUIRED',
+                message: 'Pour supprimer toutes les tables, envoyez { confirm: "DELETE_ALL_TABLES" }.'
+            });
+        }
+
+        if (String(process.env.ALLOW_DELETE_ALL_SEDI_TABLES || '').toLowerCase() !== 'true') {
+            return res.status(403).json({
+                success: false,
+                error: 'DELETE_ALL_SEDI_TABLES_DISABLED',
+                message: 'Suppression de toutes les tables désactivée. Définissez ALLOW_DELETE_ALL_SEDI_TABLES=true côté backend pour l\'autoriser explicitement.'
+            });
+        }
+
         console.log('🗑️ Suppression de toutes les tables SEDI_APP_INDEPENDANTE...');
         
         // Supprimer toutes les données des tables
@@ -3065,7 +3092,7 @@ router.post('/delete-all-sedi-tables', async (req, res) => {
         
         for (const query of deleteQueries) {
             try {
-                await executeQuery(query);
+                await executeNonQuery(query);
                 console.log(`✅ Données supprimées: ${query.split('.')[3]}`);
             } catch (error) {
                 console.log(`⚠️ Table peut-être inexistante: ${query.split('.')[3]}`);
@@ -3081,7 +3108,7 @@ router.post('/delete-all-sedi-tables', async (req, res) => {
         
         for (const query of dropQueries) {
             try {
-                await executeQuery(query);
+                await executeNonQuery(query);
                 console.log(`✅ Table supprimée: ${query.split('.')[3]}`);
             } catch (error) {
                 console.log(`⚠️ Erreur suppression table: ${error.message}`);

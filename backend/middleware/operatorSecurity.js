@@ -33,17 +33,19 @@ async function validateOperatorSession(req, res, next) {
             });
         }
 
-        // Vérifier que l'opérateur a une session active
+        // Vérifier que l'opérateur a une session active (TTL glissant, évite le problème à minuit)
+        const ttlHoursRaw = parseInt(process.env.OPERATOR_SESSION_TTL_HOURS || '12', 10);
+        const ttlHours = Number.isFinite(ttlHoursRaw) && ttlHoursRaw > 0 ? Math.min(ttlHoursRaw, 72) : 12;
         const sessionQuery = `
             SELECT TOP 1 SessionId, LoginTime, SessionStatus, DeviceInfo
             FROM [SEDI_APP_INDEPENDANTE].[dbo].[ABSESSIONS_OPERATEURS]
             WHERE OperatorCode = @operatorId 
             AND SessionStatus = 'ACTIVE'
-            AND CAST(DateCreation AS DATE) = CAST(GETDATE() AS DATE)
+            AND COALESCE(LastActivityTime, LoginTime, DateCreation) >= DATEADD(hour, -@ttlHours, GETDATE())
             ORDER BY DateCreation DESC
         `;
         
-        const activeSessions = await executeQuery(sessionQuery, { operatorId });
+        const activeSessions = await executeQuery(sessionQuery, { operatorId, ttlHours });
         
         if (activeSessions.length === 0) {
             return res.status(401).json({
