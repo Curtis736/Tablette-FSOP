@@ -65,6 +65,13 @@ class AdminPage {
     initializeElements() {
         // Initialiser le cache DOM
         this.domCache.initialize();
+
+        // Réinitialiser le bouton Transfert au cas où la page aurait été rechargée pendant un transfert
+        const transferBtnInit = document.getElementById('transferBtn');
+        if (transferBtnInit) {
+            transferBtnInit.disabled = false;
+            transferBtnInit.innerHTML = '<i class="fas fa-exchange-alt"></i> Transfert';
+        }
         
         // Mapper les éléments du cache vers les propriétés de la classe
         const elementMap = {
@@ -1707,9 +1714,12 @@ class AdminPage {
         try {
             this._isTransferring = true;
             
-            // Afficher un indicateur de chargement
+            // Désactiver le bouton et changer son texte (sans injecter le loader dedans)
             const transferBtn = this.domCache.get('transferBtn');
-            this.loadingIndicator.show('transfer', transferBtn, 'Transfert en cours...');
+            if (transferBtn) {
+                transferBtn.disabled = true;
+                transferBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Transfert en cours...';
+            }
             const allRecordsData = this.operations || [];
             this.logger.log(`📊 Total opérations dans le tableau: ${allRecordsData.length}`);
 
@@ -1726,7 +1736,7 @@ class AdminPage {
                 this.notificationManager.warning(
                     `Aucune opération TERMINÉE à transférer (${terminated} terminées, ${alreadyTransferred} déjà transférées)`
                 );
-                return;
+                return; // le finally s'exécutera et retirera le loader
             }
 
             // 2) Un seul batch de consolidation pour celles sans TempsId
@@ -1911,6 +1921,12 @@ class AdminPage {
             this.errorHandler.handle(error, 'handleTransfer', 'Erreur de connexion lors du transfert');
         } finally {
             this._isTransferring = false;
+            // Remettre le bouton dans son état normal
+            const transferBtnFinal = this.domCache.get('transferBtn');
+            if (transferBtnFinal) {
+                transferBtnFinal.disabled = false;
+                transferBtnFinal.innerHTML = '<i class="fas fa-exchange-alt"></i> Transfert';
+            }
             this.loadingIndicator.hide('transfer');
         }
     }
