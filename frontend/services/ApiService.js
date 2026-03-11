@@ -385,8 +385,11 @@ class ApiService {
     }
 
     // Admin
-    async getAdminData(date) {
-        return this.get('/admin', { date });
+    async getAdminData(date, dateStart = null, dateEnd = null) {
+        const params = { date };
+        if (dateStart) params.dateStart = dateStart;
+        if (dateEnd) params.dateEnd = dateEnd;
+        return this.get('/admin', params);
     }
 
     async getAdminStats(date) {

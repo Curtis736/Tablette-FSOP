@@ -381,8 +381,12 @@ class AdminPage {
             const timeoutPromiseHandled = timeoutPromise.catch((e) => { throw e; });
             
             // Charger le minimum en parallèle (⚡ éviter de bloquer loadData sur /operators/all qui peut être lent)
+            // Pour les périodes multi-jours (semaine, mois), passer la plage dateStart/dateEnd au backend
+            const adminDateStart = periodRange.dateStart || null;
+            const adminDateEnd = periodRange.dateEnd || null;
+            const adminDate = periodRange.date || today;
             const dataPromises = Promise.all([
-                this.apiService.getAdminData(today),
+                this.apiService.getAdminData(adminDate, adminDateStart, adminDateEnd),
                 this.apiService.getConnectedOperators()
             ]);
             

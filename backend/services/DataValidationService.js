@@ -149,11 +149,27 @@ class DataValidationService {
     /**
      * Récupérer les données admin avec validation stricte
      */
-    async getAdminDataSecurely(date = null) {
+    async getAdminDataSecurely(date = null, dateStart = null, dateEnd = null) {
         try {
-            // ⚡ Perf: si une date est fournie, filtrer en SQL (sinon, on scanne tout l'historique et on risque un 504).
-            // Le frontend admin travaille quasi exclusivement "par jour" (param ?date=YYYY-MM-DD).
+            // ⚡ Perf: filtrer en SQL pour éviter de scanner tout l'historique (risque 504).
+            // Supporte : une date précise (date), ou une plage (dateStart/dateEnd).
             const targetDate = date ? String(date).trim() : null;
+            const dStart = dateStart ? String(dateStart).trim() : null;
+            const dEnd = dateEnd ? String(dateEnd).trim() : null;
+
+            let dateFilter = '';
+            const params = {};
+            if (dStart && dEnd) {
+                dateFilter = 'AND h.DateCreation >= @dateStart AND h.DateCreation < DATEADD(day, 1, @dateEnd)';
+                params.dateStart = dStart;
+                params.dateEnd = dEnd;
+            } else if (dStart) {
+                dateFilter = 'AND h.DateCreation >= @dateStart';
+                params.dateStart = dStart;
+            } else if (targetDate) {
+                dateFilter = 'AND h.DateCreation >= @date AND h.DateCreation < DATEADD(day, 1, @date)';
+                params.date = targetDate;
+            }
 
             // Récupérer TOUS les événements avec validation stricte
             // IMPORTANT: Convertir HeureDebut et HeureFin en VARCHAR(5) (HH:mm) directement dans SQL
@@ -188,15 +204,11 @@ class DataValidationService {
                 WHERE h.OperatorCode IS NOT NULL 
                     AND h.OperatorCode != ''
                     AND h.OperatorCode != '0'
-                    ${
-                        targetDate
-                            ? "AND h.DateCreation >= @date AND h.DateCreation < DATEADD(day, 1, @date)"
-                            : ''
-                    }
+                    ${dateFilter}
                 ORDER BY h.DateCreation DESC
             `;
             
-            const allEvents = await executeQuery(eventsQuery, targetDate ? { date: targetDate } : {});
+            const allEvents = await executeQuery(eventsQuery, params);
             
             // Filtrer les associations invalides
             const validEvents = allEvents.filter(event => 

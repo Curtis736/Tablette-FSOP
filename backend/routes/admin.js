@@ -800,14 +800,14 @@ router.get('/', async (req, res) => {
         res.setHeader('Pragma', 'no-cache');
         res.setHeader('Expires', '0');
 
-        const { date } = req.query;
+        const { date, dateStart, dateEnd } = req.query;
         const targetDate = date || moment().format('YYYY-MM-DD');
         
-        // Récupérer les statistiques
+        // Récupérer les statistiques (toujours sur la date du jour pour les stats live)
         const stats = await getAdminStats(targetDate);
         
         // Récupérer les opérations (première page seulement pour la vue d'ensemble)
-        const operationsResult = await getAdminOperations(targetDate, 1, 25);
+        const operationsResult = await getAdminOperations(targetDate, 1, 25, dateStart, dateEnd);
         
         res.json({
             stats,
@@ -827,7 +827,7 @@ router.get('/', async (req, res) => {
 // GET /api/admin/operations - Récupérer les opérations pour l'interface admin
 router.get('/operations', async (req, res) => {
     try {
-        const { date, page = 1, limit = 25 } = req.query;
+        const { date, dateStart, dateEnd, page = 1, limit = 25 } = req.query;
         const targetDate = date || moment().format('YYYY-MM-DD');
         
         // Éviter le cache
@@ -835,7 +835,7 @@ router.get('/operations', async (req, res) => {
         res.setHeader('Pragma', 'no-cache');
         res.setHeader('Expires', '0');
         
-        const result = await getAdminOperations(targetDate, parseInt(page), parseInt(limit));
+        const result = await getAdminOperations(targetDate, parseInt(page), parseInt(limit), dateStart, dateEnd);
         console.log('🎯 Envoi des opérations admin:', result.operations?.length || 0, 'éléments');
         res.json(result);
         
@@ -1111,14 +1111,19 @@ async function getFabricationMapForLaunches(lancements) {
     return out;
 }
 
-async function getAdminOperations(date, page = 1, limit = 25) {
+async function getAdminOperations(date, page = 1, limit = 25, dateStart = null, dateEnd = null) {
     try {
-        console.log('🚀 DEBUT getAdminOperations SÉCURISÉ - date:', date, 'page:', page, 'limit:', limit);
-        
-        // Utiliser le service de validation pour éviter les mélanges de données
         const targetDate = date ? moment(date).format('YYYY-MM-DD') : moment().format('YYYY-MM-DD');
-        // ⚡ Perf: filtrer côté SQL sur la journée demandée
-        const validationResult = await dataValidation.getAdminDataSecurely(targetDate);
+        const dStart = dateStart ? moment(dateStart).format('YYYY-MM-DD') : null;
+        const dEnd = dateEnd ? moment(dateEnd).format('YYYY-MM-DD') : null;
+        const isRange = !!(dStart && dEnd);
+
+        console.log('🚀 DEBUT getAdminOperations SÉCURISÉ - date:', targetDate, 'range:', dStart, '->', dEnd, 'page:', page);
+        
+        // ⚡ Perf: filtrer côté SQL (une date précise ou une plage)
+        const validationResult = isRange
+            ? await dataValidation.getAdminDataSecurely(null, dStart, dEnd)
+            : await dataValidation.getAdminDataSecurely(targetDate);
         
         if (!validationResult.valid) {
             console.error('❌ Erreur de validation des données:', validationResult.error);
@@ -1132,18 +1137,17 @@ async function getAdminOperations(date, page = 1, limit = 25) {
             console.log(`🚨 ${validationResult.invalidEvents.length} événements avec associations invalides ignorés`);
         }
         
-        // DIAGNOSTIC : Vérifier les événements pour LT2501136
-        const diagnosticEvents = allEvents.filter(e => e.CodeLanctImprod === 'LT2501136');
-        if (diagnosticEvents.length > 0) {
-            console.log('🔍 DIAGNOSTIC - Événements pour LT2501136:');
-            diagnosticEvents.forEach(e => {
-                console.log(`  - NoEnreg: ${e.NoEnreg}, OperatorCode: ${e.OperatorCode}, Ident: ${e.Ident}, DateCreation: ${e.DateCreation}`);
-            });
-        }
-        
-        // Filtrer par date (défense en profondeur)
+        // Filtrer par date/plage (défense en profondeur côté JS)
         // IMPORTANT: DateCreation est renvoyé en 'YYYY-MM-DD' (string) pour éviter les décalages timezone.
-        let filteredEvents = allEvents.filter(event => String(event.DateCreation || '') === targetDate);
+        let filteredEvents;
+        if (isRange) {
+            filteredEvents = allEvents.filter(event => {
+                const d = String(event.DateCreation || '');
+                return d >= dStart && d <= dEnd;
+            });
+        } else {
+            filteredEvents = allEvents.filter(event => String(event.DateCreation || '') === targetDate);
+        }
 
         // Ne plus exclure les opérations déjà transmises vers ABTEMPS_OPERATEURS :
         // l'ADMIN doit pouvoir voir et vérifier toutes les opérations de la journée,
