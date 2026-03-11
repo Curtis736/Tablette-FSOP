@@ -16,7 +16,7 @@ class AdminPage {
         this.notificationManager = app.getNotificationManager();
         
         // Initialiser les utilitaires
-        this.logger = new Logger();
+        this.logger = new Logger(true); // logs admin toujours actifs
         this.domCache = new DOMCache();
         this.errorHandler = new ErrorHandler(this.notificationManager, this.logger);
         this.validator = new Validator();
@@ -1358,6 +1358,12 @@ class AdminPage {
             });
             this.logger.log(`📊 Après filtrage recherche: ${filteredOperations.length} opérations`);
         }
+
+        // Masquer automatiquement les opérations déjà transférées (StatutTraitement = 'T')
+        filteredOperations = filteredOperations.filter(op => {
+            const st = String(op?.StatutTraitement ?? '').toUpperCase().trim();
+            return st !== 'T';
+        });
 
         // Mémoriser pour stats cohérentes avec le tableau
         this._lastFilteredOperationsForStats = filteredOperations;
