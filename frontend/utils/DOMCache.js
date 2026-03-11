@@ -111,6 +111,17 @@ class DOMCache {
     }
 
     /**
+     * Invalide un ou plusieurs IDs (forcera un re-get DOM au prochain accès).
+     * Utile si une zone du DOM est réécrite complètement.
+     * @param {string|string[]} ids
+     */
+    invalidate(ids) {
+        if (!ids) return;
+        const list = Array.isArray(ids) ? ids : [ids];
+        list.forEach(id => this.cache.delete(id));
+    }
+
+    /**
      * Récupère plusieurs éléments à la fois
      * @param {Array<string>} ids - Liste des IDs
      * @returns {Object} Objet avec les IDs comme clés et les éléments comme valeurs

@@ -27,6 +27,8 @@ class AdminPage {
         this.stats = {};
         this.pagination = null;
         this.currentPage = 1;
+        this.pageSize = 25;
+        this._loadSeq = 0; // protège contre les réponses "en retard" (stale render)
         this.transferSelectionIds = new Set(); // sélection dans la modale de transfert (TempsId)
         this.selectedTempsIds = new Set(); // sélection de lignes dans le tableau principal (TempsId)
         
@@ -295,6 +297,23 @@ class AdminPage {
         
         try {
             this.isLoading = true;
+            const seq = ++this._loadSeq;
+
+            // Vider immédiatement le tableau pour éviter les mélanges pendant le chargement
+            if (this.operationsTableBody) {
+                clearElement(this.operationsTableBody);
+                const row = createElement('tr', { className: 'empty-state-row' });
+                const cell = createTableCell('', { colspan: '9', className: 'empty-state' });
+                cell.appendChild(
+                    createElement(
+                        'div',
+                        { style: { textAlign: 'center', padding: '1.5rem', color: '#666' } },
+                        'Chargement...'
+                    )
+                );
+                row.appendChild(cell);
+                this.operationsTableBody.appendChild(row);
+            }
             
             // Charger les opérateurs connectés et les données admin en parallèle avec timeout
             // Appliquer la période sélectionnée pour la partie monitoring (ABTEMPS_OPERATEURS)
@@ -375,6 +394,9 @@ class AdminPage {
             
             // Les données sont déjà parsées par ApiService
             const data = adminData;
+
+            // Si une autre requête a été lancée entre-temps, ignorer cette réponse
+            if (seq !== this._loadSeq) return;
             
             // Charger les opérations consolidées depuis ABTEMPS_OPERATEURS
             const operatorFilter = this.domCache.get('operatorFilter');
@@ -392,6 +414,8 @@ class AdminPage {
             if (monitoringResult && monitoringResult.success) {
                 consolidatedOps = monitoringResult.data || [];
             }
+
+            if (seq !== this._loadSeq) return;
             
             // Convertir les opérations de getAdminData au format monitoring (non consolidées)
             let adminOps = [];
@@ -1090,6 +1114,7 @@ class AdminPage {
         this.logger.log('🔄 Changement d\'opérateur sélectionné:', selectedOperator);
 
         // En mode Monitoring, le filtre opérateur est appliqué via loadMonitoringRecords()
+        this.currentPage = 1;
         if (this.selectedTempsIds && typeof this.selectedTempsIds.clear === 'function') {
         this.selectedTempsIds.clear();
         } else {
@@ -1402,7 +1427,25 @@ class AdminPage {
             return;
         }
         
-        // Utiliser les opérations filtrées pour l'affichage
+        // Pagination UI: afficher une page seulement (admin plus fluide + évite bugs d'affichage)
+        const totalItems = filteredOperations.length;
+        const pageSize = Number(this.pageSize || 25);
+        const totalPages = Math.max(1, Math.ceil(totalItems / pageSize));
+        const currentPage = Math.min(Math.max(1, Number(this.currentPage || 1)), totalPages);
+        this.currentPage = currentPage;
+        const start = (currentPage - 1) * pageSize;
+        const end = start + pageSize;
+
+        this.pagination = {
+            currentPage,
+            totalPages,
+            totalItems,
+            itemsPerPage: pageSize,
+            hasNextPage: currentPage < totalPages,
+            hasPrevPage: currentPage > 1
+        };
+
+        // Utiliser les opérations filtrées pour l'affichage (page courante uniquement)
         // ✅ Nouveau comportement: 1 ligne par CYCLE/ENREGISTREMENT (et non plus 1 seule ligne par opérateur).
         // On ne regroupe plus par OperatorCode: chaque enregistrement retourné par le backend apparaît dans le tableau.
         const getOperatorCode = (op) => String(op?.OperatorCode || op?.operatorCode || op?.operatorId || '').trim();
@@ -1426,8 +1469,8 @@ class AdminPage {
             if (end && end !== '-' && String(end).trim() !== '' && end !== 'N/A') return 'TERMINE';
             return '';
         };
-        // Trier les opérations pour un affichage stable (opérateur, lancement, heure de début)
-        const operationsToDisplay = [...filteredOperations].sort((a, b) => {
+        // Trier les opérations pour un affichage stable (opérateur, lancement, heure de début), puis paginer
+        const sorted = [...filteredOperations].sort((a, b) => {
             const opA = getOperatorCode(a);
             const opB = getOperatorCode(b);
             if (opA !== opB) return opA.localeCompare(opB);
@@ -1438,6 +1481,7 @@ class AdminPage {
             const startB = this.formatDateTime(b?.StartTime ?? b?.startTime) || '';
             return startA.localeCompare(startB);
         });
+        const operationsToDisplay = sorted.slice(start, end);
 
         // Mémoriser des compteurs d'affichage pour la pagination (fallback)
         this._lastDisplayCounts = {
@@ -1861,6 +1905,7 @@ class AdminPage {
             this.errorHandler.handle(error, 'handleTransfer', 'Erreur de connexion lors du transfert');
         } finally {
             this._isTransferring = false;
+            this.loadingIndicator.hide('transfer');
         }
     }
 
@@ -3559,25 +3604,10 @@ class AdminPage {
 
     // Méthodes de pagination
     async loadPage(page) {
-        if (this.isLoading) return;
-        
-        try {
-            this.isLoading = true;
-            this.currentPage = page;
-            
-            const data = await this.apiService.get(`/admin/operations?page=${page}&limit=25`);
-            
-            if (data.operations) {
-                this.operations = data.operations;
-                this.pagination = data.pagination;
-                this.updateOperationsTable();
-                this.updatePaginationInfo();
-            }
-        } catch (error) {
-            this.errorHandler.handle(error, 'loadPage', 'Erreur lors du chargement de la page');
-        } finally {
-            this.isLoading = false;
-        }
+        // Pagination pure UI (les données sont chargées par loadData)
+        this.currentPage = page;
+        this.updateOperationsTable();
+        this.updatePaginationInfo();
     }
 
     updatePaginationInfo() {
