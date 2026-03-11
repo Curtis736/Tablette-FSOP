@@ -1103,8 +1103,63 @@ class AdminPage {
     async handleAddOperation() {
         try {
             // Demander les informations pour la nouvelle ligne
-            const operatorCode = prompt('Code opérateur :');
-            if (!operatorCode) return;
+            const rawOperator = prompt('Opérateur (code, nom ou prénom) :');
+            if (!rawOperator) return;
+
+            const normalize = (s) =>
+                String(s || '')
+                    .trim()
+                    .toUpperCase()
+                    .normalize('NFD')
+                    .replace(/[\u0300-\u036f]/g, '');
+
+            const rawTrim = String(rawOperator).trim();
+            let operatorCode = rawTrim;
+
+            // Si l'admin tape un nom/prénom, retrouver le code opérateur depuis la liste RESSOURC
+            const isNumericCode = /^[0-9]+$/.test(rawTrim);
+            if (!isNumericCode) {
+                let allOps = [];
+                try {
+                    const res = await this.apiService.getAllOperators(true);
+                    allOps = res?.operators || res?.data?.operators || [];
+                } catch (e) {
+                    this.logger.warn('⚠️ Impossible de charger la liste des opérateurs (recherche par nom):', e?.message || e);
+                }
+
+                const q = normalize(rawTrim);
+                const matches = (allOps || [])
+                    .map(o => ({
+                        code: String(o.code || o.OperatorCode || '').trim(),
+                        name: String(o.name || o.NomOperateur || '').trim()
+                    }))
+                    .filter(o => o.code && o.name && normalize(o.name).includes(q));
+
+                if (matches.length === 0) {
+                    this.notificationManager.error(`Aucun opérateur trouvé pour "${rawTrim}".`);
+                    return;
+                }
+
+                if (matches.length === 1) {
+                    operatorCode = matches[0].code;
+                    this.notificationManager.info(`Opérateur trouvé: ${matches[0].name} (${operatorCode})`);
+                } else {
+                    // Laisser l'admin choisir si plusieurs résultats
+                    const top = matches.slice(0, 20);
+                    const lines = top.map((m, idx) => `${idx + 1}) ${m.name} (${m.code})`);
+                    const answer = window.prompt(
+                        `Plusieurs opérateurs correspondent à "${rawTrim}".\nChoisis le numéro:\n\n${lines.join('\n')}\n\nNuméro:`
+                    );
+                    const choiceIdx = Number.parseInt(String(answer || '').trim(), 10) - 1;
+                    const chosen = top[choiceIdx];
+                    if (!chosen) {
+                        this.notificationManager.error('Aucun opérateur sélectionné');
+                        return;
+                    }
+                    operatorCode = chosen.code;
+                    this.notificationManager.info(`Opérateur sélectionné: ${chosen.name} (${operatorCode})`);
+                }
+            }
             
             // Valider le code opérateur
             if (!this.validator.validateOperatorCode(operatorCode)) {
