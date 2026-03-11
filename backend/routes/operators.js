@@ -1510,6 +1510,49 @@ router.post('/stop', validateOperatorSession, logSecurityAction, async (req, res
                 message: 'Impossible de terminer le lancement (consolidation échouée). Réessayez.'
             });
         }
+
+        // 🧮 Règle A: si l'opérateur n'a plus aucun lancement EN_COURS/EN_PAUSE aujourd'hui,
+        // on peut considérer que sa session n'est plus "active" côté prod et la fermer.
+        try {
+            const stillActive = await executeQuery(
+                `
+                ;WITH last_per_operator AS (
+                    SELECT
+                        h.OperatorCode,
+                        h.Ident,
+                        h.Statut,
+                        h.DateCreation,
+                        h.NoEnreg,
+                        ROW_NUMBER() OVER (
+                            PARTITION BY h.OperatorCode
+                            ORDER BY h.DateCreation DESC, h.NoEnreg DESC
+                        ) AS rn
+                    FROM [SEDI_APP_INDEPENDANTE].[dbo].[ABHISTORIQUE_OPERATEURS] h
+                    WHERE h.OperatorCode = @operatorId
+                      AND h.DateCreation >= CONVERT(date, GETDATE())
+                      AND h.DateCreation <  DATEADD(day, 1, CONVERT(date, GETDATE()))
+                )
+                SELECT TOP 1 1 AS HasActive
+                FROM last_per_operator
+                WHERE rn = 1
+                  AND UPPER(LTRIM(RTRIM(COALESCE(Ident, '')))) <> 'FIN'
+                  AND UPPER(LTRIM(RTRIM(COALESCE(Statut, '')))) IN ('EN_COURS', 'EN_PAUSE');
+                `,
+                { operatorId }
+            );
+
+            if (!stillActive || stillActive.length === 0) {
+                // Plus aucun lancement actif pour cet opérateur sur la journée: fermer la session ACTIVE si elle existe.
+                try {
+                    await SessionService.closeSession(operatorId);
+                    console.log(`🔒 Session opérateur ${operatorId} fermée automatiquement (plus aucun lancement actif).`);
+                } catch (e) {
+                    console.warn(`⚠️ Impossible de fermer automatiquement la session de ${operatorId}:`, e?.message || e);
+                }
+            }
+        } catch (e) {
+            console.warn('⚠️ Vérification des lancements restants échouée (non bloquant):', e?.message || e);
+        }
         
         res.json({
             success: true,
@@ -1700,11 +1743,12 @@ router.get('/current/:operatorCode', authenticateOperator, async (req, res) => {
         
         console.log(`🔍 Recherche d'opération en cours pour l'opérateur ${operatorCode}...`);
         
-        // Chercher le DERNIER événement de l'opérateur aujourd'hui, puis déduire l'état.
+        // Chercher le DERNIER événement de l'opérateur, puis déduire l'état.
         // ⚠️ Important: on ne doit pas filtrer sur Statut IN ('EN_COURS','EN_PAUSE'),
         // sinon on peut "ressortir" un vieux DEBUT (EN_COURS) alors qu'un FIN existe après,
         // ce qui crée le bug UI: écran "En cours" alors que l'historique est "Terminé".
-        // 🔒 FILTRE : Exclure les lancements transférés (StatutTraitement = 'T')
+        // ⚠️ Ne pas filtrer sur StatutTraitement (ABTEMPS) ici, sinon on masque un nouveau cycle
+        // redémarré après transfert (cas LT2500795 / opératrice 592).
         const query = `
             SELECT TOP 1
                 h.CodeLanctImprod,
@@ -1718,15 +1762,7 @@ router.get('/current/:operatorCode', authenticateOperator, async (req, res) => {
                 l.DesignationLct1 as Article
             FROM [SEDI_APP_INDEPENDANTE].[dbo].[ABHISTORIQUE_OPERATEURS] h
             LEFT JOIN [SEDI_ERP].[dbo].[LCTE] l ON l.CodeLancement = h.CodeLanctImprod
-            LEFT JOIN [SEDI_APP_INDEPENDANTE].[dbo].[ABTEMPS_OPERATEURS] t 
-                ON t.OperatorCode = h.OperatorCode 
-                AND t.LancementCode = h.CodeLanctImprod
-                AND CAST(t.DateCreation AS DATE) = CAST(h.DateCreation AS DATE)
-                -- IMPORTANT: ne pas cacher une autre étape du même lancement (Phase+CodeRubrique)
-                AND ISNULL(LTRIM(RTRIM(t.Phase)), '') = ISNULL(LTRIM(RTRIM(COALESCE(h.Phase, 'PRODUCTION'))), '')
-                AND ISNULL(LTRIM(RTRIM(t.CodeRubrique)), '') = ISNULL(LTRIM(RTRIM(h.CodeRubrique)), '')
             WHERE h.OperatorCode = @operatorCode
-              AND (t.StatutTraitement IS NULL OR t.StatutTraitement != 'T')
             ORDER BY h.DateCreation DESC, h.NoEnreg DESC
         `;
         

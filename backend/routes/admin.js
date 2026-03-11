@@ -2704,8 +2704,8 @@ router.get('/operators/:operatorCode/operations', async (req, res) => {
         console.log(`🔍 Récupération des événements pour l'opérateur ${operatorCode}...`);
 
         // Récupérer tous les événements de cet opérateur depuis ABHISTORIQUE_OPERATEURS
-        // 🔒 FILTRE IMPORTANT : Exclure les lancements transférés (StatutTraitement = 'T')
-        // L'opérateur doit voir ses lancements tant qu'ils n'ont pas été transférés par l'admin
+        // Admin: ne pas masquer les opérations transférées.
+        // Sinon on peut masquer un cycle actif redémarré après un transfert (ex: LT2500795 / opératrice 592).
         // ⚡ OPTIMISATION : Utiliser LEFT JOIN avec sous-requête dérivée au lieu de sous-requête corrélée
         // IMPORTANT: Convertir HeureDebut et HeureFin en VARCHAR(5) (HH:mm) directement dans SQL
         // pour éviter les problèmes de timezone lors de la conversion par Node.js
@@ -2737,7 +2737,6 @@ router.get('/operators/:operatorCode/operations', async (req, res) => {
                 AND CAST(t.DateCreation AS DATE) = CAST(h.DateCreation AS DATE)
             -- ⚡ OPTIMISATION : Utiliser h.Phase directement (plus simple et fiable)
             WHERE h.OperatorCode = @operatorCode
-              AND (t.StatutTraitement IS NULL OR t.StatutTraitement != 'T')
             ORDER BY h.DateCreation DESC
         `;
         

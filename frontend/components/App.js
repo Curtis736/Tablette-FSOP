@@ -25,18 +25,65 @@ class App {
         this.setupEventListeners();
     }
 
+    _scheduleMidnightLogout() {
+        // À minuit (heure locale tablette), forcer retour écran login et vider l'état local
+        const now = new Date();
+        const next = new Date(now);
+        next.setHours(0, 0, 0, 0);
+        next.setDate(next.getDate() + 1);
+        const delay = next.getTime() - now.getTime();
+
+        setTimeout(() => {
+            try {
+                console.log('🌙 Minuit: déconnexion locale forcée');
+                // Ne pas dépendre du réseau: vider local + UI
+                this.currentOperator = null;
+                this.isAdmin = false;
+                window.sessionStorage?.removeItem('sedi_admin_token');
+                this.storageService.clearCurrentOperator();
+                this.showLoginScreen();
+                notificationManager.info('Nouvelle journée: veuillez vous reconnecter');
+            } finally {
+                this._scheduleMidnightLogout();
+            }
+        }, delay);
+    }
+
     async initializeApp() {
+        // Démarrer la déconnexion automatique quotidienne
+        if (!this._midnightLogoutScheduled) {
+            this._midnightLogoutScheduled = true;
+            this._scheduleMidnightLogout();
+        }
+
         // Sur un reload de page (même tablette), on restaure l'opérateur sans recréer de session.
         // La session reste valide côté serveur. Si elle a expiré, checkCurrentOperation() gérera
         // le cas et l'opérateur devra se reconnecter explicitement.
         const savedOperator = this.storageService.getCurrentOperator();
         if (savedOperator) {
             try {
+                // Si l'opérateur a été sauvegardé un autre jour, ne jamais restaurer automatiquement
+                const savedDate = this.storageService.getCurrentOperatorDate?.() || null;
+                const today = new Date().toISOString().slice(0, 10);
+                if (savedDate && savedDate !== today) {
+                    this.storageService.clearCurrentOperator();
+                    this.showLoginScreen();
+                    return;
+                }
+
                 const code = savedOperator.code || savedOperator.id;
                 console.log('🔍 Restauration opérateur (reload page):', code);
                 // Simple vérification d'existence, sans créer de nouvelle session
                 const validOperator = await this.apiService.getOperator(code);
                 if (validOperator) {
+                    // Vérifier que la session est bien valide côté serveur (sinon forcer login)
+                    try {
+                        await this.apiService.getCurrentOperation(code);
+                    } catch (_) {
+                        this.storageService.clearCurrentOperator();
+                        this.showLoginScreen();
+                        return;
+                    }
                     this.currentOperator = { ...savedOperator, ...validOperator };
                     this.storageService.setCurrentOperator(this.currentOperator);
                     this.showOperatorScreen();
@@ -88,6 +135,18 @@ class App {
         // Vérification de la connexion (seulement si un opérateur est connecté)
         this.lastHealthStatus = true;
         setInterval(() => this.runHealthCheck(), 30000);
+
+        // Session expirée côté serveur -> retour login + nettoyage local
+        window.addEventListener('sedi:session-expired', () => {
+            try {
+                this.currentOperator = null;
+                this.storageService.clearCurrentOperator();
+                this.showLoginScreen();
+                notificationManager.warning('Session expirée: veuillez vous reconnecter');
+            } catch (_) {
+                // ignore
+            }
+        });
 
     }
 

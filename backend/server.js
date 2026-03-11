@@ -327,6 +327,45 @@ async function performStartupCleanup() {
     }
 }
 
+// Clôturer toutes les sessions opérateurs à minuit (heure serveur)
+// Objectif: éviter les "sessions fantômes" qui polluent le dashboard admin le lendemain.
+function scheduleMidnightCloseSessions() {
+    const enabled = String(process.env.CLOSE_SESSIONS_AT_MIDNIGHT || 'true').toLowerCase() === 'true';
+    if (!enabled) {
+        console.log('🌙 Fermeture des sessions à minuit désactivée (CLOSE_SESSIONS_AT_MIDNIGHT!=true)');
+        return;
+    }
+
+    const scheduleNextRun = () => {
+        const now = new Date();
+        const next = new Date(now);
+        next.setHours(0, 0, 0, 0);
+        next.setDate(next.getDate() + 1); // prochain minuit
+        const delay = next.getTime() - now.getTime();
+        console.log(`🌙 Prochaine fermeture des sessions planifiée à ${next.toISOString()} (dans ${Math.round(delay / 1000)} secondes).`);
+
+        setTimeout(async () => {
+            try {
+                console.log('🌙 Fermeture automatique des sessions opérateurs (minuit)...');
+                await executeNonQuery(`
+                    UPDATE [SEDI_APP_INDEPENDANTE].[dbo].[ABSESSIONS_OPERATEURS]
+                    SET LogoutTime = GETDATE(),
+                        SessionStatus = 'CLOSED',
+                        ActivityStatus = 'INACTIVE'
+                    WHERE SessionStatus = 'ACTIVE'
+                `);
+                console.log('✅ Sessions opérateurs fermées (minuit).');
+            } catch (error) {
+                console.error('❌ Erreur lors de la fermeture des sessions à minuit:', error);
+            } finally {
+                scheduleNextRun();
+            }
+        }, delay);
+    };
+
+    scheduleNextRun();
+}
+
 // Fonction de nettoyage périodique (toutes les heures)
 function startPeriodicCleanup() {
     setInterval(async () => {
@@ -390,6 +429,9 @@ if (shouldStartServer()) {
                 
                 // Effectuer le nettoyage automatique au démarrage
                 await performStartupCleanup();
+
+                // Fermer les sessions à minuit (évite les compteurs incohérents le lendemain)
+                scheduleMidnightCloseSessions();
                 
                 // Démarrer le nettoyage périodique uniquement si explicitement activé
                 if (String(process.env.ENABLE_PERIODIC_CLEANUP || '').toLowerCase() === 'true') {

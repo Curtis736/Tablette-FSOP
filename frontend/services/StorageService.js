@@ -3,6 +3,7 @@ class StorageService {
     constructor() {
         this.keys = {
             CURRENT_OPERATOR: 'currentOperator',
+            CURRENT_OPERATOR_DATE: 'currentOperatorDate',
             USER_PREFERENCES: 'userPreferences',
             APP_SETTINGS: 'appSettings',
             CACHE_DATA: 'cacheData'
@@ -24,8 +25,12 @@ class StorageService {
         try {
             if (operator) {
                 localStorage.setItem(this.keys.CURRENT_OPERATOR, JSON.stringify(operator));
+                // Marquer le jour où l'opérateur a été mis en session locale
+                const today = new Date().toISOString().slice(0, 10); // YYYY-MM-DD
+                localStorage.setItem(this.keys.CURRENT_OPERATOR_DATE, today);
             } else {
                 localStorage.removeItem(this.keys.CURRENT_OPERATOR);
+                localStorage.removeItem(this.keys.CURRENT_OPERATOR_DATE);
             }
         } catch (error) {
             console.error('Erreur lors de la sauvegarde de l\'opérateur:', error);
@@ -34,6 +39,15 @@ class StorageService {
 
     clearCurrentOperator() {
         localStorage.removeItem(this.keys.CURRENT_OPERATOR);
+        localStorage.removeItem(this.keys.CURRENT_OPERATOR_DATE);
+    }
+
+    getCurrentOperatorDate() {
+        try {
+            return localStorage.getItem(this.keys.CURRENT_OPERATOR_DATE) || null;
+        } catch (_) {
+            return null;
+        }
     }
 
     // Préférences utilisateur

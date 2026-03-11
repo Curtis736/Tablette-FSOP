@@ -187,6 +187,15 @@ class ApiService {
                 }
                 
                 const errorData = await response.json().catch(() => ({}));
+
+                // Session opérateur expirée -> notifier l'app pour forcer retour écran login
+                if (response.status === 401 && errorData && (errorData.security === 'SESSION_REQUIRED' || errorData.error === 'SESSION_REQUIRED')) {
+                    try {
+                        window.dispatchEvent(new CustomEvent('sedi:session-expired', { detail: { endpoint, errorData } }));
+                    } catch (_) {
+                        // ignore
+                    }
+                }
                 
                 // Build a comprehensive error message
                 let errorMessage = errorData.error || `HTTP ${response.status}: ${response.statusText}`;
