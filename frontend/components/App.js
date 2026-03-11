@@ -1,8 +1,8 @@
 // Classe principale de l'application
 // Bump version to bust browser cache when OperateurInterface changes (sleep/wake prompt removal, timer, etc.)
-import OperateurInterface from './OperateurInterface.js?v=20260302-no-wake-popup';
+import OperateurInterface from './OperateurInterface.js?v=20260309-cache-bust';
 // Bump to bust cache when AdminPage logic changes (auto consolidation, etc.)
-import AdminPage from './AdminPage.js?v=20260302-auto-consolidate';
+import AdminPage from './AdminPage.js?v=20260309-cache-bust';
 import ApiService from '../services/ApiService.js?v=20260309-operator-session-cache-v2';
 import StorageService from '../services/StorageService.js?v=20251007-final';
 import notificationManager from '../utils/NotificationManager.js';
