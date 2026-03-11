@@ -243,29 +243,44 @@ async function resolveLtRoot(traceRoot, launchNumber) {
         return directPath;
     }
 
-    // Try 2: Search at depth 1
-    try {
-        const entries = await fsp.readdir(traceRoot, { withFileTypes: true });
-        
+    // Try 2: Search recursively up to FSOP_SEARCH_DEPTH (default 3)
+    const maxDepth = Math.max(1, Math.min(parseInt(process.env.FSOP_SEARCH_DEPTH || '3', 10) || 3, 5));
+    console.log(`🔍 resolveLtRoot: recherche de "${launchNumber}" dans "${traceRoot}" (profondeur max: ${maxDepth})`);
+
+    // Iterative BFS to avoid stack overflow on large trees
+    const queue = [{ dir: traceRoot, depth: 0 }];
+
+    while (queue.length > 0) {
+        const { dir, depth } = queue.shift();
+        if (depth >= maxDepth) continue;
+
+        let entries;
+        try {
+            entries = await fsp.readdir(dir, { withFileTypes: true });
+        } catch (err) {
+            console.warn(`⚠️ Cannot read directory: ${dir}`, err.message);
+            continue;
+        }
+
         for (const entry of entries) {
-            if (!entry.isDirectory()) {
-                continue;
+            if (!entry.isDirectory()) continue;
+
+            const childPath = path.join(dir, entry.name);
+
+            // Check if this child IS the LT folder
+            if (entry.name === launchNumber) {
+                console.log(`✅ resolveLtRoot: trouvé à profondeur ${depth + 1}: ${childPath}`);
+                return childPath;
             }
-            
-            const childPath = path.join(traceRoot, entry.name);
-            const ltPath = path.join(childPath, launchNumber);
-            
-            if (await safeIsDirectory(ltPath)) {
-                return ltPath;
+
+            // Otherwise queue it for deeper search
+            if (depth + 1 < maxDepth) {
+                queue.push({ dir: childPath, depth: depth + 1 });
             }
         }
-    } catch (error) {
-        // If we can't read the directory, return null
-        console.warn(`⚠️ Cannot read traceRoot directory: ${traceRoot}`, error.message);
-        return null;
     }
 
-    // Not found
+    console.warn(`❌ resolveLtRoot: "${launchNumber}" introuvable dans "${traceRoot}" (profondeur ${maxDepth})`);
     return null;
 }
 
