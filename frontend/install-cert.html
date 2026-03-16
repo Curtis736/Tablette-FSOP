@@ -1,0 +1,197 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Installer le certificat SEDI-ATI</title>
+    <script src="https://cdn.jsdelivr.net/npm/qrcodejs@1.0.0/qrcode.min.js"></script>
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+
+        body {
+            font-family: 'Segoe UI', Arial, sans-serif;
+            background: #1a1a2e;
+            color: #eee;
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 20px;
+        }
+
+        .card {
+            background: #16213e;
+            border: 1px solid #0f3460;
+            border-radius: 16px;
+            padding: 40px 32px;
+            max-width: 480px;
+            width: 100%;
+            text-align: center;
+            box-shadow: 0 8px 32px rgba(0,0,0,0.4);
+        }
+
+        .logo {
+            font-size: 48px;
+            margin-bottom: 12px;
+        }
+
+        h1 {
+            font-size: 22px;
+            font-weight: 700;
+            color: #e94560;
+            margin-bottom: 6px;
+        }
+
+        .subtitle {
+            font-size: 14px;
+            color: #888;
+            margin-bottom: 32px;
+        }
+
+        .qr-container {
+            background: white;
+            border-radius: 12px;
+            padding: 16px;
+            display: inline-block;
+            margin-bottom: 28px;
+            box-shadow: 0 4px 16px rgba(233,69,96,0.2);
+        }
+
+        #qrcode canvas, #qrcode img {
+            display: block;
+        }
+
+        .steps {
+            text-align: left;
+            background: #0f3460;
+            border-radius: 10px;
+            padding: 20px;
+            margin-bottom: 28px;
+        }
+
+        .steps h3 {
+            font-size: 13px;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            color: #e94560;
+            margin-bottom: 14px;
+        }
+
+        .step {
+            display: flex;
+            align-items: flex-start;
+            gap: 12px;
+            margin-bottom: 12px;
+            font-size: 14px;
+            color: #ccc;
+        }
+
+        .step:last-child { margin-bottom: 0; }
+
+        .step-num {
+            background: #e94560;
+            color: white;
+            border-radius: 50%;
+            width: 22px;
+            height: 22px;
+            min-width: 22px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 12px;
+            font-weight: 700;
+        }
+
+        .btn-download {
+            display: inline-flex;
+            align-items: center;
+            gap: 10px;
+            background: #e94560;
+            color: white;
+            text-decoration: none;
+            padding: 14px 32px;
+            border-radius: 50px;
+            font-size: 16px;
+            font-weight: 600;
+            transition: background 0.2s, transform 0.1s;
+            box-shadow: 0 4px 16px rgba(233,69,96,0.4);
+        }
+
+        .btn-download:hover {
+            background: #c73652;
+            transform: translateY(-1px);
+        }
+
+        .btn-download:active {
+            transform: translateY(0);
+        }
+
+        .note {
+            margin-top: 20px;
+            font-size: 12px;
+            color: #555;
+        }
+
+        .badge {
+            display: inline-block;
+            background: #0f3460;
+            border: 1px solid #1a4a8a;
+            border-radius: 6px;
+            padding: 4px 10px;
+            font-size: 11px;
+            color: #7ab3ff;
+            margin-top: 16px;
+        }
+    </style>
+</head>
+<body>
+    <div class="card">
+        <div class="logo">🔐</div>
+        <h1>Certificat SEDI-ATI</h1>
+        <p class="subtitle">Scanne le QR code ou appuie sur le bouton pour installer le certificat de sécurité</p>
+
+        <div class="qr-container">
+            <div id="qrcode"></div>
+        </div>
+
+        <div class="steps">
+            <h3>📱 Installation Android</h3>
+            <div class="step">
+                <div class="step-num">1</div>
+                <span>Télécharge le certificat ci-dessous</span>
+            </div>
+            <div class="step">
+                <div class="step-num">2</div>
+                <span>Ouvre <strong>Paramètres → Sécurité → Installer un certificat → Certificat CA</strong></span>
+            </div>
+            <div class="step">
+                <div class="step-num">3</div>
+                <span>Sélectionne le fichier <strong>SEDI-ATI-CA.crt</strong></span>
+            </div>
+            <div class="step">
+                <div class="step-num">4</div>
+                <span>Accepte et redémarre Chrome</span>
+            </div>
+        </div>
+
+        <a class="btn-download" href="/ssl/SEDI-ATI-CA.crt" download="SEDI-ATI-CA.crt">
+            ⬇️ Télécharger le certificat
+        </a>
+
+        <div class="badge">SEDI-ATI Internal CA — valide 10 ans</div>
+        <p class="note">Ce certificat permet d'accéder au site en HTTPS sans avertissement.<br>Il ne donne accès à aucune donnée personnelle.</p>
+    </div>
+
+    <script>
+        const certUrl = window.location.protocol + '//' + window.location.hostname + ':' + window.location.port + '/ssl/SEDI-ATI-CA.crt';
+        new QRCode(document.getElementById('qrcode'), {
+            text: certUrl,
+            width: 200,
+            height: 200,
+            colorDark: '#000000',
+            colorLight: '#ffffff',
+            correctLevel: QRCode.CorrectLevel.M
+        });
+    </script>
+</body>
+</html>
