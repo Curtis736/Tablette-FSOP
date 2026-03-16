@@ -107,7 +107,45 @@ async function authenticateAdmin(req, res, next) {
     }
 }
 
+/**
+ * Middleware qui bloque une route dangereuse (debug/purge/reset) si la variable
+ * d'environnement correspondante n'est pas explicitement activée.
+ *
+ * Usage: router.post('/testing/purge', requireDangerousRoute('ALLOW_TEST_PURGE'), handler)
+ *
+ * En production, ces variables doivent être absentes ou à 'false' dans le .env.
+ */
+function requireDangerousRoute(envVar) {
+    return (req, res, next) => {
+        if (String(process.env[envVar] || '').toLowerCase() !== 'true') {
+            return res.status(403).json({
+                success: false,
+                error: 'ROUTE_DISABLED',
+                message: `Cette route est désactivée en production. Définissez ${envVar}=true pour l'activer.`
+            });
+        }
+        next();
+    };
+}
+
+/**
+ * Middleware qui bloque toutes les routes /debug/* en production.
+ * Activé par défaut sauf si ALLOW_DEBUG_ROUTES=true.
+ */
+function requireDebugMode(req, res, next) {
+    if (String(process.env.ALLOW_DEBUG_ROUTES || '').toLowerCase() !== 'true') {
+        return res.status(403).json({
+            success: false,
+            error: 'DEBUG_ROUTES_DISABLED',
+            message: 'Les routes de débogage sont désactivées. Définissez ALLOW_DEBUG_ROUTES=true pour les activer.'
+        });
+    }
+    next();
+}
+
 module.exports = {
     authenticateOperator,
-    authenticateAdmin
+    authenticateAdmin,
+    requireDangerousRoute,
+    requireDebugMode
 };

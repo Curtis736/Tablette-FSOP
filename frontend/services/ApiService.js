@@ -582,11 +582,12 @@ class ApiService {
         }
     }
 
-    async loadFsopData(launchNumber, templateCode, serialNumber) {
+    async loadFsopData(launchNumber, templateCode, serialNumber, operatorId = null) {
         return this.post('/fsop/load-data', {
             launchNumber,
             templateCode,
-            serialNumber
+            serialNumber,
+            ...(operatorId ? { operatorId } : {})
         });
     }
 }

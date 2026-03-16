@@ -2,7 +2,7 @@ const express = require('express');
 const { executeQuery, executeProcedure } = require('../config/database');
 const moment = require('moment');
 const router = express.Router();
-const { authenticateAdmin } = require('../middleware/auth');
+const { authenticateAdmin, requireDangerousRoute, requireDebugMode } = require('../middleware/auth');
 const dataValidation = require('../services/DataValidationService');
 const { getConcurrencyStats } = require('../middleware/concurrencyManager');
 const SessionService = require('../services/SessionService');
@@ -2461,7 +2461,7 @@ router.post('/cleanup-duplicates', async (req, res) => {
 // ⚠️ Disabled by default. To enable: set ALLOW_TEST_PURGE=true on the backend container.
 // Purpose: allow re-running tests by deleting ONLY rows in ABHISTORIQUE_OPERATEURS / ABTEMPS_OPERATEURS (and optionally sessions)
 // without dropping tables.
-router.post('/testing/purge', async (req, res) => {
+router.post('/testing/purge', requireDangerousRoute('ALLOW_TEST_PURGE'), async (req, res) => {
     try {
         if (String(process.env.ALLOW_TEST_PURGE || '').toLowerCase() !== 'true') {
             return res.status(403).json({
@@ -2940,6 +2940,9 @@ router.post('/transfer', async (req, res) => {
     }
 });
 
+// Toutes les routes /debug/* sont bloquées en production (ALLOW_DEBUG_ROUTES=true pour activer)
+router.use('/debug', requireDebugMode);
+
 // Route de test pour abetemps_temp
 router.get('/debug/temp-table', async (req, res) => {
     try {
@@ -3140,7 +3143,7 @@ router.post('/delete-all-sedi-tables', async (req, res) => {
     }
 });
 
-router.post('/recreate-tables', async (req, res) => {
+router.post('/recreate-tables', requireDangerousRoute('ALLOW_RECREATE_TABLES'), async (req, res) => {
     try {
         console.log('🔧 Recréation des tables SEDI_APP_INDEPENDANTE...');
 
@@ -3245,7 +3248,7 @@ router.post('/recreate-tables', async (req, res) => {
 });
 
 // Route pour initialiser les tables manquantes SEDI_APP_INDEPENDANTE
-router.post('/init-tables', async (req, res) => {
+router.post('/init-tables', requireDangerousRoute('ALLOW_INIT_TABLES'), async (req, res) => {
     try {
         console.log('🔧 Initialisation des tables SEDI_APP_INDEPENDANTE...');
 
@@ -3551,7 +3554,7 @@ router.get('/lancements/search', async (req, res) => {
 });
 
 // Route spécifique pour créer ABHISTORIQUE_OPERATEURS
-router.post('/create-historique-table', async (req, res) => {
+router.post('/create-historique-table', requireDangerousRoute('ALLOW_RECREATE_TABLES'), async (req, res) => {
     try {
         console.log('🔧 Création de la table ABHISTORIQUE_OPERATEURS...');
 

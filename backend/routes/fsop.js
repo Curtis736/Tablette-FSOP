@@ -14,8 +14,52 @@ const {
 const { readTemplatesFromExcel } = require('../services/fsopTemplatesExcelService');
 const { parseWordStructure } = require('../services/fsopWordParser');
 const { executeQuery } = require('../config/database');
+const { requireDebugMode } = require('../middleware/auth');
 
 const router = express.Router();
+
+/**
+ * Middleware léger pour les routes FSOP : vérifie qu'un operatorId est fourni
+ * et qu'il possède une session active (TTL glissant).
+ * L'operatorId peut venir de req.body.operatorId ou du header X-Operator-Code.
+ */
+async function requireFsopSession(req, res, next) {
+    try {
+        const operatorId = (req.body && req.body.operatorId) || req.headers['x-operator-code'];
+        if (!operatorId) {
+            return res.status(401).json({
+                success: false,
+                error: 'OPERATOR_REQUIRED',
+                message: 'Code opérateur requis pour accéder aux FSOP.'
+            });
+        }
+
+        const ttlHoursRaw = parseInt(process.env.OPERATOR_SESSION_TTL_HOURS || '12', 10);
+        const ttlHours = Number.isFinite(ttlHoursRaw) && ttlHoursRaw > 0 ? Math.min(ttlHoursRaw, 72) : 12;
+
+        const sessions = await executeQuery(
+            `SELECT TOP 1 SessionId FROM [SEDI_APP_INDEPENDANTE].[dbo].[ABSESSIONS_OPERATEURS]
+             WHERE OperatorCode = @operatorId
+               AND SessionStatus = 'ACTIVE'
+               AND COALESCE(LastActivityTime, LoginTime, DateCreation) >= DATEADD(hour, -@ttlHours, GETDATE())`,
+            { operatorId, ttlHours }
+        );
+
+        if (!sessions || sessions.length === 0) {
+            return res.status(401).json({
+                success: false,
+                error: 'SESSION_REQUIRED',
+                message: 'Opérateur non connecté ou session expirée.'
+            });
+        }
+
+        req.fsopOperatorId = operatorId;
+        next();
+    } catch (err) {
+        console.error('requireFsopSession error:', err);
+        res.status(500).json({ success: false, error: 'INTERNAL_ERROR' });
+    }
+}
 
 const DEFAULT_TEMPLATES_DIR_WIN = 'X:\\Qualite\\4_Public\\A disposition\\DOSSIER SMI\\Formulaires';
 const DEFAULT_TEMPLATES_XLSX_WIN = 'X:\\Qualite\\4_Public\\A disposition\\DOSSIER SMI\\Formulaires\\Liste des formulaires.xlsx';
@@ -159,7 +203,7 @@ router.get('/lots/:launchNumber', async (req, res) => {
     }
 });
 
-router.get('/debug/:launchNumber', async (req, res) => {
+router.get('/debug/:launchNumber', requireDebugMode, async (req, res) => {
     try {
         const launchNumber = normalizeLaunchNumber(req.params.launchNumber);
         if (!launchNumber) {
@@ -363,7 +407,7 @@ router.get('/template/:templateCode/structure', async (req, res) => {
     }
 });
 
-router.post('/open', async (req, res) => {
+router.post('/open', requireFsopSession, async (req, res) => {
     try {
         const launchNumber = normalizeLaunchNumber(req.body?.launchNumber);
         const templateCode = normalizeTemplateCode(req.body?.templateCode);
@@ -622,7 +666,7 @@ router.post('/open', async (req, res) => {
     }
 });
 
-router.post('/load-data', async (req, res) => {
+router.post('/load-data', requireFsopSession, async (req, res) => {
     try {
         const launchNumber = normalizeLaunchNumber(req.body?.launchNumber);
         const templateCode = normalizeTemplateCode(req.body?.templateCode);
@@ -689,7 +733,7 @@ router.post('/load-data', async (req, res) => {
     }
 });
 
-router.post('/validate-serial', async (req, res) => {
+router.post('/validate-serial', requireFsopSession, async (req, res) => {
     try {
         const launchNumber = normalizeLaunchNumber(req.body?.launchNumber);
         const serialNumber = normalizeSerialNumber(req.body?.serialNumber);
@@ -745,7 +789,7 @@ router.post('/validate-serial', async (req, res) => {
     }
 });
 
-router.post('/save', async (req, res) => {
+router.post('/save', requireFsopSession, async (req, res) => {
     try {
         const launchNumber = normalizeLaunchNumber(req.body?.launchNumber);
         const templateCode = normalizeTemplateCode(req.body?.templateCode);

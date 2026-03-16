@@ -841,6 +841,7 @@ class OperateurInterface {
         // Valider le numéro de série avant de continuer
         console.log('🔍 [VALIDATION OBLIGATOIRE] Validation du numéro de série avant ouverture du document Word');
         console.log('🔍 [VALIDATION OBLIGATOIRE] LT:', lt, '| SN:', serialNumber);
+        const _operatorIdForFsop = this.operator?.code || this.operator?.id || this.operator?.coderessource;
         try {
             const endpoint = `${this.apiService.baseUrl}/fsop/validate-serial`;
             console.log('🔍 [VALIDATION OBLIGATOIRE] Appel API:', endpoint);
@@ -850,7 +851,8 @@ class OperateurInterface {
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
                     launchNumber: lt,
-                    serialNumber: serialNumber
+                    serialNumber: serialNumber,
+                    operatorId: _operatorIdForFsop
                 })
             });
 
@@ -887,7 +889,8 @@ class OperateurInterface {
                 body: JSON.stringify({
                     launchNumber: lt,
                     templateCode,
-                    serialNumber
+                    serialNumber,
+                    operatorId: _operatorIdForFsop
                 })
             });
 
@@ -960,13 +963,14 @@ class OperateurInterface {
         try {
             const endpoint = `${this.apiService.baseUrl}/fsop/validate-serial`;
             console.log('🔍 [VALIDATION] Appel API:', endpoint, 'avec LT:', lt, 'SN:', serialNumber);
-            
+            const _opId = this.operator?.code || this.operator?.id || this.operator?.coderessource;
             const res = await fetch(endpoint, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
                     launchNumber: lt,
-                    serialNumber: serialNumber
+                    serialNumber: serialNumber,
+                    operatorId: _opId
                 })
             });
 
@@ -1010,6 +1014,7 @@ class OperateurInterface {
         // Valider le numéro de série avant de continuer
         console.log('🔍 [VALIDATION OBLIGATOIRE] Validation du numéro de série avant ouverture du formulaire FSOP');
         console.log('🔍 [VALIDATION OBLIGATOIRE] LT:', lt, '| SN:', serialNumber);
+        const _opIdFsopForm = this.operator?.code || this.operator?.id || this.operator?.coderessource;
         try {
             const endpoint = `${this.apiService.baseUrl}/fsop/validate-serial`;
             console.log('🔍 [VALIDATION OBLIGATOIRE] Appel API:', endpoint);
@@ -1019,7 +1024,8 @@ class OperateurInterface {
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
                     launchNumber: lt,
-                    serialNumber: serialNumber
+                    serialNumber: serialNumber,
+                    operatorId: _opIdFsopForm
                 })
             });
 
@@ -1085,7 +1091,7 @@ class OperateurInterface {
             // Essayer de charger les données sauvegardées si elles existent
             let savedFormData = null;
             try {
-                const loadDataResponse = await this.apiService.loadFsopData(lt, templateCode, serialNumber);
+                const loadDataResponse = await this.apiService.loadFsopData(lt, templateCode, serialNumber, this.operator?.code || this.operator?.id || this.operator?.coderessource);
                 if (loadDataResponse.success && loadDataResponse.hasData && loadDataResponse.formData) {
                     savedFormData = loadDataResponse.formData;
                     console.log('✅ Données sauvegardées chargées pour continuer le formulaire');
@@ -1280,7 +1286,8 @@ class OperateurInterface {
                 templateCode: this.currentFsopData.templateCode,
                 serialNumber: this.currentFsopData.serialNumber,
                 formData: formData,
-                forceReplace: this.pendingForceReplace || false
+                forceReplace: this.pendingForceReplace || false,
+                operatorId: this.operator?.code || this.operator?.id || this.operator?.coderessource
             });
 
             // Réinitialiser le flag de remplacement forcé
