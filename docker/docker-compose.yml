@@ -59,6 +59,7 @@ services:
     container_name: sedi-tablette-frontend
     ports:
       - "8080:80"
+      - "8443:443"
     depends_on:
       sedi-backend:
         condition: service_healthy
