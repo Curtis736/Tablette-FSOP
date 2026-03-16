@@ -36,15 +36,14 @@
             display: inline-flex;
             align-items: center;
             justify-content: center;
-            margin-bottom: 24px;
+            margin-bottom: 20px;
             box-shadow: 0 4px 16px rgba(233,69,96,0.2);
         }
-        .qr-wrap canvas { display: block; }
         .url-box {
             background: #0f3460;
             border-radius: 8px;
             padding: 10px 16px;
-            font-size: 13px;
+            font-size: 12px;
             color: #7ab3ff;
             word-break: break-all;
             margin-bottom: 24px;
@@ -100,75 +99,218 @@
 </div>
 
 <script>
-// QR Code generator intégré (pas de dépendance externe)
-// Source: https://github.com/nayuki/QR-Code-generator (MIT)
-var QRCode=(function(){var t={},r=[[1,26,19,16,13,9,6],[1,44,34,28,22,16,10],[1,70,55,44,34,26,20],[2,100,80,64,48,36,28],[2,134,108,86,62,46,36],[2,172,136,108,76,60,46],[2,196,156,124,88,66,52],[2,242,194,154,110,86,68],[2,292,232,182,132,100,80],[4,346,274,216,154,122,98],[4,404,324,254,180,140,112],[4,466,370,290,206,158,130],[4,532,428,334,244,180,150],[4,581,461,365,261,197,155],[6,655,523,415,295,223,175],[6,733,589,453,325,253,199],[6,815,647,507,367,283,224],[6,901,721,563,397,313,249],[6,991,795,627,445,341,273],[7,1085,861,669,485,385,306],[8,1156,932,714,512,406,321],[8,1258,1006,782,568,442,353],[8,1364,1094,860,614,464,369],[8,1474,1174,914,664,514,406],[8,1588,1276,1000,718,538,428],[9,1706,1370,1062,754,596,470],[9,1828,1468,1128,808,628,509],[10,1921,1531,1193,871,661,531],[10,2051,1631,1267,911,701,574],[10,2185,1735,1373,985,745,602],[11,2323,1843,1455,1033,793,674],[11,2465,1955,1541,1115,845,708],[11,2611,2071,1631,1171,901,756],[13,2761,2191,1725,1231,961,806],[13,2876,2306,1812,1286,986,843],[14,3034,2434,1914,1354,1054,888],[14,3196,2566,1992,1426,1096,923],[15,3362,2702,2102,1502,1142,972],[15,3532,2812,2216,1582,1222,1024],[16,3706,2956,2334,1666,1276,1080]];function e(t,r){return(t>>>r|t<<32-r)>>>0}function n(t){return t>>>0}function i(t){var r=new Uint8Array(t.length);for(var e=0;e<t.length;e++)r[e]=t.charCodeAt(e)&255;return r}function o(t){var r=[];for(var e=0;e<t.length;e+=2)r.push(parseInt(t.substr(e,2),16));return new Uint8Array(r)}function a(t,r){var e=new Uint8Array(t.length+r.length);e.set(t);e.set(r,t.length);return e}var s=[0,1,1,0,0,0,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,1,1,1,1,1,1,1,1,0,0,0,0,0,0,0,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,0,0,0,0,0,0,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,0,0,0,0,0];function u(t){return t<128&&s[t]===1}function c(t){var r=[];for(var e=0;e<t.length;e++){var n=t.charCodeAt(e);if(n<128)r.push(n);else if(n<2048){r.push(192|n>>6);r.push(128|n&63)}else if(n<55296||n>=57344){r.push(224|n>>12);r.push(128|n>>6&63);r.push(128|n&63)}else{e++;n=65536+(n-55296<<10|t.charCodeAt(e)-56320);r.push(240|n>>18);r.push(128|n>>12&63);r.push(128|n>>6&63);r.push(128|n&63)}}return new Uint8Array(r)}function f(t,r){var e=t.length,n=0;while(n<e&&t[n]===0)n++;var i=new Array(e-n+r).fill(0);for(var o=n;o<e;o++)i[o-n]=t[o];return i}function l(t,r){var e=new Array(Math.max(t.length,r.length)+1).fill(0);for(var n=0;n<t.length;n++)e[n+e.length-t.length]^=t[n];for(var i=0;i<r.length;i++)e[i+e.length-r.length]^=r[i];return e}function h(t,r){if(t.length<r.length)return t;var e=t.slice();while(e.length>=r.length){var n=e[0];for(var i=0;i<r.length;i++)e[i]^=r[i]*n%255;while(e.length>0&&e[0]===0)e.shift()}return e}var p=[1,2,4,8,16,32,64,128,29,58,116,232,205,135,19,38,76,152,45,90,180,117,234,201,143,3,6,12,24,48,96,192,157,39,78,156,37,74,148,53,106,212,181,119,238,193,159,35,70,140,5,10,20,40,80,160,93,186,105,210,185,111,222,161,95,190,97,194,153,47,94,188,101,202,137,15,30,60,120,240,253,231,211,187,107,214,177,127,254,225,223,163,91,182,113,226,217,175,67,134,17,34,68,136,13,26,52,104,208,189,103,206,129,31,62,124,248,237,199,147,59,118,236,197,151,51,102,204,133,23,46,92,184,109,218,169,79,158,33,66,132,21,42,84,168,77,154,41,82,164,85,170,73,146,57,114,228,213,183,115,230,209,191,99,198,145,63,126,252,229,215,179,123,246,241,255,227,219,171,75,150,49,98,196,149,55,110,220,165,87,174,65,130,25,50,100,200,141,7,14,28,56,112,224,221,167,83,166,81,162,89,178,121,242,249,239,195,155,43,86,172,69,138,9,18,36,72,144,61,122,244,245,247,243,251,235,203,139,11,22,44,88,176,125,250,233,207,131,27,54,108,216,173,71,142];var v=new Array(256);for(var g=0;g<255;g++){v[p[g]]=g}function d(t,r){if(t===0||r===0)return 0;return p[(v[t]+v[r])%255]}function y(t){var r=new Array(t+1).fill(0);r[0]=1;for(var e=0;e<t;e++){for(var n=r.length-1;n>=1;n--)r[n]=d(r[n],p[e])^d(r[n-1],p[e]);r[0]=d(r[0],p[e])}return r}function m(t,r,e){var n=y(e);var i=f(t,e);var o=h(i,n);return f(o,e)}function w(t,r){var e=[];for(var n=0;n<t.length;n++)for(var i=7;i>=0;i--)e.push(t[n]>>i&1);if(r>0)for(var o=r-1;o>=0;o--)e.push(0);return e}function b(t){var r=[];for(var e=0;e<t.length;e+=8){var n=0;for(var i=0;i<8;i++)n=n<<1|t[e+i];r.push(n)}return new Uint8Array(r)}function x(t,r,e,n){var i=[];var o=0;var a=0;for(var s=0;s<t.length;s++){var u=t[s];for(var c=7;c>=0;c--){a=a<<1|(u>>c&1);o++;if(o===n){i.push(a);a=0;o=0}}}return i}function _(t){var r=[];for(var e=0;e<t.length;e++)r.push(t[e]);return r}function S(t,r){var e=r-t.length%r;if(e<r)for(var n=0;n<e;n++)t.push(0);return t}function k(t,r,e){var n=[];for(var i=0;i<t;i++)n.push([]);var o=0;for(var a=0;a<r;a++){for(var s=0;s<t;s++){if(a<e||s<t-r%t)n[s].push(o++)}else if(a===e&&s>=t-r%t)n[s].push(o++)}return n}function A(t,r,e,n,i){var o=[];for(var a=0;a<t;a++){for(var s=0;s<r;s++){o.push(n[a][s])}for(var u=0;u<e;u++){o.push(i[a][u])}}return o}function C(t,r,e){var n=[];var i=0;for(var o=0;o<t.length;o++){n.push(t[o]);if(++i===r){i=0;for(var a=0;a<e;a++)n.push(0)}}return n}function E(t){var r=[];for(var e=t.length-1;e>=0;e--)r.push(t[e]);return r}function T(t,r,e){var n=[];for(var i=0;i<t;i++)n.push(r[e+i]);return n}function I(t,r,e,n){var i=[];for(var o=0;o<t;o++)i.push(r[e+o*n]);return i}function O(t,r,e,n,i){for(var o=0;o<t;o++)r[e+o*n]=i[o]}function P(t,r,e,n,i){for(var o=0;o<t;o++)r[e+o]=i[o*n]}function R(t,r,e,n){var i=[];for(var o=0;o<t;o++)i.push(r[e+o]);return i}function M(t,r,e,n){for(var i=0;i<t;i++)r[e+i]=n[i]}function N(t,r,e){var n=[];for(var i=0;i<t;i++)n.push(r[e+i]);return n}function D(t,r,e){for(var n=0;n<t;n++)r[e+n]=0}function F(t,r){var e=[];for(var n=0;n<r;n++)e.push(t[n]);return e}function L(t,r){return t.slice(r)}function j(t,r,e){return t.slice(r,r+e)}function q(t,r){var e=new Uint8Array(t*r);return{data:e,width:t,height:r}}function B(t,r,e){t.data[r*t.width+e]}function z(t,r,e,n){t.data[r*t.width+e]=n}function G(t,r,e){return t.data[r*t.width+e]}function H(t){var r=t.length;var e=Math.sqrt(r);return{data:t,size:e}}function V(t,r,e){return t.data[r*t.size+e]}function W(t,r,e,n){t.data[r*t.size+e]=n}function U(t){return{data:new Uint8Array(t*t).fill(255),size:t}}function X(t,r,e,n,i){for(var o=r;o<r+n;o++)for(var a=e;a<e+i;a++)W(t,o,a,0)}function Y(t,r,e,n,i,o){for(var a=r;a<r+n;a++)for(var s=e;s<e+i;s++)W(t,a,s,o?0:255)}function Z(t,r,e){var n=t.size;Y(t,r,e,7,7,true);Y(t,r+1,e+1,5,5,false);Y(t,r+2,e+2,3,3,true);for(var i=0;i<8;i++){if(r+i<n)W(t,r+i,e+7,0);if(e+i<n)W(t,r+7,e+i,0);if(r+i<n&&e-1>=0)W(t,r+i,e-1,0);if(r-1>=0&&e+i<n)W(t,r-1,e+i,0)}}function $(t,r,e){var n=t.size;for(var i=8;i<n-8;i++){W(t,6,i,(i+1)%2===0?0:255);W(t,i,6,(i+1)%2===0?0:255)}}function J(t,r){var e=t.size;Z(t,0,0);Z(t,e-7,0);Z(t,0,e-7);$(t)}function K(t,r){var e=t.size;var n=[[6,18],[6,22],[6,26],[6,30],[6,34],[6,38],[6,42],[6,46],[6,50],[6,54],[6,58],[6,62],[6,66],[6,70],[6,74],[6,78],[6,82],[6,86],[6,90],[6,94],[6,98],[6,102],[18,22],[18,26],[18,30],[18,34],[18,38],[18,42],[18,46],[18,50],[18,54],[18,58],[18,62],[18,66],[18,70],[18,74],[18,78],[18,82],[18,86],[18,90],[18,94],[18,98],[18,102],[22,26],[22,30],[22,34],[22,38],[22,42],[22,46],[22,50],[22,54],[22,58],[22,62],[22,66],[22,70],[22,74],[22,78],[22,82],[22,86],[22,90],[22,94],[22,98],[22,102],[26,30],[26,34],[26,38],[26,42],[26,46],[26,50],[26,54],[26,58],[26,62],[26,66],[26,70],[26,74],[26,78],[26,82],[26,86],[26,90],[26,94],[26,98],[26,102]];if(r<2)return;var i=n.slice(0,(r-2)*4+(r-2>0?4:0));for(var o=0;o<i.length;o++){var a=i[o][0],s=i[o][1];if(G(t,a,s)!==255)continue;Y(t,a-2,s-2,5,5,true);Y(t,a-1,s-1,3,3,false);W(t,a,s,0)}}function Q(t,r,e){var n=t.size;var i=[[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0]];return 0}function tt(t,r,e,n,i){var o=t.size;for(var a=o-1;a>=1;a-=2){if(a===6)a=5;var s=false;for(var u=0;u<o;u++){for(var c=0;c<2;c++){var f=a-c,l=s?o-1-u:u;if(G(t,l,f)===255){var h=n[u*2+c];W(t,l,f,h?0:255)}}s=!s}}}
+// ── QR Code generator (no external dependency) ──────────────────────────────
+// Minimal QR encoder – Mode Byte, ECC Level M, auto version 1-10
+// Based on public domain algorithms
+(function(global){
+"use strict";
+var QR={};
+var GF_EXP=new Uint8Array(512),GF_LOG=new Uint8Array(256);
+(function(){var x=1;for(var i=0;i<255;i++){GF_EXP[i]=x;GF_LOG[x]=i;x<<=1;if(x&256)x^=285;}for(var i=255;i<512;i++)GF_EXP[i]=GF_EXP[i-255];})();
+function gfMul(x,y){if(x===0||y===0)return 0;return GF_EXP[GF_LOG[x]+GF_LOG[y]];}
+function gfPoly(n){var p=[1];for(var i=0;i<n;i++){var q=new Uint8Array(p.length+1);for(var j=0;j<p.length;j++){q[j]^=p[j];q[j+1]^=gfMul(p[j],GF_EXP[i]);}p=Array.from(q);}return p;}
+function rsEncode(data,nsym){var g=gfPoly(nsym);var msg=Array.from(data).concat(new Array(nsym).fill(0));for(var i=0;i<data.length;i++){var c=msg[i];if(c!==0)for(var j=0;j<g.length;j++)msg[i+j]^=gfMul(g[j],c);}return msg.slice(data.length);}
 
-// Implémentation simplifiée QR Code
-function generateQR(text, canvas, size) {
-    var ctx = canvas.getContext('2d');
-    canvas.width = size;
-    canvas.height = size;
-    
-    // Utiliser l'API QR native si disponible, sinon afficher l'URL
-    try {
-        // Génération QR simple via canvas
-        var modules = createQRMatrix(text);
-        var cellSize = size / modules.length;
-        
-        ctx.fillStyle = '#ffffff';
-        ctx.fillRect(0, 0, size, size);
-        ctx.fillStyle = '#000000';
-        
-        for (var r = 0; r < modules.length; r++) {
-            for (var c = 0; c < modules[r].length; c++) {
-                if (modules[r][c]) {
-                    ctx.fillRect(c * cellSize, r * cellSize, cellSize, cellSize);
-                }
-            }
+// Version/ECC tables [version][ecl=1(M)] => [ec_codewords, blocks, data_codewords]
+var EC_TABLE={
+  1:[10,1,16], 2:[16,1,28], 3:[26,2,22], 4:[18,2,32], 5:[24,2,43],
+  6:[16,4,27], 7:[18,4,31], 8:[22,4,37], 9:[22,5,37], 10:[26,5,41]
+};
+
+function getVersion(dataLen){
+  for(var v=1;v<=10;v++){
+    var t=EC_TABLE[v];
+    if(t[1]*t[2]>=dataLen+3)return v; // +3 for mode+length indicator overhead approx
+  }
+  return 10;
+}
+
+// Alignment pattern positions
+var ALIGN_POS=[[],[],[6,18],[6,22],[6,26],[6,30],[6,34],[6,22,38],[6,24,42],[6,28,46],[6,26,46]];
+
+function makeMatrix(ver){
+  var size=ver*4+17;
+  var m=[];
+  for(var i=0;i<size;i++){m.push(new Int8Array(size).fill(-1));}
+
+  function setRect(r,c,pat){
+    for(var i=0;i<pat.length;i++)for(var j=0;j<pat[i].length;j++)
+      if(r+i>=0&&r+i<size&&c+j>=0&&c+j<size)m[r+i][c+j]=pat[i][j];
+  }
+
+  var FP=[[1,1,1,1,1,1,1],[1,0,0,0,0,0,1],[1,0,1,0,1,0,1],[1,0,1,0,1,0,1],[1,0,1,0,1,0,1],[1,0,0,0,0,0,1],[1,1,1,1,1,1,1]];
+  setRect(0,0,FP); setRect(size-7,0,FP); setRect(0,size-7,FP);
+  // separators
+  for(var i=0;i<8;i++){
+    if(m[7][i]<0)m[7][i]=0; if(m[i][7]<0)m[i][7]=0;
+    if(m[size-8][i]<0)m[size-8][i]=0; if(m[size-8+i]&&m[size-8+i][7]<0)m[size-8+i][7]=0;
+    if(m[7][size-8+i]<0)m[7][size-8+i]=0; if(m[i][size-8]<0)m[i][size-8]=0;
+  }
+  // timing
+  for(var i=8;i<size-8;i++){m[6][i]=m[i][6]=(i%2===0)?1:0;}
+  // dark module
+  m[size-8][8]=1;
+  // format info placeholders
+  for(var i=0;i<9;i++){if(m[8][i]<0)m[8][i]=0;if(m[i][8]<0)m[i][8]=0;}
+  for(var i=0;i<8;i++){if(m[8][size-8+i]<0)m[8][size-8+i]=0;if(m[size-7+i]&&m[size-7+i][8]<0)m[size-7+i][8]=0;}
+  // alignment patterns
+  var ap=ALIGN_POS[ver]||[];
+  for(var ai=0;ai<ap.length;ai++)for(var aj=0;aj<ap.length;aj++){
+    var r=ap[ai]-2,c=ap[aj]-2;
+    if(m[r+2][c+2]>=0)continue;
+    setRect(r,c,[[1,1,1,1,1],[1,0,0,0,1],[1,0,1,0,1],[1,0,0,0,1],[1,1,1,1,1]]);
+  }
+  return m;
+}
+
+function applyMask(m,mask){
+  var size=m.length;
+  var r=[];
+  for(var i=0;i<size;i++){r.push(new Int8Array(m[i]));}
+  for(var i=0;i<size;i++)for(var j=0;j<size;j++){
+    if(r[i][j]<0)continue;
+    var inv=false;
+    if(mask===0)inv=(i+j)%2===0;
+    else if(mask===1)inv=i%2===0;
+    else if(mask===2)inv=j%3===0;
+    else if(mask===3)inv=(i+j)%3===0;
+    else if(mask===4)inv=(Math.floor(i/2)+Math.floor(j/3))%2===0;
+    else if(mask===5)inv=(i*j)%2+(i*j)%3===0;
+    else if(mask===6)inv=((i*j)%2+(i*j)%3)%2===0;
+    else if(mask===7)inv=((i+j)%2+(i*j)%3)%2===0;
+    if(inv)r[i][j]^=1;
+  }
+  return r;
+}
+
+function placeFormat(m,ecl,mask){
+  // ecl=1 (M) => bits 01
+  var fmt=(1<<3)|mask;
+  var g=0x537;
+  var tmp=fmt<<10;
+  for(var i=14;i>=10;i--){if(tmp&(1<<i))tmp^=g<<(i-10);}
+  var bits=((fmt<<10)|tmp)^0x5412;
+  var size=m.length;
+  for(var i=0;i<6;i++){m[8][i]=m[i][8]=(bits>>(14-i))&1;}
+  m[8][7]=(bits>>7)&1; m[7][8]=(bits>>8)&1; m[8][8]=(bits>>6)&1;
+  for(var i=9;i<15;i++){
+    m[8][size-15+i]=(bits>>(14-i))&1;
+    m[size-7+(i-8)][8]=(bits>>(14-i))&1;
+  }
+}
+
+function encode(text){
+  var bytes=[];
+  for(var i=0;i<text.length;i++){
+    var c=text.charCodeAt(i);
+    if(c<128)bytes.push(c);
+    else if(c<2048){bytes.push(0xC0|(c>>6));bytes.push(0x80|(c&63));}
+    else{bytes.push(0xE0|(c>>12));bytes.push(0x80|((c>>6)&63));bytes.push(0x80|(c&63));}
+  }
+  var ver=getVersion(bytes.length);
+  var t=EC_TABLE[ver];
+  var totalDC=t[1]*t[2];
+  // build data stream
+  var bits=[];
+  function addBits(val,n){for(var i=n-1;i>=0;i--)bits.push((val>>i)&1);}
+  addBits(4,4); // mode byte
+  var lenBits=ver<10?8:16;
+  addBits(bytes.length,lenBits);
+  for(var i=0;i<bytes.length;i++)addBits(bytes[i],8);
+  // terminator
+  for(var i=0;i<4&&bits.length<totalDC*8;i++)bits.push(0);
+  while(bits.length%8)bits.push(0);
+  // pad
+  var pads=[0xEC,0x11];var pi=0;
+  while(bits.length<totalDC*8){addBits(pads[pi%2],8);pi++;}
+  // to bytes
+  var dc=[];
+  for(var i=0;i<bits.length;i+=8){var b=0;for(var j=0;j<8;j++)b=(b<<1)|bits[i+j];dc.push(b);}
+  // RS
+  var blocks=[];var bsize=t[2];
+  for(var b=0;b<t[1];b++){
+    var chunk=dc.slice(b*bsize,(b+1)*bsize);
+    var ec=rsEncode(chunk,t[0]);
+    blocks.push({dc:chunk,ec:ec});
+  }
+  // interleave
+  var data=[];
+  var maxDC=Math.max.apply(null,blocks.map(function(b){return b.dc.length;}));
+  for(var i=0;i<maxDC;i++)for(var b=0;b<blocks.length;b++)if(i<blocks[b].dc.length)data.push(blocks[b].dc[i]);
+  var maxEC=blocks[0].ec.length;
+  for(var i=0;i<maxEC;i++)for(var b=0;b<blocks.length;b++)data.push(blocks[b].ec[i]);
+
+  // place data
+  var size=ver*4+17;
+  var matrix=makeMatrix(ver);
+  var idx=0,bitIdx=0;
+  var col=size-1;
+  while(col>0){
+    if(col===6)col--;
+    for(var upward=0;upward<2;upward++){
+      for(var row=0;row<size;row++){
+        var r=upward?(size-1-row):row;
+        var c=col-(upward?0:0); // will fix below
+        for(var dc2=0;dc2<2;dc2++){
+          var cc=col-dc2;
+          if(matrix[r][cc]>=0)continue;
+          var bit=0;
+          if(idx<data.length)bit=(data[idx]>>(7-bitIdx))&1;
+          bitIdx++;if(bitIdx===8){bitIdx=0;idx++;}
+          matrix[r][cc]=bit;
         }
-    } catch(e) {
-        ctx.fillStyle = '#fff';
-        ctx.fillRect(0,0,size,size);
-        ctx.fillStyle = '#e94560';
-        ctx.font = 'bold 14px Arial';
-        ctx.textAlign = 'center';
-        ctx.fillText('Utilise le bouton', size/2, size/2 - 10);
-        ctx.fillText('ci-dessous', size/2, size/2 + 10);
+      }
     }
+    col-=2;
+  }
+
+  // try masks 0-7, pick best penalty
+  var best=null,bestP=Infinity;
+  for(var mask=0;mask<8;mask++){
+    var mm=applyMask(matrix,mask);
+    placeFormat(mm,1,mask);
+    var p=penalty(mm);
+    if(p<bestP){bestP=p;best={m:mm,mask:mask};}
+  }
+  return best.m;
 }
 
-// Utiliser l'API QRCode native du navigateur si disponible
-function makeQR(text, canvas, size) {
-    if (typeof QRious !== 'undefined') {
-        new QRious({element: canvas, value: text, size: size, backgroundAlpha: 1, foreground: '#000', background: '#fff'});
-        return;
+function penalty(m){
+  var size=m.length,p=0;
+  // rule 1: 5+ same in row/col
+  for(var i=0;i<size;i++){
+    var rc=1,cc=1;
+    for(var j=1;j<size;j++){
+      rc=(m[i][j]===m[i][j-1])?rc+1:1;
+      cc=(m[j][i]===m[j-1][i])?cc+1:1;
+      if(rc===5)p+=3;else if(rc>5)p++;
+      if(cc===5)p+=3;else if(cc>5)p++;
     }
-    // Fallback: image QR via API externe si internet dispo, sinon message
-    var img = new Image();
-    img.onload = function() {
-        var ctx = canvas.getContext('2d');
-        canvas.width = size; canvas.height = size;
-        ctx.drawImage(img, 0, 0, size, size);
-    };
-    img.onerror = function() {
-        var ctx = canvas.getContext('2d');
-        canvas.width = size; canvas.height = size;
-        ctx.fillStyle = '#fff'; ctx.fillRect(0,0,size,size);
-        ctx.fillStyle = '#333'; ctx.font = '12px Arial'; ctx.textAlign = 'center';
-        ctx.fillText('Utilise le bouton', size/2, size/2);
-    };
-    img.src = 'https://api.qrserver.com/v1/create-qr-code/?size=' + size + 'x' + size + '&data=' + encodeURIComponent(text);
+  }
+  return p;
 }
-</script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/qrious/4.0.2/qrious.min.js"></script>
-<script>
-    var certUrl = 'http://' + window.location.hostname + ':8080/ssl/SEDI-ATI-CA.crt';
-    document.getElementById('cert-url-display').textContent = certUrl;
-    document.getElementById('btn-dl').href = certUrl;
 
-    var canvas = document.getElementById('qr');
-    makeQR(certUrl, canvas, 220);
+QR.generate=function(text){return encode(text);};
+QR.draw=function(text,canvas,size){
+  var m=QR.generate(text);
+  var n=m.length;
+  var scale=Math.floor(size/n);
+  var actual=scale*n;
+  canvas.width=actual;canvas.height=actual;
+  var ctx=canvas.getContext('2d');
+  ctx.fillStyle='#fff';ctx.fillRect(0,0,actual,actual);
+  ctx.fillStyle='#000';
+  for(var r=0;r<n;r++)for(var c=0;c<n;c++)
+    if(m[r][c]===1)ctx.fillRect(c*scale,r*scale,scale,scale);
+};
+global.QR=QR;
+})(window);
+// ── End QR ──────────────────────────────────────────────────────────────────
+
+var certUrl = 'http://' + window.location.hostname + ':8080/ssl/SEDI-ATI-CA.crt';
+document.getElementById('cert-url-display').textContent = certUrl;
+document.getElementById('btn-dl').href = certUrl;
+QR.draw(certUrl, document.getElementById('qr'), 220);
 </script>
 </body>
 </html>
