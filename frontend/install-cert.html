@@ -174,7 +174,7 @@
             </div>
         </div>
 
-        <a class="btn-download" href="/ssl/SEDI-ATI-CA.crt" download="SEDI-ATI-CA.crt">
+        <a class="btn-download" id="btn-dl" href="/ssl/SEDI-ATI-CA.crt">
             ⬇️ Télécharger le certificat
         </a>
 
@@ -183,7 +183,8 @@
     </div>
 
     <script>
-        const certUrl = window.location.protocol + '//' + window.location.hostname + ':' + window.location.port + '/ssl/SEDI-ATI-CA.crt';
+        const certUrl = 'http://' + window.location.hostname + ':8080/ssl/SEDI-ATI-CA.crt';
+        document.getElementById('btn-dl').href = certUrl;
         new QRCode(document.getElementById('qrcode'), {
             text: certUrl,
             width: 200,
