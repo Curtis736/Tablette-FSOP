@@ -172,7 +172,6 @@ async function ensureFsopDirectory(rootLt, res) {
     }
     return { ok: true, fsopDir };
 }
-}
 
 function normalizeTemplateCode(value) {
     const raw = String(value || '').trim().toUpperCase();
