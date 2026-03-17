@@ -2,6 +2,7 @@ const express = require('express');
 const path = require('path');
 const fs = require('fs/promises');
 const fsp = fs; // Alias for consistency with other parts of the codebase
+const AdmZip = require('adm-zip');
 
 const {
     safeIsDirectory,
@@ -13,6 +14,23 @@ const {
 } = require('../services/fsopWordService');
 const { readTemplatesFromExcel } = require('../services/fsopTemplatesExcelService');
 const { parseWordStructure } = require('../services/fsopWordParser');
+
+// Verrou par clé de fichier pour éviter les sauvegardes simultanées corrompant le même FSOP
+const _saveLocks = new Map();
+async function withSaveLock(key, fn) {
+    while (_saveLocks.has(key)) {
+        await _saveLocks.get(key);
+    }
+    let resolve;
+    const lock = new Promise(r => { resolve = r; });
+    _saveLocks.set(key, lock);
+    try {
+        return await fn();
+    } finally {
+        _saveLocks.delete(key);
+        resolve();
+    }
+}
 const { executeQuery } = require('../config/database');
 const { requireDebugMode } = require('../middleware/auth');
 
@@ -88,8 +106,7 @@ async function resolveFirstExistingFile(candidates) {
 
 function normalizeTemplateCode(value) {
     const raw = String(value || '').trim().toUpperCase();
-    // Accept "F469" only (MVP) – keep it strict to match template naming rules.
-    if (!/^F\d{3}$/i.test(raw)) {
+    if (!/^F\d{3,4}$/i.test(raw)) {
         return null;
     }
     return raw;
@@ -401,8 +418,7 @@ router.get('/template/:templateCode/structure', async (req, res) => {
         return res.status(500).json({ 
             error: 'INTERNAL_ERROR',
             message: error.message,
-            details: process.env.NODE_ENV === 'development' ? error.stack : undefined,
-            stack: error.stack // Always include stack for debugging
+            details: process.env.NODE_ENV === 'development' ? error.stack : undefined
         });
     }
 });
@@ -649,11 +665,6 @@ router.post('/open', requireFsopSession, async (req, res) => {
         }
 
         console.log(`📥 Envoi du fichier au client...`);
-        // Return both the file download and saved form data
-        if (savedFormData) {
-            // If we have saved data, return it in response headers (custom header)
-            res.setHeader('X-FSOP-Saved-Data', encodeURIComponent(JSON.stringify(savedFormData)));
-        }
         return res.download(destPath, destName);
     } catch (error) {
         console.error('❌ FSOP open error:', error);
@@ -940,27 +951,21 @@ router.post('/save', requireFsopSession, async (req, res) => {
         }
         const destName = `FSOP_${templateCode}_${serialNumber}_${launchNumber}.docx`;
         const destPath = path.join(fsopDir, destName);
+        const lockKey = destPath;
         console.log(`📝 Nom du fichier généré: ${destName} (Template: ${templateCode}, SN: ${serialNumber}, LT: ${launchNumber})`);
 
-        // Check if file already exists and is being used
+        // Copy template to destination — protégé par verrou pour éviter les corruptions simultanées
         try {
-            const existingStats = await fsp.stat(destPath);
-            if (existingStats) {
-                console.log(`⚠️ Fichier existe déjà: ${destPath}, il sera écrasé`);
-                // Try to check if file is locked (on Windows) or in use
-                // On Linux, we can't easily check this, so we'll try and catch the error
-            }
-        } catch (_) {
-            // File doesn't exist, which is fine
-        }
-
-        // Copy template to destination
-        try {
-            // If file exists, try to remove it first to avoid issues
+            await withSaveLock(lockKey, async () => {
+            // Écriture atomique : copie vers un fichier temporaire, puis renommage
+            const tmpPath = destPath + '.tmp.' + Date.now();
+            await fs.copyFile(templatePath, tmpPath);
             try {
-                await fsp.unlink(destPath);
+                await fsp.rename(tmpPath, destPath);
             } catch (_) {
-                // Ignore if file doesn't exist
+                // Sur Windows cross-device, rename peut échouer : fallback copyFile + unlink
+                await fs.copyFile(tmpPath, destPath);
+                await fsp.unlink(tmpPath).catch(() => {});
             }
             
             await fs.copyFile(templatePath, destPath);
@@ -975,7 +980,6 @@ router.post('/save', requireFsopSession, async (req, res) => {
             
             // Verify it's a valid DOCX (ZIP file)
             try {
-                const AdmZip = require('adm-zip');
                 const testZip = new AdmZip(destPath);
                 const testEntry = testZip.getEntry('word/document.xml');
                 if (!testEntry) {
@@ -986,6 +990,7 @@ router.post('/save', requireFsopSession, async (req, res) => {
                 console.error(`❌ Fichier copié n'est pas un DOCX valide:`, zipError.message);
                 throw new Error(`Le fichier copié est corrompu: ${zipError.message}`);
             }
+            }); // fin withSaveLock
         } catch (copyError) {
             console.error(`❌ Erreur lors de la copie du template:`, copyError.message);
             return res.status(500).json({
@@ -1131,7 +1136,6 @@ router.post('/save', requireFsopSession, async (req, res) => {
         return res.json({
             success: true,
             message: 'FSOP sauvegardé avec succès',
-            filePath: destPath,
             fileName: destName,
             excelUpdate: excelUpdateResult
         });

@@ -7,6 +7,7 @@ const compression = require('compression');
 require('dotenv').config();
 
 const dbConfig = require('./config/database');
+const { executeQuery, executeNonQuery } = require('./config/database');
 const operatorRoutes = require('./routes/operators');
 const lancementRoutes = require('./routes/lancements');
 const operationRoutes = require('./routes/operations');
@@ -17,6 +18,7 @@ const fsopRoutes = require('./routes/fsop');
 const heartbeatRoutes = require('./routes/heartbeat');
 const { metricsMiddleware, getMetrics, register } = require('./middleware/metrics');
 const { auditMiddleware } = require('./middleware/audit');
+const { authenticateAdmin } = require('./middleware/auth');
 const apmService = require('./services/APMService');
 const cacheService = require('./services/CacheService');
 const MaintenanceManager = require('./scripts/maintenance');
@@ -41,19 +43,16 @@ const allowedOrigins = [
     process.env.FRONTEND_URL
 ].filter(Boolean);
 
-// Configure CORS - Allow all origins for now to fix CORS issues
 app.use(cors({
     origin: (origin, callback) => {
-        // Allow requests with no origin (like mobile apps or curl requests)
+        // Allow requests with no origin (mobile apps, curl, same-origin)
         if (!origin) {
             return callback(null, true);
         }
-        // Allow any origin that matches our list or in development
         if (allowedOrigins.includes(origin) || process.env.NODE_ENV !== 'production') {
             callback(null, true);
         } else {
-            // Allow anyway for now to fix CORS issues
-            callback(null, true);
+            callback(new Error(`CORS: origine non autorisée: ${origin}`));
         }
     },
     credentials: true,
@@ -64,11 +63,21 @@ app.use(cors({
     optionsSuccessStatus: 204
 }));
 
-// Middleware de sécurité - Configure Helmet to allow CORS
 app.use(helmet({
-    crossOriginResourcePolicy: false, // Disable CORP to allow CORS
+    crossOriginResourcePolicy: { policy: 'cross-origin' },
     crossOriginEmbedderPolicy: false,
-    contentSecurityPolicy: false // Disable CSP for now to avoid CORS conflicts
+    contentSecurityPolicy: {
+        directives: {
+            defaultSrc: ["'self'"],
+            scriptSrc: ["'self'", "'unsafe-inline'"],
+            styleSrc: ["'self'", "'unsafe-inline'"],
+            imgSrc: ["'self'", 'data:', 'blob:'],
+            connectSrc: ["'self'"],
+            fontSrc: ["'self'", 'data:'],
+            objectSrc: ["'none'"],
+            upgradeInsecureRequests: [],
+        },
+    },
 }));
 
 // Rate limiting global:
@@ -170,8 +179,8 @@ app.get('/api/health', (req, res) => {
     });
 });
 
-// Route métriques Prometheus
-app.get('/metrics', async (req, res) => {
+// Route métriques Prometheus (admin uniquement)
+app.get('/metrics', authenticateAdmin, async (req, res) => {
     try {
         res.set('Content-Type', register.contentType);
         const metrics = await getMetrics();
@@ -182,8 +191,7 @@ app.get('/metrics', async (req, res) => {
     }
 });
 
-// ⚡ OPTIMISATION : Route APM pour monitoring détaillé
-app.get('/api/apm/metrics', async (req, res) => {
+app.get('/api/apm/metrics', authenticateAdmin, async (req, res) => {
     try {
         const metrics = await apmService.getMetrics();
         res.set('Content-Type', 'text/plain');
@@ -194,7 +202,7 @@ app.get('/api/apm/metrics', async (req, res) => {
     }
 });
 
-app.get('/api/apm/stats', async (req, res) => {
+app.get('/api/apm/stats', authenticateAdmin, async (req, res) => {
     try {
         const stats = apmService.getPerformanceStats();
         res.json(stats);
@@ -261,8 +269,6 @@ async function performStartupCleanup() {
         }
 
         console.log('🧹 Nettoyage automatique au démarrage...');
-        
-        const { executeQuery } = require('./config/database');
         
         // Nettoyer les sessions expirées
         const cleanupSessionsQuery = `

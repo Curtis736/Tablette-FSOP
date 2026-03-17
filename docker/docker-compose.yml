@@ -8,9 +8,9 @@ services:
     environment:
       - NODE_ENV=production
       - PORT=3001
-      # Admin authentication (override via docker/.env if needed)
+      # Admin authentication — définir dans docker/.env (ne jamais laisser vide)
       - ADMIN_USERNAME=${ADMIN_USERNAME:-admin}
-      - ADMIN_PASSWORD=${ADMIN_PASSWORD:-admin}
+      - ADMIN_PASSWORD=${ADMIN_PASSWORD}
       - DB_SERVER=SERVEURERP
       # App DB (SEDI_APP_INDEPENDANTE) + ERP DB (SEDI_ERP)
       - DB_DATABASE=${DB_DATABASE:-SEDI_APP_INDEPENDANTE}
@@ -20,10 +20,10 @@ services:
       - DB_ERP_PASSWORD=${DB_ERP_PASSWORD:-QUALITE}
       - DB_ERP_ENCRYPT=${DB_ERP_ENCRYPT:-false}
       - DB_ERP_TRUST_CERT=${DB_ERP_TRUST_CERT:-true}
-      - DB_USER=QUALITE
-      - DB_PASSWORD=QUALITE
-      - DB_ENCRYPT=false
-      - DB_TRUST_CERT=true
+      - DB_USER=${DB_USER:-QUALITE}
+      - DB_PASSWORD=${DB_PASSWORD:-QUALITE}
+      - DB_ENCRYPT=${DB_ENCRYPT:-false}
+      - DB_TRUST_CERT=${DB_TRUST_CERT:-true}
       - FRONTEND_URL=http://localhost
       - API_TIMEOUT=30000
       - API_RETRY_ATTEMPTS=3
@@ -110,19 +110,19 @@ services:
     image: grafana/grafana:latest
     container_name: sedi-grafana
     ports:
-      - "3002:3000"
+      - "127.0.0.1:3002:3000"
     volumes:
       - grafana_data:/var/lib/grafana
       - ./grafana/provisioning:/etc/grafana/provisioning:ro
       - ./grafana/dashboards:/var/lib/grafana/dashboards:ro
     environment:
-      - GF_SECURITY_ADMIN_USER=admin
-      - GF_SECURITY_ADMIN_PASSWORD=admin
+      - GF_SECURITY_ADMIN_USER=${GRAFANA_ADMIN_USER:-grafana-admin}
+      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_ADMIN_PASSWORD:?GRAFANA_ADMIN_PASSWORD must be set}
       - GF_USERS_ALLOW_SIGN_UP=false
-      - GF_SERVER_ROOT_URL=http://192.168.1.26:8080/grafana/
+      - GF_SERVER_ROOT_URL=${GRAFANA_ROOT_URL:-http://192.168.1.26:8080/grafana/}
       - GF_SERVER_SERVE_FROM_SUB_PATH=true
       - GF_INSTALL_PLUGINS=
-      - GF_SECURITY_SECRET_KEY=sedi-grafana-secret-key-change-in-production
+      - GF_SECURITY_SECRET_KEY=${GRAFANA_SECRET_KEY:?GRAFANA_SECRET_KEY must be set}
       - GF_AUTH_ANONYMOUS_ENABLED=false
       - GF_AUTH_BASIC_ENABLED=true
       - GF_AUTH_DISABLE_LOGIN_FORM=false

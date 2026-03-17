@@ -1,7 +1,19 @@
 // Routes d'authentification
 const express = require('express');
+const crypto = require('crypto');
 const router = express.Router();
 const { getAdminCredentials, issueToken, revokeToken, verifyToken } = require('../services/adminAuthService');
+
+function timingSafeEqual(a, b) {
+    const ba = Buffer.from(String(a));
+    const bb = Buffer.from(String(b));
+    if (ba.length !== bb.length) {
+        // Comparer quand même pour éviter le timing leak sur la longueur
+        crypto.timingSafeEqual(ba, ba);
+        return false;
+    }
+    return crypto.timingSafeEqual(ba, bb);
+}
 
 // POST /api/auth/login - Connexion admin
 router.post('/login', async (req, res) => {
@@ -16,8 +28,7 @@ router.post('/login', async (req, res) => {
             });
         }
 
-        // Vérification des identifiants admin (configurable via env)
-        if (username === creds.username && password === creds.password) {
+        if (timingSafeEqual(username, creds.username) && timingSafeEqual(password, creds.password)) {
             const { token, expiresAt } = issueToken(username);
             res.json({
                 success: true,

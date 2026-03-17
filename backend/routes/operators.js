@@ -17,60 +17,6 @@ const ConsolidationService = require('../services/ConsolidationService');
 const lancementCache = new Map();
 const LANCEMENT_CACHE_TTL = 5 * 60 * 1000; // 5 minutes
 
-// Fonction de nettoyage des données incohérentes
-async function cleanupInconsistentData(operatorId) {
-    try {
-        console.log(`🧹 Nettoyage des données incohérentes pour l'opérateur ${operatorId}...`);
-        
-        // 1. Trouver tous les lancements de cet opérateur
-        const operatorLancementsQuery = `
-            SELECT DISTINCT CodeLanctImprod 
-            FROM [SEDI_APP_INDEPENDANTE].[dbo].[ABHISTORIQUE_OPERATEURS]
-            WHERE OperatorCode = @operatorId
-        `;
-        
-        const operatorLancements = await executeQuery(operatorLancementsQuery, { operatorId });
-        
-        for (const lancement of operatorLancements) {
-            const lancementCode = lancement.CodeLanctImprod;
-            
-            // 2. Vérifier s'il y a des événements avec d'autres OperatorCode pour ce lancement
-            const inconsistentEventsQuery = `
-                SELECT NoEnreg, OperatorCode, Ident, DateCreation
-                FROM [SEDI_APP_INDEPENDANTE].[dbo].[ABHISTORIQUE_OPERATEURS]
-                WHERE CodeLanctImprod = @lancementCode 
-                AND OperatorCode != @operatorId
-            `;
-            
-            const inconsistentEvents = await executeQuery(inconsistentEventsQuery, { 
-                lancementCode, 
-                operatorId 
-            });
-            
-            if (inconsistentEvents.length > 0) {
-                console.log(`⚠️ Lancement ${lancementCode} a ${inconsistentEvents.length} événements incohérents:`);
-                inconsistentEvents.forEach(e => {
-                    console.log(`  - NoEnreg: ${e.NoEnreg}, OperatorCode: ${e.OperatorCode}, Ident: ${e.Ident}`);
-                });
-                
-                // 3. Supprimer les événements incohérents
-                const deleteQuery = `
-                    DELETE FROM [SEDI_APP_INDEPENDANTE].[dbo].[ABHISTORIQUE_OPERATEURS]
-                    WHERE CodeLanctImprod = @lancementCode 
-                    AND OperatorCode != @operatorId
-                `;
-                
-                await executeNonQuery(deleteQuery, { lancementCode, operatorId });
-                console.log(`✅ ${inconsistentEvents.length} événements incohérents supprimés pour ${lancementCode}`);
-            }
-        }
-        
-        console.log(`✅ Nettoyage terminé pour l'opérateur ${operatorId}`);
-        
-    } catch (error) {
-        console.error('❌ Erreur lors du nettoyage:', error);
-    }
-}
 
 // Fonction utilitaire pour formater les dates/heures (format HH:mm seulement, fuseau horaire Paris)
 function formatDateTime(dateTime) {
@@ -484,9 +430,6 @@ router.post('/logout', async (req, res) => {
                 error: 'Code opérateur requis' 
             });
         }
-        
-        // Nettoyer les données incohérentes avant la déconnexion
-        await cleanupInconsistentData(code);
         
         // Récupérer la session active avant fermeture
         const activeSession = await SessionService.getActiveSession(code);
