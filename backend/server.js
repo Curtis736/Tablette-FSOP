@@ -40,6 +40,8 @@ const allowedOrigins = [
     'http://127.0.0.1:3001',
     'http://192.168.1.26:8080',
     'http://192.168.1.26:3001',
+    'https://192.168.1.26:8443',
+    'https://localhost:8443',
     process.env.FRONTEND_URL
 ].filter(Boolean);
 
