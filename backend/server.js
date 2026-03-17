@@ -300,7 +300,7 @@ async function performStartupCleanup() {
                 AND h.OperatorCode != ''
                 AND h.OperatorCode != '0'
         `;
-        const orphanResult = await executeQuery(orphanOperationsQuery);
+        await executeQuery(orphanOperationsQuery);
         console.log('✅ Opérations orphelines terminées automatiquement');
         
         // Nettoyer les doublons d'opérations

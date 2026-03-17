@@ -104,6 +104,76 @@ async function resolveFirstExistingFile(candidates) {
     return null;
 }
 
+// Cache pour findTemplateFile (TTL 5 min) — évite les parcours SMB répétés
+const _templateFileCache = new Map(); // key: `${dir}|${code}` -> { path, expiresAt }
+const TEMPLATE_CACHE_TTL = 5 * 60 * 1000;
+async function findTemplateFileCached(dir, code, depth) {
+    const key = `${dir}|${code}`;
+    const cached = _templateFileCache.get(key);
+    if (cached && Date.now() < cached.expiresAt) return cached.path;
+    const result = await findTemplateFileCached(dir, code, depth);
+    _templateFileCache.set(key, { path: result, expiresAt: Date.now() + TEMPLATE_CACHE_TTL });
+    return result;
+}
+
+// Cache pour resolveLtRoot (TTL 2 min)
+const _ltRootCache = new Map(); // key: `${traceRoot}|${launchNumber}` -> { path, expiresAt }
+const LT_ROOT_CACHE_TTL = 2 * 60 * 1000;
+async function resolveLtRootCached(traceRoot, launchNumber) {
+    const key = `${traceRoot}|${launchNumber}`;
+    const cached = _ltRootCache.get(key);
+    if (cached && Date.now() < cached.expiresAt) return cached.path;
+    const result = await resolveLtRootCached(traceRoot, launchNumber);
+    if (result) _ltRootCache.set(key, { path: result, expiresAt: Date.now() + LT_ROOT_CACHE_TTL });
+    return result;
+}
+
+// Résout le répertoire des templates (appelé une fois, résultat mis en cache)
+let _templatesDirCache = null;
+async function resolveTemplatesDir() {
+    if (_templatesDirCache && await safeIsDirectory(_templatesDirCache)) return _templatesDirCache;
+    _templatesDirCache = await resolveFirstExistingDir([
+        process.env.FSOP_TEMPLATES_DIR,
+        DEFAULT_TEMPLATES_DIR_LINUX,
+        DEFAULT_TEMPLATES_DIR_LINUX_ALT,
+        DEFAULT_TEMPLATES_DIR_WIN
+    ]);
+    return _templatesDirCache;
+}
+
+// Résout le fichier Excel des templates (appelé une fois, résultat mis en cache)
+let _templatesXlsxCache = null;
+async function resolveTemplatesXlsx() {
+    if (_templatesXlsxCache && await safeIsFile(_templatesXlsxCache)) return _templatesXlsxCache;
+    _templatesXlsxCache = await resolveFirstExistingFile([
+        process.env.FSOP_TEMPLATES_XLSX_PATH,
+        DEFAULT_TEMPLATES_XLSX_LINUX,
+        DEFAULT_TEMPLATES_XLSX_LINUX_ALT,
+        DEFAULT_TEMPLATES_XLSX_WIN
+    ]);
+    return _templatesXlsxCache;
+}
+
+// Garantit l'existence du répertoire FSOP dans le dossier LT
+// Retourne { ok: true, fsopDir } ou { ok: false, response } (à retourner directement)
+async function ensureFsopDirectory(rootLt, res) {
+    const fsopDir = path.join(rootLt, 'FSOP');
+    if (await safeIsDirectory(fsopDir)) return { ok: true, fsopDir };
+    try {
+        await fs.mkdir(fsopDir, { recursive: true });
+        if (!(await safeIsDirectory(fsopDir))) {
+            return { ok: false, response: res.status(422).json({ error: 'FSOP_DIR_NOT_FOUND', fsopDir, message: `Répertoire FSOP inaccessible après création: ${fsopDir}` }) };
+        }
+    } catch (err) {
+        if (await safeIsFile(fsopDir)) {
+            return { ok: false, response: res.status(422).json({ error: 'FSOP_DIR_CONFLICT', fsopDir, rootLt, message: `Un fichier existe déjà avec le nom FSOP: ${fsopDir}` }) };
+        }
+        return { ok: false, response: res.status(422).json({ error: 'FSOP_DIR_CREATE_FAILED', fsopDir, rootLt, message: `Impossible de créer le répertoire FSOP dans ${rootLt}`, details: process.env.NODE_ENV === 'development' ? err.message : undefined }) };
+    }
+    return { ok: true, fsopDir };
+}
+}
+
 function normalizeTemplateCode(value) {
     const raw = String(value || '').trim().toUpperCase();
     if (!/^F\d{3,4}$/i.test(raw)) {
@@ -232,7 +302,7 @@ router.get('/debug/:launchNumber', requireDebugMode, async (req, res) => {
             return res.status(503).json({ error: 'TRACEABILITY_DIR_NOT_CONFIGURED' });
         }
 
-        const rootLt = await resolveLtRoot(traceRoot, launchNumber);
+        const rootLt = await resolveLtRootCached(traceRoot, launchNumber);
         if (!rootLt) {
             return res.status(422).json({ 
                 error: 'LT_DIR_NOT_FOUND',
@@ -301,26 +371,9 @@ router.get('/debug/:launchNumber', requireDebugMode, async (req, res) => {
 
 router.get('/templates', async (req, res) => {
     try {
-        // Excel templates list: try env, then common Linux paths, then Windows default.
-        const excelPath = await resolveFirstExistingFile([
-            process.env.FSOP_TEMPLATES_XLSX_PATH,
-            DEFAULT_TEMPLATES_XLSX_LINUX,
-            DEFAULT_TEMPLATES_XLSX_LINUX_ALT,
-            DEFAULT_TEMPLATES_XLSX_WIN
-        ]);
-
+        const excelPath = await resolveTemplatesXlsx();
         if (!excelPath) {
-            return res.status(503).json({
-                error: 'TEMPLATES_SOURCE_UNAVAILABLE',
-                message: 'Le fichier Excel des templates est introuvable ou inaccessible',
-                tried: [
-                    process.env.FSOP_TEMPLATES_XLSX_PATH,
-                    DEFAULT_TEMPLATES_XLSX_LINUX,
-                    DEFAULT_TEMPLATES_XLSX_LINUX_ALT,
-                    DEFAULT_TEMPLATES_XLSX_WIN
-                ].filter(Boolean),
-                hint: 'Définissez FSOP_TEMPLATES_XLSX_PATH (Linux: /mnt/templates/... ou /mnt/services/... ).'
-            });
+            return res.status(503).json({ error: 'TEMPLATES_SOURCE_UNAVAILABLE', hint: 'Définissez FSOP_TEMPLATES_XLSX_PATH dans .env' });
         }
 
         console.log(`📋 Lecture des templates depuis: ${excelPath}`);
@@ -362,13 +415,7 @@ router.get('/template/:templateCode/structure', async (req, res) => {
             });
         }
 
-        // Templates: try env, then common Linux paths, then Windows default.
-        const templatesBaseDir = await resolveFirstExistingDir([
-            process.env.FSOP_TEMPLATES_DIR,
-            DEFAULT_TEMPLATES_DIR_LINUX,
-            DEFAULT_TEMPLATES_DIR_LINUX_ALT,
-            DEFAULT_TEMPLATES_DIR_WIN
-        ]);
+        const templatesBaseDir = await resolveTemplatesDir();
 
         if (!templatesBaseDir) {
             return res.status(503).json({ 
@@ -388,7 +435,7 @@ router.get('/template/:templateCode/structure', async (req, res) => {
         const depthLimit = Number.parseInt(process.env.FSOP_SEARCH_DEPTH || '3', 10);
         const searchDepth = Number.isFinite(depthLimit) && depthLimit >= 0 ? depthLimit : 3;
         
-        const templatePath = await findTemplateFile(templatesBaseDir, templateCode, searchDepth);
+        const templatePath = await findTemplateFileCached(templatesBaseDir, templateCode, searchDepth);
         
         if (!templatePath) {
             return res.status(404).json({ 
@@ -406,15 +453,10 @@ router.get('/template/:templateCode/structure', async (req, res) => {
         
         return res.json({
             templateCode: templateCode,
-            templatePath: templatePath,
             structure: structure
         });
     } catch (error) {
-        console.error('❌ FSOP structure error:', error);
-        console.error('❌ Error message:', error.message);
-        console.error('❌ Stack trace:', error.stack);
-        console.error('❌ Error name:', error.name);
-        console.error('❌ Error code:', error.code);
+        console.error('❌ FSOP structure error:', error.message);
         return res.status(500).json({ 
             error: 'INTERNAL_ERROR',
             message: error.message,
@@ -455,7 +497,7 @@ router.post('/open', requireFsopSession, async (req, res) => {
 
         // Resolve LT root directory (supports depth 1: <traceRoot>/<child>/<LT>)
         console.log(`🔍 Recherche du répertoire LT: ${launchNumber} dans ${traceRoot}`);
-        const rootLt = await resolveLtRoot(traceRoot, launchNumber);
+        const rootLt = await resolveLtRootCached(traceRoot, launchNumber);
         if (!rootLt) {
             console.error(`❌ Répertoire LT introuvable: ${launchNumber} dans ${traceRoot}`);
             return res.status(422).json({ 
@@ -466,86 +508,20 @@ router.post('/open', requireFsopSession, async (req, res) => {
         }
         console.log(`✅ Répertoire LT trouvé: ${rootLt}`);
 
-        const fsopDir = path.join(rootLt, 'FSOP');
-        console.log(`🔍 Vérification du répertoire FSOP: ${fsopDir}`);
-        
-        // Vérifier d'abord si le répertoire existe déjà
-        const fsopDirExists = await safeIsDirectory(fsopDir);
-        
-        if (!fsopDirExists) {
-            // Créer le répertoire FSOP s'il n'existe pas
-            // recursive: true crée aussi les répertoires parents si nécessaire
-            try {
-                await fs.mkdir(fsopDir, { recursive: true });
-                console.log(`✅ Répertoire FSOP créé: ${fsopDir}`);
-                
-                // Vérifier que la création a réussi
-                if (!(await safeIsDirectory(fsopDir))) {
-                    console.error(`❌ Répertoire FSOP introuvable après création: ${fsopDir}`);
-                    return res.status(422).json({
-                        error: 'FSOP_DIR_NOT_FOUND',
-                        fsopDir,
-                        rootLt,
-                        message: `Le répertoire FSOP n'a pas pu être créé ou n'est pas accessible: ${fsopDir}`
-                    });
-                }
-            } catch (err) {
-                // Vérifier si c'est parce qu'un fichier existe avec le même nom
-                const existsAsFile = await safeIsFile(fsopDir);
-                if (existsAsFile) {
-                    console.error(`❌ Un fichier existe déjà avec le nom du répertoire FSOP: ${fsopDir}`);
-                    return res.status(422).json({
-                        error: 'FSOP_DIR_CONFLICT',
-                        fsopDir,
-                        rootLt,
-                        message: `Un fichier existe déjà avec le nom du répertoire FSOP. Impossible de créer le répertoire: ${fsopDir}`
-                    });
-                }
-                
-                console.error(`❌ Impossible de créer le répertoire FSOP: ${fsopDir}`, err.message);
-                return res.status(422).json({
-                    error: 'FSOP_DIR_CREATE_FAILED',
-                    fsopDir,
-                    rootLt,
-                    message: `Impossible de créer le répertoire FSOP dans ${rootLt}`,
-                    details: process.env.NODE_ENV === 'development' ? err.message : undefined
-                });
-            }
-        } else {
-            console.log(`✅ Répertoire FSOP existe déjà: ${fsopDir}`);
-        }
+        const { ok: fsopOk, fsopDir, response: fsopErr } = await ensureFsopDirectory(rootLt, res);
+        if (!fsopOk) return fsopErr;
+        console.log(`✅ Répertoire FSOP: ${fsopDir}`);
 
-        // Les templates sont dans le répertoire centralisé (où se trouve l'Excel)
-        // X:\Qualite\4_Public\A disposition\DOSSIER SMI\Formulaires\
-        const templatesBaseDir = await resolveFirstExistingDir([
-            process.env.FSOP_TEMPLATES_DIR,
-            DEFAULT_TEMPLATES_DIR_LINUX,
-            DEFAULT_TEMPLATES_DIR_LINUX_ALT,
-            DEFAULT_TEMPLATES_DIR_WIN
-        ]);
-        
-        console.log(`🔍 Recherche du template ${templateCode} dans le répertoire centralisé: ${templatesBaseDir || '(introuvable)'}`);
-        
+        const templatesBaseDir = await resolveTemplatesDir();
+        console.log(`🔍 Recherche du template ${templateCode} dans: ${templatesBaseDir || '(introuvable)'}`);
         if (!templatesBaseDir) {
-            console.error(`❌ Répertoire des templates introuvable (tous chemins testés)`);
-            return res.status(503).json({ 
-                error: 'TEMPLATES_DIR_NOT_FOUND',
-                tried: [
-                    process.env.FSOP_TEMPLATES_DIR,
-                    DEFAULT_TEMPLATES_DIR_LINUX,
-                    DEFAULT_TEMPLATES_DIR_LINUX_ALT,
-                    DEFAULT_TEMPLATES_DIR_WIN
-                ].filter(Boolean),
-                hint: 'Définissez FSOP_TEMPLATES_DIR (Linux: /mnt/templates/... ou /mnt/services/... ).'
-            });
+            return res.status(503).json({ error: 'TEMPLATES_DIR_NOT_FOUND', hint: 'Définissez FSOP_TEMPLATES_DIR dans .env' });
         }
 
-        // Chercher le template dans le répertoire centralisé et ses sous-dossiers (ex: B3-PRODUCTION\AGS\F571-...)
-        // Le template peut être dans un sous-dossier et avoir un nom complexe (ex: F571-Ind A FSOP OHRNS -24.184-10.docx)
         const depthLimit = Number.parseInt(process.env.FSOP_SEARCH_DEPTH || '3', 10);
         const searchDepth = Number.isFinite(depthLimit) && depthLimit >= 0 ? depthLimit : 3;
         
-        const templatePath = await findTemplateFile(templatesBaseDir, templateCode, searchDepth);
+        const templatePath = await findTemplateFileCached(templatesBaseDir, templateCode, searchDepth);
         
         if (!templatePath) {
             console.error(`❌ Template ${templateCode} introuvable dans ${templatesBaseDir} (recherche jusqu'à ${searchDepth} niveaux de profondeur)`);
@@ -695,7 +671,7 @@ router.post('/load-data', requireFsopSession, async (req, res) => {
             });
         }
 
-        const rootLt = await resolveLtRoot(traceRoot, launchNumber);
+        const rootLt = await resolveLtRootCached(traceRoot, launchNumber);
         if (!rootLt) {
             return res.status(422).json({ 
                 error: 'LT_DIR_NOT_FOUND',
@@ -835,7 +811,7 @@ router.post('/save', requireFsopSession, async (req, res) => {
 
         // Resolve LT root directory
         console.log(`🔍 Recherche du répertoire LT: ${launchNumber} dans ${traceRoot}`);
-        const rootLt = await resolveLtRoot(traceRoot, launchNumber);
+        const rootLt = await resolveLtRootCached(traceRoot, launchNumber);
         if (!rootLt) {
             console.error(`❌ Répertoire LT introuvable: ${launchNumber} dans ${traceRoot}`);
             // Try to list what directories exist for debugging
@@ -861,78 +837,19 @@ router.post('/save', requireFsopSession, async (req, res) => {
         }
         console.log(`✅ Répertoire LT trouvé: ${rootLt}`);
 
-        const fsopDir = path.join(rootLt, 'FSOP');
-        
-        // Vérifier d'abord si le répertoire existe déjà
-        const fsopDirExists = await safeIsDirectory(fsopDir);
-        
-        if (!fsopDirExists) {
-            // Créer le répertoire FSOP s'il n'existe pas
-            // recursive: true crée aussi les répertoires parents si nécessaire
-            try {
-                await fs.mkdir(fsopDir, { recursive: true });
-                console.log(`✅ Répertoire FSOP créé: ${fsopDir}`);
-                
-                // Vérifier que la création a réussi
-                if (!(await safeIsDirectory(fsopDir))) {
-                    console.error(`❌ Répertoire FSOP introuvable après création: ${fsopDir}`);
-                    return res.status(422).json({ 
-                        error: 'FSOP_DIR_NOT_FOUND',
-                        fsopDir: fsopDir,
-                        message: `Le répertoire FSOP n'a pas pu être créé ou n'est pas accessible: ${fsopDir}`
-                    });
-                }
-            } catch (err) {
-                // Vérifier si c'est parce qu'un fichier existe avec le même nom
-                const existsAsFile = await safeIsFile(fsopDir);
-                if (existsAsFile) {
-                    console.error(`❌ Un fichier existe déjà avec le nom du répertoire FSOP: ${fsopDir}`);
-                    return res.status(422).json({
-                        error: 'FSOP_DIR_CONFLICT',
-                        fsopDir,
-                        rootLt,
-                        message: `Un fichier existe déjà avec le nom du répertoire FSOP. Impossible de créer le répertoire: ${fsopDir}`
-                    });
-                }
-                
-                console.error(`❌ Impossible de créer le répertoire FSOP: ${fsopDir}`, err.message);
-                return res.status(422).json({
-                    error: 'FSOP_DIR_CREATE_FAILED',
-                    fsopDir,
-                    rootLt,
-                    message: `Impossible de créer le répertoire FSOP dans ${rootLt}`,
-                    details: process.env.NODE_ENV === 'development' ? err.message : undefined
-                });
-            }
-        } else {
-            console.log(`✅ Répertoire FSOP existe déjà: ${fsopDir}`);
-        }
+        const { ok: fsopOk2, fsopDir, response: fsopErr2 } = await ensureFsopDirectory(rootLt, res);
+        if (!fsopOk2) return fsopErr2;
+        console.log(`✅ Répertoire FSOP: ${fsopDir}`);
 
-        // Find template
-        const templatesBaseDir = await resolveFirstExistingDir([
-            process.env.FSOP_TEMPLATES_DIR,
-            DEFAULT_TEMPLATES_DIR_LINUX,
-            DEFAULT_TEMPLATES_DIR_LINUX_ALT,
-            DEFAULT_TEMPLATES_DIR_WIN
-        ]);
+        const templatesBaseDir = await resolveTemplatesDir();
         if (!templatesBaseDir) {
-            return res.status(503).json({ 
-                error: 'TEMPLATES_DIR_NOT_FOUND',
-                message: 'Répertoire des templates introuvable',
-                tried: [
-                    process.env.FSOP_TEMPLATES_DIR,
-                    DEFAULT_TEMPLATES_DIR_LINUX,
-                    DEFAULT_TEMPLATES_DIR_LINUX_ALT,
-                    DEFAULT_TEMPLATES_DIR_WIN
-                ].filter(Boolean),
-                hint: 'Définissez FSOP_TEMPLATES_DIR (Linux: /mnt/templates/... ou /mnt/services/... ).'
-            });
+            return res.status(503).json({ error: 'TEMPLATES_DIR_NOT_FOUND', hint: 'Définissez FSOP_TEMPLATES_DIR dans .env' });
         }
         
         const depthLimit = Number.parseInt(process.env.FSOP_SEARCH_DEPTH || '3', 10);
         const searchDepth = Number.isFinite(depthLimit) && depthLimit >= 0 ? depthLimit : 3;
         
-        const templatePath = await findTemplateFile(templatesBaseDir, templateCode, searchDepth);
+        const templatePath = await findTemplateFileCached(templatesBaseDir, templateCode, searchDepth);
         
         if (!templatePath) {
             return res.status(404).json({ 

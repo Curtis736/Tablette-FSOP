@@ -160,13 +160,13 @@ async function executeQuery(query, params = {}, retries = 3) {
 
 // Fonction pour exécuter une requête sur la base ERP
 async function executeErpQuery(query, params = {}) {
-    const pool = await getErpConnection();
-    
-    // En mode test, retourner des données simulées
+    // Vérifier le mode test avant tout appel réseau
     if (process.env.NODE_ENV === 'test') {
         console.log('🧪 Mode test - Données ERP simulées retournées');
-        return []; // Retourner un tableau vide pour les tests
+        return [];
     }
+    
+    const pool = await getErpConnection();
     
     try {
         const request = pool.request();

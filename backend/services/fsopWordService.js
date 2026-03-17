@@ -90,15 +90,7 @@ async function findTemplateFile(fsopDir, templateCode, depthLimit = 3) {
             filesChecked++;
             allDocxFiles.push(fileName); // Pour le débogage
             
-            // Chercher les fichiers qui commencent par le code template (ex: F571)
-            // Gérer les espaces encodés (%20) et les caractères spéciaux
-            let decodedName;
-            try {
-                decodedName = decodeURIComponent(fileName);
-            } catch (_) {
-                decodedName = fileName; // Si le décodage échoue, utiliser le nom original
-            }
-            const upperName = decodedName.toUpperCase().trim();
+            const upperName = fileName.toUpperCase().trim();
             const upperTemplate = normalizedTemplate;
             
             // Accept template files that start with:
@@ -359,53 +351,9 @@ async function injectIntoDocx(docxPath, replacements = {}, tableData = {}, passF
             throw new Error('DOCX_DOCUMENT_XML_BECAME_EMPTY');
         }
         
-        // Check for balanced tags (basic validation)
-        const openTags = (xml.match(/</g) || []).length;
-        const closeTags = (xml.match(/>/g) || []).length;
-        if (openTags === 0 || closeTags === 0) {
+        // Vérification minimale : présence des balises Word essentielles
+        if (!xml.includes('<')) {
             throw new Error('DOCX_XML_MALFORMED: Missing tags');
-        }
-        
-        // Check for unclosed tags (more strict validation)
-        const tagStack = [];
-        const tagRegex = /<\/?([a-zA-Z][a-zA-Z0-9:]*)[^>]*>/g;
-        let tagMatch;
-        let validationErrors = [];
-        
-        while ((tagMatch = tagRegex.exec(xml)) !== null) {
-            const fullTag = tagMatch[0];
-            const tagName = tagMatch[1];
-            const isClosing = fullTag.startsWith('</');
-            
-            if (!isClosing && !fullTag.endsWith('/>')) {
-                // Opening tag
-                tagStack.push(tagName);
-            } else if (isClosing) {
-                // Closing tag
-                if (tagStack.length === 0) {
-                    validationErrors.push(`Unmatched closing tag: ${tagName}`);
-                } else {
-                    const lastOpen = tagStack.pop();
-                    if (lastOpen !== tagName) {
-                        validationErrors.push(`Mismatched tags: expected ${lastOpen}, got ${tagName}`);
-                    }
-                }
-            }
-        }
-        
-        if (tagStack.length > 0) {
-            validationErrors.push(`Unclosed tags: ${tagStack.join(', ')}`);
-        }
-        
-        if (validationErrors.length > 0) {
-            console.error(`⚠️ XML validation errors detected:`, validationErrors);
-            // Don't throw immediately, but log - some Word documents have non-standard XML
-            // that still works in Word
-        }
-        
-        // Check for common XML corruption patterns
-        if (xml.includes('&lt;&lt;') || xml.includes('&gt;&gt;') || xml.includes('&amp;&amp;')) {
-            console.warn(`⚠️ Potential double-escaped XML entities detected`);
         }
         
         // Ensure we have the essential Word document structure
@@ -723,10 +671,11 @@ function injectTextFieldsData(xml, textFieldsData) {
         // and replace the underscores with the value
         for (const [fieldIndex, value] of Object.entries(fields)) {
             if (value && value.trim()) {
-                // Pattern: find text followed by colon and underscores, replace underscores with value
+                // Pattern: find text followed by colon and underscores, replace underscores with value.
+                // Extended to also support FSOP patterns like "... ind _____" (without a colon).
                 // This is a simplified approach - in a more sophisticated implementation,
-                // we would store the label and match it exactly
-                const underscorePattern = /([^:]+):\s*_{3,}/g;
+                // we would store the label and match it exactly.
+                const underscorePattern = /((?:[^:]+:)|ind)\s*_{3,}/gi;
                 let match;
                 let matchCount = 0;
                 const matches = [];
@@ -735,7 +684,8 @@ function injectTextFieldsData(xml, textFieldsData) {
                 while ((match = underscorePattern.exec(xml)) !== null) {
                     matches.push({
                         fullMatch: match[0],
-                        label: match[1].trim(),
+                        // Normalize label by removing a possible trailing colon
+                        label: match[1].replace(/:\s*$/, '').trim(),
                         index: match.index
                     });
                 }
@@ -744,7 +694,7 @@ function injectTextFieldsData(xml, textFieldsData) {
                 if (fieldIndex < matches.length) {
                     const targetMatch = matches[parseInt(fieldIndex, 10)];
                     if (targetMatch) {
-                        const replacement = `${targetMatch.label}: ${value}`;
+                        const replacement = `${targetMatch.label} ${value}`;
                         xml = xml.replace(targetMatch.fullMatch, replacement);
                     }
                 }
