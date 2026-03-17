@@ -14,11 +14,8 @@ COPY --chown=nginx-app:nginx-app frontend/ /usr/share/nginx/html/
 # Copier la configuration nginx optimisée
 COPY --chown=nginx-app:nginx-app docker/nginx.conf /etc/nginx/nginx.conf
 
-# Copier le certificat SSL (généré sur la VM dans docker/nginx/ssl/)
-COPY --chown=nginx-app:nginx-app docker/nginx/ssl/ /etc/nginx/ssl/
-
 # Créer les répertoires nécessaires avec les bonnes permissions
-RUN mkdir -p /var/log/nginx /var/cache/nginx /var/run /etc/nginx/ssl && \
+RUN mkdir -p /var/log/nginx /var/cache/nginx /var/run && \
     chown -R nginx-app:nginx-app /var/log/nginx /var/cache/nginx /var/run && \
     chmod -R 755 /var/log/nginx
 

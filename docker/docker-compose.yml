@@ -61,8 +61,8 @@ services:
       dockerfile: docker/Dockerfile.frontend
     container_name: sedi-tablette-frontend
     ports:
-      - "8080:80"
-      - "8443:443"
+      - "80:80"
+      - "443:443"
     depends_on:
       sedi-backend:
         condition: service_healthy
@@ -72,6 +72,7 @@ services:
     volumes:
       - sedi-logs:/var/log/nginx
       - /etc/localtime:/etc/localtime:ro
+      - /etc/letsencrypt:/etc/letsencrypt:ro
     labels:
       - "com.sedi.service=frontend"
       - "com.sedi.version=2.2"
