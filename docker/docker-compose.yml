@@ -34,6 +34,9 @@ services:
       - SESSION_SECRET=${SESSION_SECRET:-change-me-in-production}
     ports:
       - "3001:3001"
+    extra_hosts:
+      - "SERVEURERP:192.168.1.14"
+      - "serveurerp:192.168.1.14"
     networks:
       - sedi-network
     restart: unless-stopped
