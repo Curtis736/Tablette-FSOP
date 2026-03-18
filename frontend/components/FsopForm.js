@@ -249,14 +249,14 @@ class FsopForm {
                 return `<input class="fsop-inline-input" type="text" data-placeholder="${placeholder}" value="${this.escapeHtml(val)}" />`;
             });
             
-            // Detect "ind __" or "ind ___" patterns (with 2+ underscores) and replace with editable 1-char input
+            // Detect "ind __" or "ind ___" patterns (with 2+ underscores) and replace with editable input
             // Pattern: "MO #### ind __" or "MO #### ind ___" etc.
             out = out.replace(/\bMO\s*(\d{3,5})\s+ind\s+_{2,}/gi, (match, moNumber) => {
                 const placeholderKey = `{{IND_MO${moNumber}}}`;
                 const currentValue = this.formData.placeholders?.[placeholderKey] || '';
                 // Extract the text before "ind __" to preserve it
                 const beforeInd = match.replace(/\s+ind\s+_{2,}$/i, '');
-                return `${beforeInd} ind <input class="fsop-ind-input" type="text" maxlength="1" data-placeholder="${placeholderKey}" value="${this.escapeHtml(currentValue)}" style="text-transform: uppercase;" />`;
+                return `${beforeInd} ind <input class="fsop-ind-input" type="text" maxlength="24" data-placeholder="${placeholderKey}" value="${this.escapeHtml(currentValue)}" />`;
             });
             
             return out;
