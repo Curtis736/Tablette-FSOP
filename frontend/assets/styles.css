@@ -2261,6 +2261,9 @@ tr:hover {
     text-align: left;
     font-weight: 600;
     text-transform: uppercase;
+    display: inline-block;
+    vertical-align: baseline;
+    margin-left: 6px;
     border: 1px solid #ccc;
     border-radius: 4px;
     padding: 2px 4px;
