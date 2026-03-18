@@ -111,7 +111,7 @@ async function findTemplateFileCached(dir, code, depth) {
     const key = `${dir}|${code}`;
     const cached = _templateFileCache.get(key);
     if (cached && Date.now() < cached.expiresAt) return cached.path;
-    const result = await findTemplateFileCached(dir, code, depth);
+    const result = await findTemplateFile(dir, code, depth);
     _templateFileCache.set(key, { path: result, expiresAt: Date.now() + TEMPLATE_CACHE_TTL });
     return result;
 }
@@ -123,7 +123,7 @@ async function resolveLtRootCached(traceRoot, launchNumber) {
     const key = `${traceRoot}|${launchNumber}`;
     const cached = _ltRootCache.get(key);
     if (cached && Date.now() < cached.expiresAt) return cached.path;
-    const result = await resolveLtRootCached(traceRoot, launchNumber);
+    const result = await resolveLtRoot(traceRoot, launchNumber);
     if (result) _ltRootCache.set(key, { path: result, expiresAt: Date.now() + LT_ROOT_CACHE_TTL });
     return result;
 }
