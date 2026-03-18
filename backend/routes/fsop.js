@@ -84,8 +84,11 @@ const DEFAULT_TEMPLATES_XLSX_WIN = 'X:\\Qualite\\4_Public\\A disposition\\DOSSIE
 
 // Common Linux/container locations we support out of the box (VM/Docker).
 const DEFAULT_TEMPLATES_DIR_LINUX = '/mnt/templates/Qualite/4_Public/A disposition/DOSSIER SMI/Formulaires';
+// Some environments mount a top-level "Services" directory (e.g. /mnt/templates/Services/Qualite/...)
+const DEFAULT_TEMPLATES_DIR_LINUX_SERVICES = '/mnt/templates/Services/Qualite/4_Public/A disposition/DOSSIER SMI/Formulaires';
 const DEFAULT_TEMPLATES_DIR_LINUX_ALT = '/mnt/services/Qualite/4_Public/A disposition/DOSSIER SMI/Formulaires';
 const DEFAULT_TEMPLATES_XLSX_LINUX = '/mnt/templates/Qualite/4_Public/A disposition/DOSSIER SMI/Formulaires/Liste des formulaires.xlsx';
+const DEFAULT_TEMPLATES_XLSX_LINUX_SERVICES = '/mnt/templates/Services/Qualite/4_Public/A disposition/DOSSIER SMI/Formulaires/Liste des formulaires.xlsx';
 const DEFAULT_TEMPLATES_XLSX_LINUX_ALT = '/mnt/services/Qualite/4_Public/A disposition/DOSSIER SMI/Formulaires/Liste des formulaires.xlsx';
 
 async function resolveFirstExistingDir(candidates) {
@@ -135,6 +138,7 @@ async function resolveTemplatesDir() {
     _templatesDirCache = await resolveFirstExistingDir([
         process.env.FSOP_TEMPLATES_DIR,
         DEFAULT_TEMPLATES_DIR_LINUX,
+        DEFAULT_TEMPLATES_DIR_LINUX_SERVICES,
         DEFAULT_TEMPLATES_DIR_LINUX_ALT,
         DEFAULT_TEMPLATES_DIR_WIN
     ]);
@@ -148,6 +152,7 @@ async function resolveTemplatesXlsx() {
     _templatesXlsxCache = await resolveFirstExistingFile([
         process.env.FSOP_TEMPLATES_XLSX_PATH,
         DEFAULT_TEMPLATES_XLSX_LINUX,
+        DEFAULT_TEMPLATES_XLSX_LINUX_SERVICES,
         DEFAULT_TEMPLATES_XLSX_LINUX_ALT,
         DEFAULT_TEMPLATES_XLSX_WIN
     ]);
