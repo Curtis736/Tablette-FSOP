@@ -2,6 +2,9 @@ const fs = require('fs');
 const fsp = require('fs/promises');
 const path = require('path');
 const AdmZip = require('adm-zip');
+const { createLogger } = require('../utils/logger');
+
+const log = createLogger({ component: 'fsopWordService' });
 
 async function safeExists(targetPath) {
     try {
@@ -41,7 +44,7 @@ async function findTemplateFile(fsopDir, templateCode, depthLimit = 3) {
     const allDocxFiles = []; // Pour le débogage
     let filesChecked = 0;
 
-    console.log(`🔍 Recherche template ${normalizedTemplate} dans ${fsopDir} (profondeur max: ${depthLimit})`);
+    log.debug(`Recherche template ${normalizedTemplate} dans ${fsopDir} (profondeur max: ${depthLimit})`);
 
     // Accept both:
     // - "F479-..." / "F479 ... " / "F479.docx"
@@ -62,7 +65,7 @@ async function findTemplateFile(fsopDir, templateCode, depthLimit = 3) {
         try {
             entries = await fsp.readdir(dir, { withFileTypes: true });
         } catch (err) {
-            console.warn(`⚠️ Impossible de lire le répertoire ${dir}:`, err.message);
+            log.warn(`Impossible de lire le répertoire ${dir}:`, err.message);
             continue;
         }
 
@@ -103,17 +106,13 @@ async function findTemplateFile(fsopDir, templateCode, depthLimit = 3) {
             
             // Prefer strict matches (start of filename). If none exist at all, we'll fall back to "anywhere".
             if (matchesTemplateStart) {
-                console.log(`✅✅✅ CANDIDAT TROUVÉ: ${entryPath}`);
-                console.log(`   📄 Nom original: "${fileName}"`);
-                console.log(`   📄 Nom décodé: "${decodedName}"`);
-                console.log(`   📄 Nom en majuscules: "${upperName}"`);
-                console.log(`   🔍 Template recherché: "${upperTemplate}"`);
+                log.debug(`Candidat trouvé: ${entryPath} (file="${fileName}" template="${upperTemplate}")`);
                 try {
                     const stat = await fsp.stat(entryPath);
                     candidates.push({ path: entryPath, mtimeMs: stat.mtimeMs, name: fileName, match: 'start' });
-                    console.log(`   ✅ Fichier ajouté aux candidats (${candidates.length} candidat(s))`);
+                    log.debug(`Fichier ajouté aux candidats (${candidates.length})`);
                 } catch (err) {
-                    console.warn(`   ⚠️ Impossible d'accéder au fichier:`, err.message);
+                    log.warn(`Impossible d'accéder au fichier:`, err.message);
                 }
             } else if (matchesTemplateAnywhere) {
                 // Store as a fallback candidate; we'll only use these if no "start" candidates exist.
@@ -126,19 +125,18 @@ async function findTemplateFile(fsopDir, templateCode, depthLimit = 3) {
             } else {
                 // Log seulement les fichiers qui commencent par F pour le débogage
                 if (upperName.startsWith('F') && filesChecked <= 100) {
-                    console.log(`   ⏭️  Ignoré: "${fileName}" (ne commence pas par "${upperTemplate}")`);
+                    log.debug(`Ignoré: "${fileName}" (ne matche pas "${upperTemplate}")`);
                 }
             }
         }
     }
 
-    console.log(`📊 Recherche terminée: ${filesChecked} fichiers .docx vérifiés, ${candidates.length} candidat(s) trouvé(s)`);
+    log.info(`Recherche terminée: ${filesChecked} .docx vérifiés, ${candidates.length} candidat(s)`);
     
     // Si aucun candidat trouvé, afficher tous les fichiers Fxxx pour le débogage
     if (candidates.length === 0 && filesChecked > 0) {
         const fFiles = allDocxFiles.filter(f => f.toUpperCase().startsWith('F'));
-        console.log(`⚠️ Aucun candidat trouvé. Fichiers commençant par "F" trouvés (${fFiles.length}):`, fFiles.slice(0, 20));
-        console.log(`⚠️ Template recherché: "${normalizedTemplate}"`);
+        log.warn(`Aucun candidat trouvé (template="${normalizedTemplate}", fichiersF=${fFiles.length})`);
     }
 
     if (candidates.length === 0) {
@@ -151,7 +149,7 @@ async function findTemplateFile(fsopDir, templateCode, depthLimit = 3) {
 
     // Retourner le plus récent
     pool.sort((a, b) => b.mtimeMs - a.mtimeMs);
-    console.log(`✅ Template sélectionné (${startCandidates.length > 0 ? 'start' : 'anywhere'} match): ${pool[0].path}`);
+    log.info(`Template sélectionné (${startCandidates.length > 0 ? 'start' : 'anywhere'}): ${pool[0].path}`);
     return pool[0].path;
 }
 
@@ -237,7 +235,7 @@ async function resolveLtRoot(traceRoot, launchNumber) {
 
     // Try 2: Search recursively up to FSOP_SEARCH_DEPTH (default 3)
     const maxDepth = Math.max(1, Math.min(parseInt(process.env.FSOP_SEARCH_DEPTH || '3', 10) || 3, 5));
-    console.log(`🔍 resolveLtRoot: recherche de "${launchNumber}" dans "${traceRoot}" (profondeur max: ${maxDepth})`);
+    log.debug(`resolveLtRoot: recherche "${launchNumber}" dans "${traceRoot}" (profondeur max: ${maxDepth})`);
 
     // Iterative BFS to avoid stack overflow on large trees
     const queue = [{ dir: traceRoot, depth: 0 }];
@@ -250,7 +248,7 @@ async function resolveLtRoot(traceRoot, launchNumber) {
         try {
             entries = await fsp.readdir(dir, { withFileTypes: true });
         } catch (err) {
-            console.warn(`⚠️ Cannot read directory: ${dir}`, err.message);
+            log.warn(`Cannot read directory: ${dir}`, err.message);
             continue;
         }
 
@@ -261,7 +259,7 @@ async function resolveLtRoot(traceRoot, launchNumber) {
 
             // Check if this child IS the LT folder
             if (entry.name === launchNumber) {
-                console.log(`✅ resolveLtRoot: trouvé à profondeur ${depth + 1}: ${childPath}`);
+                log.info(`resolveLtRoot: trouvé à profondeur ${depth + 1}: ${childPath}`);
                 return childPath;
             }
 
@@ -272,7 +270,7 @@ async function resolveLtRoot(traceRoot, launchNumber) {
         }
     }
 
-    console.warn(`❌ resolveLtRoot: "${launchNumber}" introuvable dans "${traceRoot}" (profondeur ${maxDepth})`);
+    log.warn(`resolveLtRoot: "${launchNumber}" introuvable dans "${traceRoot}" (profondeur ${maxDepth})`);
     return null;
 }
 
@@ -295,9 +293,9 @@ async function injectIntoDocx(docxPath, replacements = {}, tableData = {}, passF
         backupPath = docxPath + '.backup';
         try {
             await fsp.copyFile(docxPath, backupPath);
-            console.log(`📦 Sauvegarde créée: ${backupPath}`);
+            log.debug(`Sauvegarde créée: ${backupPath}`);
         } catch (backupError) {
-            console.warn(`⚠️ Impossible de créer une sauvegarde: ${backupError.message}`);
+            log.warn(`Impossible de créer une sauvegarde: ${backupError.message}`);
             // Continue anyway, but we won't be able to restore
         }
         
@@ -396,17 +394,17 @@ async function injectIntoDocx(docxPath, replacements = {}, tableData = {}, passF
                 if (!verifyXml || verifyXml.trim().length === 0) {
                     throw new Error('DOCX_INVALID: Empty word/document.xml after write');
                 }
-                console.log(`✅ DOCX validé: ${docxPath} (${finalStats.size} bytes)`);
+                log.debug(`DOCX validé: ${docxPath} (${finalStats.size} bytes)`);
             } catch (verifyError) {
-                console.error(`❌ DOCX invalide après écriture:`, verifyError.message);
+                log.error(`DOCX invalide après écriture:`, verifyError.message);
                 // Try to restore from backup if possible
                 if (backupPath) {
                     try {
                         await fsp.copyFile(backupPath, docxPath);
-                        console.log(`🔄 Fichier restauré depuis la sauvegarde`);
+                        log.warn(`Fichier restauré depuis la sauvegarde`);
                         await fsp.unlink(backupPath).catch(() => {});
                     } catch (restoreError) {
-                        console.error(`❌ Impossible de restaurer depuis la sauvegarde:`, restoreError.message);
+                        log.error(`Impossible de restaurer depuis la sauvegarde:`, restoreError.message);
                     }
                 }
                 throw new Error(`DOCX_INVALID: Le fichier généré est corrompu: ${verifyError.message}`);
@@ -421,7 +419,7 @@ async function injectIntoDocx(docxPath, replacements = {}, tableData = {}, passF
                 }
             }
             
-            console.log(`✅ DOCX modifié avec succès: ${docxPath} (${finalStats.size} bytes)`);
+            log.info(`DOCX modifié: ${docxPath} (${finalStats.size} bytes)`);
         } catch (writeError) {
             // Clean up temp file if it exists
             try {
@@ -432,14 +430,14 @@ async function injectIntoDocx(docxPath, replacements = {}, tableData = {}, passF
             
             // If rename failed, try direct write as fallback
             if (writeError.code === 'EACCES' || writeError.code === 'EPERM' || writeError.code === 'EBUSY') {
-                console.warn(`⚠️ Impossible d'écrire le fichier temporaire, tentative d'écriture directe...`);
+                log.warn(`Impossible d'écrire le fichier temporaire, tentative d'écriture directe...`);
                 zip.writeZip(docxPath);
             } else {
                 throw writeError;
             }
         }
     } catch (error) {
-        console.error(`❌ Erreur lors de l'injection dans le DOCX: ${docxPath}`, error.message);
+        log.error(`Erreur injection DOCX: ${docxPath}`, error.message);
         
         // Try to restore from backup if available
         if (backupPath) {
@@ -447,11 +445,11 @@ async function injectIntoDocx(docxPath, replacements = {}, tableData = {}, passF
                 const backupExists = await safeIsFile(backupPath);
                 if (backupExists) {
                     await fsp.copyFile(backupPath, docxPath);
-                    console.log(`🔄 Fichier restauré depuis la sauvegarde après erreur`);
+                    log.warn(`Fichier restauré depuis la sauvegarde après erreur`);
                     await fsp.unlink(backupPath).catch(() => {});
                 }
             } catch (restoreError) {
-                console.error(`❌ Impossible de restaurer depuis la sauvegarde:`, restoreError.message);
+                log.error(`Impossible de restaurer depuis la sauvegarde:`, restoreError.message);
             }
         }
         

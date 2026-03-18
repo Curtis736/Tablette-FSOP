@@ -18,6 +18,7 @@ const fsopRoutes = require('./routes/fsop');
 const heartbeatRoutes = require('./routes/heartbeat');
 const { metricsMiddleware, getMetrics, register } = require('./middleware/metrics');
 const { auditMiddleware } = require('./middleware/audit');
+const { requestLogger } = require('./middleware/requestLogger');
 const { authenticateAdmin } = require('./middleware/auth');
 const apmService = require('./services/APMService');
 const cacheService = require('./services/CacheService');
@@ -132,6 +133,9 @@ app.use(auditMiddleware);
 
 // Métriques
 app.use(metricsMiddleware);
+
+// Logger request-scoped (X-Request-Id + niveaux via LOG_LEVEL)
+app.use(requestLogger);
 
 // ⚡ OPTIMISATION : APM middleware pour monitoring détaillé
 app.use(apmService.httpMiddleware());

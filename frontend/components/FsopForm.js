@@ -1,6 +1,8 @@
 /**
  * Composant pour afficher et remplir un formulaire FSOP de manière interactive
  */
+import { loadStructure } from './fsopForm/loadStructure.js?v=20260318-fsopform-split1';
+
 class FsopForm {
     constructor(apiService, notificationManager) {
         this.apiService = apiService;
@@ -21,34 +23,7 @@ class FsopForm {
      * Initialise le formulaire avec la structure du template
      */
     async loadStructure(templateCode) {
-        try {
-            const response = await this.apiService.get(`/fsop/template/${templateCode}/structure`);
-            // The API returns the structure directly, not wrapped in a 'structure' property
-            this.structure = response.structure || response;
-            
-            // Debug: log structure
-            console.log('📋 Structure chargée:', {
-                sections: this.structure.sections?.length || 0,
-                tables: this.structure.sections?.filter(s => s.table).length || 0,
-                passFail: this.structure.sections?.filter(s => s.type === 'pass_fail').length || 0,
-                headerFields: this.structure.headerFields?.length || 0
-            });
-            
-            if (this.structure.sections) {
-                console.log('📑 Détail des sections:');
-                this.structure.sections.forEach(section => {
-                    console.log(`  - Section ${section.id}: "${section.title || 'SANS TITRE'}" (type: ${section.type}, fields: ${section.fields?.length || 0}, table: ${section.table ? 'Oui' : 'Non'})`);
-                });
-            } else {
-                console.error('❌ Aucune section trouvée dans la structure!');
-            }
-            
-            return this.structure;
-        } catch (error) {
-            console.error('Erreur lors du chargement de la structure:', error);
-            this.notificationManager.error('Impossible de charger la structure du formulaire');
-            throw error;
-        }
+        return loadStructure.call(this, templateCode);
     }
 
     /**
