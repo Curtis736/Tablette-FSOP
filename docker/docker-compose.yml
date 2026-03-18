@@ -32,6 +32,10 @@ services:
       - LOG_LEVEL=info
       - JWT_SECRET=${JWT_SECRET:-change-me-in-production}
       - SESSION_SECRET=${SESSION_SECRET:-change-me-in-production}
+      # FSOP (tracabilité / templates)
+      - TRACEABILITY_DIR=${TRACEABILITY_DIR:-/mnt/services}
+      - FSOP_TEMPLATES_DIR=${FSOP_TEMPLATES_DIR:-}
+      - FSOP_TEMPLATES_XLSX_PATH=${FSOP_TEMPLATES_XLSX_PATH:-}
     ports:
       - "3001:3001"
     extra_hosts:
@@ -43,6 +47,9 @@ services:
     volumes:
       - sedi-logs:/app/logs
       - /etc/localtime:/etc/localtime:ro
+      # Montage traçabilité (hôte) -> conteneur
+      # Par défaut sur ta VM : /mnt/partage_fsop est un CIFS vers 192.168.1.9
+      - ${SERVICES_HOST_PATH:-/mnt/partage_fsop}:${SERVICES_CONTAINER_PATH:-/mnt/services}:rw
     labels:
       - "com.sedi.service=backend"
       - "com.sedi.version=2.2"
