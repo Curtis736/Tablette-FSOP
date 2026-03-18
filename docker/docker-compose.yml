@@ -50,6 +50,9 @@ services:
       # Montage traçabilité (hôte) -> conteneur
       # Par défaut sur ta VM : /mnt/partage_fsop est un CIFS vers 192.168.1.9
       - ${SERVICES_HOST_PATH:-/mnt/partage_fsop}:${SERVICES_CONTAINER_PATH:-/mnt/services}:rw
+      # Montage templates (hôte) -> conteneur
+      # Sur ta VM : /mnt/templates est un CIFS vers 192.168.1.9 (dossier Services/Qualite/...)
+      - ${TEMPLATES_HOST_PATH:-/mnt/templates}:${TEMPLATES_CONTAINER_PATH:-/mnt/templates}:ro
     labels:
       - "com.sedi.service=backend"
       - "com.sedi.version=2.2"
