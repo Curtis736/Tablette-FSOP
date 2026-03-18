@@ -2,6 +2,7 @@
 import TimeUtils from '../utils/TimeUtils.js';
 import ScannerManager from '../utils/ScannerManager.js?v=20260309-cache-bust';
 import FsopForm from './FsopForm.js?v=20260318-fsopform-split1';
+import Logger from '../utils/Logger.js?v=20260318-loglevel1';
 
 class OperateurInterface {
     constructor(operator, app) {
@@ -28,6 +29,8 @@ class OperateurInterface {
 
         this.LANCEMENT_PREFIX = 'LT';
         this.MAX_LANCEMENT_DIGITS = 8;
+
+        this.log = Logger.child('OperateurInterface');
 
         this.initializeElements();
         this.setupEventListeners();
@@ -57,7 +60,7 @@ class OperateurInterface {
         }
         // Réinitialiser tout l'état interne pour éviter les fuites
         this._resetFullState();
-        console.log('🗑️ OperateurInterface détruite proprement');
+        this.log.info('🗑️ OperateurInterface détruite proprement');
     }
 
     /**

@@ -13,7 +13,7 @@ try {
 }
 
 // Configuration de la base de données SQL Server
-// Priorité : config-production.js > variables d'environnement > valeurs par défaut
+// Priorité : config-production.js > variables d'environnement > valeurs par défaut (dev uniquement)
 const config = {
     server: productionConfig?.DB_SERVER || process.env.DB_SERVER || '192.168.1.26',
     database: productionConfig?.DB_DATABASE || process.env.DB_DATABASE || 'SEDI_APP_INDEPENDANTE',
@@ -38,6 +38,17 @@ const config = {
         // Note: evictionRunIntervalMillis n'est pas supporté par cette version de tarn
     }
 };
+
+// En production, ne jamais démarrer avec des secrets "par défaut"
+if (process.env.NODE_ENV === 'production') {
+    const missing = [];
+    if (!process.env.DB_PASSWORD && !productionConfig?.DB_PASSWORD) missing.push('DB_PASSWORD');
+    if (!process.env.DB_ERP_PASSWORD && !productionConfig?.DB_ERP_PASSWORD) missing.push('DB_ERP_PASSWORD');
+    if (!process.env.JWT_SECRET || process.env.JWT_SECRET === 'change-me-in-production') missing.push('JWT_SECRET');
+    if (missing.length) {
+        throw new Error(`Configuration manquante en production: ${missing.join(', ')} (définir dans docker/.env)`);
+    }
+}
 
 // Log de la configuration finale utilisée
 console.log('🔧 Configuration finale de la base de données:', {
