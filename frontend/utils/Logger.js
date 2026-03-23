@@ -1,4 +1,9 @@
 export default class Logger {
+    constructor(forceEnabled = false, scope = '') {
+        this.forceEnabled = !!forceEnabled;
+        this.scope = scope || '';
+    }
+
     static _levelValue(level) {
         return ({ debug: 10, info: 20, warn: 30, error: 40 })[level] ?? 20;
     }
@@ -38,5 +43,55 @@ export default class Logger {
     static error(scope, ...args) {
         if (!Logger.enabled('error')) return;
         console.error(`[ERROR]${scope ? ' [' + scope + ']' : ''}`, ...args);
+    }
+
+    _scopeOr(firstArg) {
+        if (typeof firstArg === 'string') return firstArg;
+        return this.scope;
+    }
+
+    debug(...args) {
+        if (!this.forceEnabled && !Logger.enabled('debug')) return;
+        const [first, ...rest] = args;
+        if (typeof first === 'string' && first.startsWith('[')) {
+            console.log(`[DEBUG]${this.scope ? ' [' + this.scope + ']' : ''}`, first, ...rest);
+            return;
+        }
+        Logger.debug(this._scopeOr(first), ...(typeof first === 'string' ? rest : args));
+    }
+
+    info(...args) {
+        if (!this.forceEnabled && !Logger.enabled('info')) return;
+        const [first, ...rest] = args;
+        if (typeof first === 'string' && first.startsWith('[')) {
+            console.log(`[INFO]${this.scope ? ' [' + this.scope + ']' : ''}`, first, ...rest);
+            return;
+        }
+        Logger.info(this._scopeOr(first), ...(typeof first === 'string' ? rest : args));
+    }
+
+    warn(...args) {
+        if (!this.forceEnabled && !Logger.enabled('warn')) return;
+        const [first, ...rest] = args;
+        if (typeof first === 'string' && first.startsWith('[')) {
+            console.warn(`[WARN]${this.scope ? ' [' + this.scope + ']' : ''}`, first, ...rest);
+            return;
+        }
+        Logger.warn(this._scopeOr(first), ...(typeof first === 'string' ? rest : args));
+    }
+
+    error(...args) {
+        if (!this.forceEnabled && !Logger.enabled('error')) return;
+        const [first, ...rest] = args;
+        if (typeof first === 'string' && first.startsWith('[')) {
+            console.error(`[ERROR]${this.scope ? ' [' + this.scope + ']' : ''}`, first, ...rest);
+            return;
+        }
+        Logger.error(this._scopeOr(first), ...(typeof first === 'string' ? rest : args));
+    }
+
+    log(...args) {
+        // Compatibilite legacy: logger.log() -> niveau info
+        this.info(...args);
     }
 }
