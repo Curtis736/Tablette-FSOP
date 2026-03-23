@@ -193,7 +193,16 @@ class DataIsolationManager {
         } catch (error) {
             console.error('❌ Erreur lors de la récupération de l\'opérateur:', error);
             console.error('❌ Détails:', error.message);
-            // Ne pas throw, retourner null pour que le middleware puisse gérer l'erreur
+            // En cas de timeout SQL, propager l'erreur pour renvoyer 503
+            // au lieu d'un faux 404 "Opérateur non trouvé".
+            if (
+                error?.code === 'ETIMEOUT' ||
+                error?.originalError?.code === 'ETIMEOUT' ||
+                String(error?.message || '').toLowerCase().includes('timeout')
+            ) {
+                throw error;
+            }
+            // Pour les autres erreurs, conserver le comportement historique
             return null;
         }
     }

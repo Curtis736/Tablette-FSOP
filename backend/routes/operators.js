@@ -471,6 +471,13 @@ router.post('/logout', async (req, res) => {
         
     } catch (error) {
         console.error('Erreur lors de la déconnexion:', error);
+        if (isSqlTimeoutError(error)) {
+            // Mode dégradé: ne pas bloquer l'UI sur logout si SQL est lent.
+            return res.json({
+                success: true,
+                message: 'Déconnexion prise en compte (mode dégradé).'
+            });
+        }
         res.status(500).json({ 
             error: 'Erreur interne du serveur',
             details: error.message 
