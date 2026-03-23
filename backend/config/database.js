@@ -8,6 +8,9 @@ function readTimeoutMs(envKey, fallback) {
 
 const DB_REQUEST_TIMEOUT_MS = readTimeoutMs('DB_REQUEST_TIMEOUT_MS', 60000);
 const DB_CONNECTION_TIMEOUT_MS = readTimeoutMs('DB_CONNECTION_TIMEOUT_MS', 60000);
+const DB_QUERY_RETRIES = Number.isFinite(Number.parseInt(process.env.DB_QUERY_RETRIES || '', 10))
+    ? Math.max(1, Number.parseInt(process.env.DB_QUERY_RETRIES, 10))
+    : 1;
 
 // Charger la configuration de production si disponible
 let productionConfig = null;
@@ -158,7 +161,7 @@ async function getErpConnection() {
 }
 
 // Fonction pour exécuter une requête avec retry et gestion de concurrence
-async function executeQuery(query, params = {}, retries = 3) {
+async function executeQuery(query, params = {}, retries = DB_QUERY_RETRIES) {
     // En mode test, retourner des données simulées
     if (process.env.NODE_ENV === 'test') {
         console.log('🧪 Mode test - Données simulées retournées');
@@ -262,7 +265,7 @@ async function executeProcedure(procedureName, params = {}) {
 }
 
 // Exécuter une commande non séléctive (INSERT/UPDATE/DELETE) avec gestion de concurrence
-async function executeNonQuery(query, params = {}, retries = 3) {
+async function executeNonQuery(query, params = {}, retries = DB_QUERY_RETRIES) {
     // En mode test, retourner un résultat simulé
     if (process.env.NODE_ENV === 'test') {
         console.log('🧪 Mode test - Commande simulée:', query.substring(0, 50) + '...');
