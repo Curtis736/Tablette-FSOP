@@ -17,6 +17,24 @@ const ConsolidationService = require('../services/ConsolidationService');
 const lancementCache = new Map();
 const LANCEMENT_CACHE_TTL = 5 * 60 * 1000; // 5 minutes
 
+function isSqlTimeoutError(error) {
+    if (!error) return false;
+    if (error.code === 'ETIMEOUT' || error.number === 'ETIMEOUT') return true;
+    if (error.originalError?.code === 'ETIMEOUT') return true;
+    if (error.originalError?.number === -2) return true;
+    const message = String(error.message || '').toLowerCase();
+    return message.includes('timeout');
+}
+
+function sendDbTimeout(res, context) {
+    return res.status(503).json({
+        success: false,
+        error: 'DB_TIMEOUT',
+        message: 'Base SQL temporairement lente. Merci de reessayer dans quelques secondes.',
+        context
+    });
+}
+
 
 // Fonction utilitaire pour formater les dates/heures (format HH:mm seulement, fuseau horaire Paris)
 function formatDateTime(dateTime) {
@@ -413,6 +431,9 @@ router.post('/login', async (req, res) => {
         
     } catch (error) {
         console.error('Erreur lors de la connexion:', error);
+        if (isSqlTimeoutError(error)) {
+            return sendDbTimeout(res, 'operators.login');
+        }
         res.status(500).json({ 
             error: 'Erreur interne du serveur',
             details: error.message 
@@ -1672,6 +1693,21 @@ router.get('/:operatorCode/operations',
         
     } catch (error) {
         console.error('❌ Erreur lors de la récupération de l\'historique opérateur:', error);
+        if (isSqlTimeoutError(error)) {
+            return res.json({
+                success: true,
+                operations: [],
+                count: 0,
+                total: 0,
+                page: 1,
+                limit: 0,
+                totalPages: 0,
+                hasNextPage: false,
+                hasPrevPage: false,
+                degraded: true,
+                warning: 'DB_TIMEOUT'
+            });
+        }
         res.status(500).json({
             success: false,
             error: 'Erreur serveur lors de la récupération de l\'historique'
@@ -1792,6 +1828,14 @@ router.get('/current/:operatorCode', authenticateOperator, async (req, res) => {
         
     } catch (error) {
         console.error('❌ Erreur lors de la récupération de l\'opération en cours:', error);
+        if (isSqlTimeoutError(error)) {
+            return res.json({
+                success: true,
+                data: null,
+                degraded: true,
+                warning: 'DB_TIMEOUT'
+            });
+        }
         res.status(500).json({
             success: false,
             error: 'Erreur serveur lors de la récupération de l\'opération en cours'
@@ -1858,6 +1902,9 @@ router.get('/:operatorCode', authenticateOperator, async (req, res) => {
         
     } catch (error) {
         console.error('Erreur lors de la récupération de l\'opérateur:', error);
+        if (isSqlTimeoutError(error)) {
+            return sendDbTimeout(res, 'operators.byCode');
+        }
         res.status(500).json({
             success: false,
             error: 'Erreur serveur lors de la récupération de l\'opérateur'
