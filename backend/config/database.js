@@ -1,5 +1,14 @@
 const sql = require('mssql');
 
+function readTimeoutMs(envKey, fallback) {
+    const raw = process.env[envKey];
+    const parsed = Number.parseInt(raw || '', 10);
+    return Number.isFinite(parsed) && parsed >= 1000 ? parsed : fallback;
+}
+
+const DB_REQUEST_TIMEOUT_MS = readTimeoutMs('DB_REQUEST_TIMEOUT_MS', 60000);
+const DB_CONNECTION_TIMEOUT_MS = readTimeoutMs('DB_CONNECTION_TIMEOUT_MS', 60000);
+
 // Charger la configuration de production si disponible
 let productionConfig = null;
 try {
@@ -23,8 +32,8 @@ const config = {
         encrypt: productionConfig?.DB_ENCRYPT || process.env.DB_ENCRYPT === 'true' || false,
         trustServerCertificate: productionConfig?.DB_TRUST_CERT || process.env.DB_TRUST_CERT === 'true' || true,
         enableArithAbort: true,
-        requestTimeout: 30000,
-        connectionTimeout: 30000
+        requestTimeout: DB_REQUEST_TIMEOUT_MS,
+        connectionTimeout: DB_CONNECTION_TIMEOUT_MS
     },
     pool: {
         max: 30,  // 20 opérateurs + 5 admin + 5 marge pour FSOP/autres
@@ -68,8 +77,8 @@ const erpConfig = {
         encrypt: productionConfig?.DB_ERP_ENCRYPT || process.env.DB_ERP_ENCRYPT === 'true' || false,
         trustServerCertificate: productionConfig?.DB_ERP_TRUST_CERT || process.env.DB_ERP_TRUST_CERT === 'true' || true,
         enableArithAbort: true,
-        requestTimeout: 30000,
-        connectionTimeout: 30000
+        requestTimeout: DB_REQUEST_TIMEOUT_MS,
+        connectionTimeout: DB_CONNECTION_TIMEOUT_MS
     },
     pool: {
         max: 30,  // 20 opérateurs + 5 admin + 5 marge pour FSOP/autres
@@ -140,7 +149,7 @@ async function executeQuery(query, params = {}, retries = 3) {
             
             // Utiliser un timeout pour éviter les blocages
             const request = pool.request();
-            request.timeout = 30000; // 30 secondes max par requête
+            request.timeout = DB_REQUEST_TIMEOUT_MS; // configurable via DB_REQUEST_TIMEOUT_MS
             
             // Ajouter les paramètres
             Object.keys(params).forEach(key => {
@@ -181,6 +190,7 @@ async function executeErpQuery(query, params = {}) {
     
     try {
         const request = pool.request();
+        request.timeout = DB_REQUEST_TIMEOUT_MS;
         
         // Ajouter les paramètres
         Object.keys(params).forEach(key => {
@@ -241,7 +251,7 @@ async function executeNonQuery(query, params = {}, retries = 3) {
         try {
             const pool = await getConnection();
             const request = pool.request();
-            request.timeout = 30000; // 30 secondes max
+            request.timeout = DB_REQUEST_TIMEOUT_MS; // configurable via DB_REQUEST_TIMEOUT_MS
             
             Object.keys(params).forEach(key => {
                 request.input(key, params[key]);
