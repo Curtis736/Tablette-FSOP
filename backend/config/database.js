@@ -96,6 +96,8 @@ const erpConfig = {
 // Pool de connexions
 let pool = null;
 let erpPool = null;
+let poolConnectPromise = null;
+let erpPoolConnectPromise = null;
 
 // Fonction pour obtenir une connexion
 async function getConnection() {
@@ -106,12 +108,22 @@ async function getConnection() {
                 console.log('🧪 Mode test - Connexion simulée');
                 return null; // Retourner null pour les tests
             }
-            pool = await sql.connect(config);
+            pool = new sql.ConnectionPool(config);
+            pool.on('error', (err) => {
+                console.error('❌ Erreur pool SQL app:', err);
+            });
+            poolConnectPromise = pool.connect();
+        }
+        if (poolConnectPromise) {
+            await poolConnectPromise;
+            poolConnectPromise = null;
             console.log('🔗 Connexion à la base de données établie');
         }
         return pool;
     } catch (error) {
         console.error('❌ Erreur de connexion à la base de données:', error);
+        pool = null;
+        poolConnectPromise = null;
         throw error;
     }
 }
@@ -125,12 +137,22 @@ async function getErpConnection() {
                 console.log('🧪 Mode test - Connexion ERP simulée');
                 return null; // Retourner null pour les tests
             }
-            erpPool = await sql.connect(erpConfig);
+            erpPool = new sql.ConnectionPool(erpConfig);
+            erpPool.on('error', (err) => {
+                console.error('❌ Erreur pool SQL ERP:', err);
+            });
+            erpPoolConnectPromise = erpPool.connect();
+        }
+        if (erpPoolConnectPromise) {
+            await erpPoolConnectPromise;
+            erpPoolConnectPromise = null;
             console.log('🔗 Connexion à la base ERP établie');
         }
         return erpPool;
     } catch (error) {
         console.error('❌ Erreur de connexion à la base ERP:', error);
+        erpPool = null;
+        erpPoolConnectPromise = null;
         throw error;
     }
 }
@@ -354,7 +376,14 @@ async function closeConnection() {
     if (pool) {
         await pool.close();
         pool = null;
+        poolConnectPromise = null;
         console.log('🔌 Connexion à la base de données fermée');
+    }
+    if (erpPool) {
+        await erpPool.close();
+        erpPool = null;
+        erpPoolConnectPromise = null;
+        console.log('🔌 Connexion à la base ERP fermée');
     }
 }
 
@@ -369,10 +398,12 @@ sql.on('error', async (err) => {
             if (pool) {
                 await pool.close();
                 pool = null;
+                poolConnectPromise = null;
             }
             if (erpPool) {
                 await erpPool.close();
                 erpPool = null;
+                erpPoolConnectPromise = null;
             }
             // Les prochaines requêtes recréeront automatiquement les pools
         } catch (closeError) {
