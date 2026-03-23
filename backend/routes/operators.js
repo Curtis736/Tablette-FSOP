@@ -393,7 +393,7 @@ router.post('/login', async (req, res) => {
             WHERE Coderessource = @code
         `;
         
-        const operators = await executeQuery(operatorQuery, { code });
+        const operators = await executeQuery(operatorQuery, { code }, 1);
         
         if (operators.length === 0) {
             return res.status(401).json({ 
@@ -1594,7 +1594,7 @@ router.get('/:operatorCode/operations',
             ORDER BY h.DateCreation DESC, h.NoEnreg DESC
         `;
         
-        const events = await executeQuery(eventsQuery, { operatorCode });
+        const events = await executeQuery(eventsQuery, { operatorCode }, 1);
         console.log(`📊 ${events.length} événements trouvés pour l'opérateur ${operatorCode}`);
         
         // Utiliser la fonction qui garde les pauses séparées
@@ -1745,7 +1745,7 @@ router.get('/current/:operatorCode', authenticateOperator, async (req, res) => {
             ORDER BY h.DateCreation DESC, h.NoEnreg DESC
         `;
         
-        const result = await executeQuery(query, { operatorCode });
+        const result = await executeQuery(query, { operatorCode }, 1);
         
         if (result.length === 0) {
             return res.json({
@@ -1789,7 +1789,7 @@ router.get('/current/:operatorCode', authenticateOperator, async (req, res) => {
                 codeRubrique: operation.CodeRubrique || operation.OperatorCode,
                 dateCreation: operation.DateCreation
             };
-            const debutRows = await executeQuery(debutQuery, debutParams);
+            const debutRows = await executeQuery(debutQuery, debutParams, 1);
             const debut = debutRows && debutRows[0] ? debutRows[0] : null;
             if (debut) {
                 startedAt = debut.CreatedAt || null;
@@ -1866,7 +1866,7 @@ router.get('/:operatorCode', authenticateOperator, async (req, res) => {
             WHERE r.Coderessource = @operatorCode
         `;
         
-        const result = await executeQuery(operatorQuery, { operatorCode });
+        const result = await executeQuery(operatorQuery, { operatorCode }, 1);
         
         if (result.length === 0) {
             return res.status(404).json({
