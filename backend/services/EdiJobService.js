@@ -6,10 +6,62 @@
 const { exec } = require('child_process');
 const { promisify } = require('util');
 const path = require('path');
+const fs = require('fs/promises');
 
 const execAsync = promisify(exec);
 
 class EdiJobService {
+    static _dailyGuardPath() {
+        return process.env.SILOG_DAILY_GUARD_PATH || '/app/logs/edi-job-last-run.json';
+    }
+
+    static _todayKey() {
+        return new Date().toISOString().slice(0, 10); // YYYY-MM-DD (UTC)
+    }
+
+    static async _readDailyGuard() {
+        try {
+            const raw = await fs.readFile(this._dailyGuardPath(), 'utf8');
+            return JSON.parse(raw);
+        } catch (_) {
+            return { date: null, count: 0 };
+        }
+    }
+
+    static async _writeDailyGuard(data) {
+        const target = this._dailyGuardPath();
+        try {
+            await fs.mkdir(path.dirname(target), { recursive: true });
+        } catch (_) {
+            // ignore
+        }
+        await fs.writeFile(target, JSON.stringify(data, null, 2), 'utf8');
+    }
+
+    static async _canRunToday(options = {}) {
+        const force = options.force === true || String(options.force || '').toLowerCase() === 'true';
+        if (force) return { allowed: true, reason: 'forced' };
+        const maxRunsPerDay = Number.parseInt(process.env.SILOG_MAX_RUNS_PER_DAY || '1', 10) || 1;
+        const today = this._todayKey();
+        const guard = await this._readDailyGuard();
+        const countToday = guard?.date === today ? Number(guard.count || 0) : 0;
+        if (countToday >= maxRunsPerDay) {
+            return { allowed: false, reason: `max_runs_reached_${maxRunsPerDay}` };
+        }
+        return { allowed: true, reason: 'ok' };
+    }
+
+    static async _recordRun() {
+        const today = this._todayKey();
+        const guard = await this._readDailyGuard();
+        const countToday = guard?.date === today ? Number(guard.count || 0) : 0;
+        await this._writeDailyGuard({
+            date: today,
+            count: countToday + 1,
+            updatedAt: new Date().toISOString()
+        });
+    }
+
     static _psSingleQuote(value) {
         // Escape single quotes for PowerShell single-quoted strings: ' => ''
         return String(value ?? '').replace(/'/g, "''");
@@ -73,6 +125,17 @@ class EdiJobService {
      */
     static async executeEdiJob(codeTache, options = {}) {
         try {
+            const gate = await this._canRunToday(options);
+            if (!gate.allowed) {
+                return {
+                    success: true,
+                    skipped: true,
+                    message: 'EDI_JOB deja execute aujourd\'hui (limite quotidienne atteinte).',
+                    reason: gate.reason,
+                    codeTache: codeTache || process.env.SILOG_TASK_CODE || process.env.SILOG_CODE_TACHE || process.env.SILOG_TASK || 'SEDI_ETDIFF'
+                };
+            }
+
             const config = this._buildConfig(codeTache, options);
 
             // IMPORTANT: SILOG.exe ne peut pas être exécuté directement sur Linux.
@@ -236,6 +299,7 @@ class EdiJobService {
             const success = exitCode === 0;
             
             if (success) {
+                await this._recordRun();
                 console.log(`✅ EDI_JOB exécuté avec succès pour codeTache=${config.codeTache} (exitCode=0)`);
                 return {
                     success: true,
