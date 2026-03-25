@@ -58,6 +58,16 @@ services:
     networks:
       - sedi-network
     restart: unless-stopped
+    # Le volume nommé est créé root:root par défaut; le backend tourne en user `node`.
+    # On fixe l'ownership au démarrage pour éviter EACCES sur /app/logs/maintenance.log.
+    user: "0"
+    command:
+      - sh
+      - -lc
+      - >
+        mkdir -p /app/logs &&
+        chown -R node:node /app/logs &&
+        exec su node -s /bin/sh -c "node server.js"
     volumes:
       - sedi-logs:/app/logs
       - /etc/localtime:/etc/localtime:ro
@@ -145,12 +155,12 @@ services:
       - ./grafana/dashboards:/var/lib/grafana/dashboards:ro
     environment:
       - GF_SECURITY_ADMIN_USER=${GRAFANA_ADMIN_USER:-grafana-admin}
-      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_ADMIN_PASSWORD:?GRAFANA_ADMIN_PASSWORD must be set}
+      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_ADMIN_PASSWORD:-change-me}
       - GF_USERS_ALLOW_SIGN_UP=false
       - GF_SERVER_ROOT_URL=${GRAFANA_ROOT_URL:-http://192.168.1.26:8080/grafana/}
       - GF_SERVER_SERVE_FROM_SUB_PATH=true
       - GF_INSTALL_PLUGINS=
-      - GF_SECURITY_SECRET_KEY=${GRAFANA_SECRET_KEY:?GRAFANA_SECRET_KEY must be set}
+      - GF_SECURITY_SECRET_KEY=${GRAFANA_SECRET_KEY:-change-me}
       - GF_AUTH_ANONYMOUS_ENABLED=false
       - GF_AUTH_BASIC_ENABLED=true
       - GF_AUTH_DISABLE_LOGIN_FORM=false
