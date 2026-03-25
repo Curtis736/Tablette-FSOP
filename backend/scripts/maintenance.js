@@ -24,12 +24,18 @@ class MaintenanceManager {
     constructor() {
         this.logFile = path.join(__dirname, '../logs/maintenance.log');
         this.ensureLogDirectory();
+        this._fileLoggingDisabled = false;
     }
 
     ensureLogDirectory() {
-        const logDir = path.dirname(this.logFile);
-        if (!fs.existsSync(logDir)) {
-            fs.mkdirSync(logDir, { recursive: true });
+        try {
+            const logDir = path.dirname(this.logFile);
+            if (!fs.existsSync(logDir)) {
+                fs.mkdirSync(logDir, { recursive: true });
+            }
+        } catch (e) {
+            // Ne jamais bloquer la maintenance pour un problème de filesystem (Docker volume permissions, etc.)
+            this._fileLoggingDisabled = true;
         }
     }
 
@@ -37,7 +43,14 @@ class MaintenanceManager {
         const timestamp = new Date().toISOString();
         const logMessage = `[${timestamp}] ${message}\n`;
         console.log(message);
-        fs.appendFileSync(this.logFile, logMessage);
+        if (this._fileLoggingDisabled) return;
+        try {
+            fs.appendFileSync(this.logFile, logMessage);
+        } catch (e) {
+            // Si /app/logs est monté en volume avec mauvais owner/perms, éviter de crasher
+            this._fileLoggingDisabled = true;
+            console.warn('⚠️ Logging fichier désactivé (permission/FS):', e?.message || e);
+        }
     }
 
     async autoCloseOpenOperations() {
