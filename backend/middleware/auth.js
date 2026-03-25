@@ -1,6 +1,7 @@
  // Middleware d'authentification et d'autorisation
 const { executeQuery } = require('../config/database');
 const { verifyToken, getAdminCredentials } = require('../services/adminAuthService');
+const SessionService = require('../services/SessionService');
 
 /**
  * Middleware pour vérifier qu'un opérateur est authentifié et actif
@@ -35,25 +36,17 @@ async function authenticateOperator(req, res, next) {
             });
         }
 
-        // Vérifier s'il y a une session active pour cet opérateur (optionnel)
-        const sessionQuery = `
-            SELECT TOP 1 SessionId, LoginTime, SessionStatus
-            FROM [SEDI_APP_INDEPENDANTE].[dbo].[ABSESSIONS_OPERATEURS]
-            WHERE OperatorCode = @operatorCode 
-            AND SessionStatus = 'ACTIVE'
-            AND CAST(DateCreation AS DATE) = CAST(GETDATE() AS DATE)
-            ORDER BY DateCreation DESC
-        `;
-        
-        const sessions = await executeQuery(sessionQuery, { operatorCode });
+        // Vérifier s'il y a une session active (TTL glissant via SessionService)
+        // NOTE: Ne pas filtrer par "aujourd'hui" (sinon cassé après minuit).
+        const activeSession = await SessionService.getActiveSession(operatorCode);
         
         // Ajouter les informations de l'opérateur à la requête
         req.operator = {
             code: operators[0].Coderessource,
             name: operators[0].Designation1,
             type: operators[0].Typeressource,
-            sessionId: sessions.length > 0 ? sessions[0].SessionId : null,
-            hasActiveSession: sessions.length > 0
+            sessionId: activeSession ? activeSession.SessionId : null,
+            hasActiveSession: Boolean(activeSession)
         };
 
         next();

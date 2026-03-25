@@ -67,6 +67,7 @@ async function requireFsopSession(req, res, next) {
             return res.status(401).json({
                 success: false,
                 error: 'SESSION_REQUIRED',
+                security: 'SESSION_REQUIRED',
                 message: 'Opérateur non connecté ou session expirée.'
             });
         }

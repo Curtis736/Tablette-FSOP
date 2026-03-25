@@ -50,7 +50,8 @@ async function validateOperatorSession(req, res, next) {
         if (activeSessions.length === 0) {
             return res.status(401).json({
                 success: false,
-                error: 'Opérateur non connecté ou session expirée',
+                error: 'SESSION_REQUIRED',
+                message: 'Opérateur non connecté ou session expirée',
                 security: 'SESSION_REQUIRED'
             });
         }
