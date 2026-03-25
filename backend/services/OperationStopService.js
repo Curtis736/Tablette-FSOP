@@ -54,7 +54,6 @@ class OperationStopService {
                         autoFix: true,
                         phase,
                         codeRubrique,
-                        dateCreation: currentDate,
                         db: tx
                     });
 

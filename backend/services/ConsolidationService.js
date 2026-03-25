@@ -53,7 +53,10 @@ class ConsolidationService {
 
         const inferredPhase = (optPhase ?? ref?.Phase ?? null);
         const inferredCodeRubrique = (optCodeRubrique ?? ref?.CodeRubrique ?? null);
-        const inferredDateKey = (optDateKey ?? this._localDateKey(ref?.DateCreation || ref?.CreatedAt || ref?.createdAt) ?? null);
+        // Important: ne pas forcer un scope par date si le client n'a pas explicitement fourni
+        // `options.dateCreation`. Sinon, un cycle DEBUT..FIN qui traverse minuit peut être
+        // artificiellement "coupé" et conduire à l'échec de consolidation.
+        const inferredDateKey = optDateKey ?? null;
 
         const scoped = sorted.filter(e => {
             if (inferredDateKey) {
