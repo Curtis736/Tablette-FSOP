@@ -138,8 +138,11 @@ class DurationCalculationService {
         if (pauseEvents.length > repriseEvents.length) {
             const lastPause = pauseEvents[pauseEvents.length - 1];
             const pauseStart = new Date(lastPause.CreatedAt || lastPause.DateCreation);
-            const now = new Date();
-            pauseDuration += Math.floor((now - pauseStart) / (1000 * 60));
+            // Si l'opération est terminée (FIN existe), la pause "ouverte" s'arrête au FIN (pas à maintenant).
+            const pauseEnd = finEvent
+                ? new Date(finEvent.CreatedAt || finEvent.DateCreation)
+                : new Date();
+            pauseDuration += Math.floor((pauseEnd - pauseStart) / (1000 * 60));
         }
         
         // ProductiveDuration = TotalDuration - PauseDuration (en minutes)
