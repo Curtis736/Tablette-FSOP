@@ -46,9 +46,30 @@ class ApiService {
         // Cache simple pour éviter les requêtes redondantes
         this.cache = new Map();
         this.cacheTimeout = 10000; // 10 secondes de cache par défaut
+        this.operatorSessionByCode = new Map();
         
         console.log(`🔗 ApiService configuré pour: ${this.baseUrl}`);
         console.log(`🔍 Host détecté: ${currentHost}:${currentPort}`);
+    }
+
+    setOperatorSessionActive(operatorCode, isActive) {
+        const code = String(operatorCode || '').trim();
+        if (!code) return;
+        if (isActive) {
+            this.operatorSessionByCode.set(code, true);
+        } else {
+            this.operatorSessionByCode.delete(code);
+        }
+    }
+
+    hasOperatorSession(operatorCode) {
+        const code = String(operatorCode || '').trim();
+        if (!code) return false;
+        return this.operatorSessionByCode.get(code) === true;
+    }
+
+    clearOperatorSessions() {
+        this.operatorSessionByCode.clear();
     }
 
     clearMemoryCacheByPrefix(prefix) {
@@ -191,6 +212,9 @@ class ApiService {
                 // Session opérateur expirée -> notifier l'app pour forcer retour écran login
                 if (response.status === 401 && errorData && (errorData.security === 'SESSION_REQUIRED' || errorData.error === 'SESSION_REQUIRED')) {
                     try {
+                        const body = options?.body ? JSON.parse(options.body) : null;
+                        const maybeOperatorId = body?.operatorId || body?.code || null;
+                        if (maybeOperatorId) this.setOperatorSessionActive(maybeOperatorId, false);
                         window.dispatchEvent(new CustomEvent('sedi:session-expired', { detail: { endpoint, errorData } }));
                     } catch (_) {
                         // ignore
@@ -306,11 +330,16 @@ class ApiService {
 
     // Sessions opérateurs (pour cohérence et sécurité côté backend)
     async operatorLogin(code) {
-        return this.post('/operators/login', { code });
+        const result = await this.post('/operators/login', { code });
+        const operatorCode = result?.operator?.code || result?.operator?.id || code;
+        this.setOperatorSessionActive(operatorCode, true);
+        return result;
     }
 
     async operatorLogout(code) {
-        return this.post('/operators/logout', { code });
+        const result = await this.post('/operators/logout', { code });
+        this.setOperatorSessionActive(code, false);
+        return result;
     }
 
     // Opérateurs
@@ -361,6 +390,12 @@ class ApiService {
     }
 
     async startOperation(operatorId, lancementCode, { codeOperation } = {}) {
+        if (!this.hasOperatorSession(operatorId)) {
+            const error = new Error('Session opérateur absente, reconnectez-vous avant de démarrer.');
+            error.errorCode = 'SESSION_REQUIRED';
+            error.errorData = { security: 'SESSION_REQUIRED', hint: 'LOGIN_BEFORE_START' };
+            throw error;
+        }
         return this.post('/operators/start', { operatorId, lancementCode, codeOperation });
     }
 

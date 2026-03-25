@@ -1,7 +1,7 @@
 // Routes pour la gestion des opérateurs
 const express = require('express');
 const router = express.Router();
-const { executeQuery, executeNonQuery, executeProcedure, executeInTransaction } = require('../config/database');
+const { executeQuery, executeNonQuery, executeProcedure } = require('../config/database');
 const TimeUtils = require('../utils/timeUtils');
 const { authenticateOperator } = require('../middleware/auth');
 const dataIsolation = require('../middleware/dataIsolation');
@@ -11,7 +11,7 @@ const dataValidation = require('../services/DataValidationService');
 const SessionService = require('../services/SessionService');
 const AuditService = require('../services/AuditService');
 const { generateRequestId } = require('../middleware/audit');
-const ConsolidationService = require('../services/ConsolidationService');
+const OperationStopService = require('../services/OperationStopService');
 
 // ⚡ OPTIMISATION : Cache pour les validations de lancement (évite les requêtes répétées)
 const lancementCache = new Map();
@@ -1410,71 +1410,22 @@ router.post('/stop', validateOperatorSession, logSecurityAction, async (req, res
             });
         }
         
-        // ✅ Stop robuste: INSERT FIN + consolidation dans une transaction.
-        // Objectif: ne jamais laisser un FIN "orphelin" sans consolidation (sauf cas explicitement "skipped").
-        const maxAttempts = 3;
-        const delayMs = 400;
-        let lastConsolidation = null;
-        for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-            try {
-                lastConsolidation = await executeInTransaction(async (tx) => {
-                    // 1) Insert FIN
-                    const insertQuery = `
-                        INSERT INTO [SEDI_APP_INDEPENDANTE].[dbo].[ABHISTORIQUE_OPERATEURS]
-                        (OperatorCode, CodeLanctImprod, CodeRubrique, Ident, Phase, Statut, HeureDebut, HeureFin, DateCreation)
-                        VALUES (
-                            @operatorId,
-                            @lancementCode,
-                            @codeRubrique,
-                            'FIN',
-                            @phase,
-                            'TERMINE',
-                            NULL,
-                            CAST(@currentTime AS TIME),
-                            CAST(@currentDate AS DATE)
-                        )
-                    `;
-                    await tx.executeNonQuery(insertQuery, {
-                        operatorId,
-                        lancementCode,
-                        codeRubrique,
-                        phase,
-                        currentTime,
-                        currentDate
-                    });
-
-                    // 2) Consolidation dans la même transaction (lit les events incluant FIN)
-                    const consolidationResult = await ConsolidationService.consolidateOperation(operatorId, lancementCode, {
-                        autoFix: true,
-                        phase,
-                        codeRubrique,
-                        dateCreation: currentDate,
-                        db: tx
-                    });
-
-                    // Cas explicitement "skipped" (ex: VLCTC missing): on commite FIN sans ABTEMPS
-                    if (consolidationResult?.skipped) return consolidationResult;
-
-                    if (!consolidationResult?.success) {
-                        const msg = consolidationResult?.error || consolidationResult?.message || 'Consolidation échouée';
-                        throw new Error(msg);
-                    }
-
-                    return consolidationResult;
-                });
-
-                console.log(`✅ Lancement ${lancementCode} terminé + consolidé (tentative ${attempt})`);
-                break;
-            } catch (err) {
-                if (attempt < maxAttempts) {
-                    await new Promise(r => setTimeout(r, delayMs));
-                } else {
-                    console.error(`⚠️ Stop transactionnel échoué après ${maxAttempts} tentatives:`, err?.message || err);
-                }
-            }
+        let stopResult = null;
+        try {
+            stopResult = await OperationStopService.stopOperation({
+                operatorId,
+                lancementCode,
+                phase,
+                codeRubrique,
+                currentTime,
+                currentDate
+            });
+        } catch (err) {
+            console.error('⚠️ Stop transactionnel échoué:', err?.message || err);
         }
 
-        if (!lastConsolidation) {
+        const lastConsolidation = stopResult?.consolidation || null;
+        if (!lastConsolidation && !stopResult?.alreadyFinished) {
             return res.status(500).json({
                 success: false,
                 error: 'STOP_CONSOLIDATION_FAILED',

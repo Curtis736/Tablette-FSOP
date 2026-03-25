@@ -37,6 +37,8 @@ class App {
             try {
                 console.log('🌙 Minuit: déconnexion locale forcée');
                 // Ne pas dépendre du réseau: vider local + UI
+                const code = this.currentOperator?.code || this.currentOperator?.id;
+                if (code) this.apiService.setOperatorSessionActive(code, false);
                 this.currentOperator = null;
                 this.isAdmin = false;
                 window.sessionStorage?.removeItem('sedi_admin_token');
@@ -85,6 +87,8 @@ class App {
                         return;
                     }
                     this.currentOperator = { ...savedOperator, ...validOperator };
+                    const restoredCode = this.currentOperator?.code || this.currentOperator?.id;
+                    if (restoredCode) this.apiService.setOperatorSessionActive(restoredCode, true);
                     this.storageService.setCurrentOperator(this.currentOperator);
                     this.showOperatorScreen();
                     console.log('✅ Opérateur restauré:', validOperator.nom);
@@ -142,6 +146,7 @@ class App {
                 this.currentOperator = null;
                 this.storageService.clearCurrentOperator();
                 this.showLoginScreen();
+                this.apiService.clearOperatorSessions();
                 notificationManager.warning('Session expirée: veuillez vous reconnecter');
             } catch (_) {
                 // ignore
@@ -189,6 +194,8 @@ class App {
             }
 
             this.currentOperator = operator;
+            const code = operator.code || operator.id;
+            if (code) this.apiService.setOperatorSessionActive(code, true);
             this.storageService.setCurrentOperator(operator);
             this.showOperatorScreen();
             notificationManager.success(`Bienvenue ${operator.nom}`);
@@ -248,6 +255,7 @@ class App {
         this.currentOperator = null;
         this.isAdmin = false;
         window.sessionStorage?.removeItem('sedi_admin_token');
+        this.apiService.clearOperatorSessions();
         this.storageService.clearCurrentOperator();
         this.showLoginScreen();
         notificationManager.info('Déconnexion réussie');

@@ -19,6 +19,7 @@ class OperateurInterface {
         this.pauseStartTime = null;
         this.pendingForceReplace = false; // Flag pour forcer le remplacement après confirmation
         this.cachedOperators = null; // Cache pour la liste des opérateurs
+        this.startRequestInFlight = false;
 
         // Debouncing pour éviter les clics répétés
         this.lastActionTime = 0;
@@ -1737,6 +1738,11 @@ class OperateurInterface {
     }
 
     async handleStart() {
+        if (this.startRequestInFlight) {
+            this.notificationManager.warning('Démarrage déjà en cours, veuillez patienter');
+            return;
+        }
+
         const code = this.lancementInput.value.trim();
         if (!code) {
             this.notificationManager.error('Veuillez saisir un code de lancement');
@@ -1751,6 +1757,7 @@ class OperateurInterface {
         if (!this.canPerformAction()) return;
 
         try {
+            this.startRequestInFlight = true;
             const operatorCode = this.operator.code || this.operator.id;
             const stepGroupVisible = this.operationStepGroup && this.operationStepGroup.style.display !== 'none';
             const selectedStep = this.operationStepSelect ? String(this.operationStepSelect.value || '').trim() : '';
@@ -1806,6 +1813,8 @@ class OperateurInterface {
                 return;
             }
             this.notificationManager.error(error.message || 'Erreur de connexion');
+        } finally {
+            this.startRequestInFlight = false;
         }
     }
 

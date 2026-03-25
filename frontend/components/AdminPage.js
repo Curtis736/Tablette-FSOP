@@ -29,6 +29,7 @@ class AdminPage {
         this.currentPage = 1;
         this.pageSize = 25;
         this._loadSeq = 0; // protège contre les réponses "en retard" (stale render)
+        this.selectedOperatorCode = ''; // persiste le filtre opérateur entre refresh
         this.transferSelectionIds = new Set(); // sélection dans la modale de transfert (TempsId)
         this.selectedTempsIds = new Set(); // sélection de lignes dans le tableau principal (TempsId)
         
@@ -188,6 +189,7 @@ class AdminPage {
                 if (clearFiltersBtn) {
                     clearFiltersBtn.addEventListener('click', () => {
                         if (operatorSelect) operatorSelect.value = '';
+                        this.selectedOperatorCode = '';
                         if (statusFilter) statusFilter.value = '';
                         if (periodFilter) periodFilter.value = 'today';
                         if (searchFilter) searchFilter.value = '';
@@ -412,7 +414,7 @@ class AdminPage {
             // Charger les opérations consolidées depuis ABTEMPS_OPERATEURS
             const operatorFilter = this.domCache.get('operatorFilter');
             const searchFilter = this.domCache.get('searchFilter');
-            const operatorCode = operatorFilter?.value || undefined;
+            const operatorCode = this.selectedOperatorCode || operatorFilter?.value || undefined;
             const lancementCode = searchFilter?.value?.trim() || undefined;
 
             const filters = { ...periodRange };
@@ -780,6 +782,14 @@ class AdminPage {
         // Calculer les statistiques depuis les opérations affichées dans le tableau
         // Cela garantit la cohérence entre le tableau et les statistiques
         const allOps = Array.isArray(opsOverride) ? opsOverride : (this._lastFilteredOperationsForStats || this.operations || []);
+        const normalizeStatus = (op) => {
+            const status = (op?.StatusCode || op?.statusCode || '').toString().toUpperCase();
+            const statusLabel = (op?.Status || op?.status || '').toString().toUpperCase();
+            const hasEndTime = !!(op?.EndTime && op.EndTime !== '-' && op.EndTime !== 'N/A' && String(op.EndTime).trim() !== '');
+            if (status.includes('TERMINE') || statusLabel.includes('TERMIN') || hasEndTime) return 'TERMINE';
+            if (status.includes('PAUSE') || statusLabel.includes('PAUSE')) return 'EN_PAUSE';
+            return 'EN_COURS';
+        };
 
         const getOperatorCode = (op) => {
             // Best-effort selon les différentes sources (admin ops vs monitoring)
@@ -800,22 +810,15 @@ class AdminPage {
         
         // Compter les opérations par statut depuis les données réelles
         const activeOps = allOps.filter(op => {
-            const status = (op.StatusCode || op.statusCode || '').toUpperCase();
-            const statusLabel = (op.Status || op.status || '').toUpperCase();
-            return status === 'EN_COURS' || statusLabel.includes('EN COURS');
+            return normalizeStatus(op) === 'EN_COURS';
         });
         
         const pausedOps = allOps.filter(op => {
-            const status = (op.StatusCode || op.statusCode || '').toUpperCase();
-            const statusLabel = (op.Status || op.status || '').toUpperCase();
-            return status === 'EN_PAUSE' || status === 'PAUSE' || statusLabel.includes('PAUSE');
+            return normalizeStatus(op) === 'EN_PAUSE';
         });
         
         const completedOps = allOps.filter(op => {
-            const status = (op.StatusCode || op.statusCode || '').toUpperCase();
-            const statusLabel = (op.Status || op.status || '').toUpperCase();
-            const hasEndTime = op.EndTime && op.EndTime !== '-' && op.EndTime !== 'N/A' && op.EndTime.trim() !== '';
-            return status === 'TERMINE' || statusLabel.includes('TERMIN') || hasEndTime;
+            return normalizeStatus(op) === 'TERMINE';
         });
 
         // Compter les "lancements" par LT unique (sinon ça double quand plusieurs opérateurs travaillent sur le même LT)
@@ -965,6 +968,11 @@ class AdminPage {
             connectés: connectedOperators.length,
             globaux: allOperators.length
         });
+
+        const previousSelected =
+            this.selectedOperatorCode ||
+            this.operatorSelect?.value ||
+            '';
         
         // Vider le select et ajouter l'option par défaut
         clearElement(this.operatorSelect);
@@ -1034,6 +1042,14 @@ class AdminPage {
             
             this.operatorSelect.appendChild(optgroupAll);
         }
+
+        if (previousSelected) {
+            const exists = Array.from(this.operatorSelect.options || []).some(opt => String(opt.value) === String(previousSelected));
+            if (exists) {
+                this.operatorSelect.value = previousSelected;
+            }
+        }
+        this.selectedOperatorCode = this.operatorSelect?.value || '';
         
         this.logger.log('✅ Menu déroulant mis à jour avec', connectedOperators.length, 'connectés et', allOperators.length, 'globaux');
     }
@@ -1122,6 +1138,7 @@ class AdminPage {
         }
         
         const selectedOperator = this.operatorSelect.value;
+        this.selectedOperatorCode = selectedOperator || '';
         this.logger.log('🔄 Changement d\'opérateur sélectionné:', selectedOperator);
 
         // En mode Monitoring, le filtre opérateur est appliqué via loadMonitoringRecords()
@@ -1133,7 +1150,9 @@ class AdminPage {
         }
         const selectAll = this.domCache.get('selectAllRows');
         if (selectAll) selectAll.checked = false;
-        await this.loadData();
+        this.updateOperationsTable();
+        this.updatePaginationInfo();
+        this.loadData();
     }
 
     async handleAddOperation() {
@@ -1330,6 +1349,14 @@ class AdminPage {
         
         // Appliquer les filtres
         let filteredOperations = [...this.operations];
+        const normalizeStatus = (op) => {
+            const status = (op?.StatusCode || op?.statusCode || '').toString().toUpperCase();
+            const statusLabel = (op?.Status || op?.status || '').toString().toUpperCase();
+            const hasEndTime = !!(op?.EndTime && op.EndTime !== '-' && op.EndTime !== 'N/A' && String(op.EndTime).trim() !== '');
+            if (status.includes('TERMINE') || statusLabel.includes('TERMIN') || hasEndTime) return 'TERMINE';
+            if (status.includes('PAUSE') || statusLabel.includes('PAUSE')) return 'EN_PAUSE';
+            return 'EN_COURS';
+        };
         
         // Filtre statut opération (EN_COURS / EN_PAUSE / TERMINE)
         const statusFilter = document.getElementById('statusFilter');
@@ -1337,18 +1364,17 @@ class AdminPage {
 
         if (selectedOpStatus && selectedOpStatus !== '') {
             filteredOperations = filteredOperations.filter(op => {
-                const sc = (op?.StatusCode || op?.statusCode || '').toString().trim().toUpperCase();
-                const statusLabel = (op?.Status || op?.status || '').toString().trim().toUpperCase();
-                if (selectedOpStatus === 'EN_COURS') return sc === 'EN_COURS' || statusLabel.includes('EN COURS');
-                if (selectedOpStatus === 'EN_PAUSE') return sc === 'EN_PAUSE' || sc === 'PAUSE' || statusLabel.includes('PAUSE');
-                if (selectedOpStatus === 'TERMINE') return sc === 'TERMINE' || sc === 'TERMINÉ' || statusLabel.includes('TERMIN');
+                const normalized = normalizeStatus(op);
+                if (selectedOpStatus === 'EN_COURS') return normalized === 'EN_COURS';
+                if (selectedOpStatus === 'EN_PAUSE') return normalized === 'EN_PAUSE';
+                if (selectedOpStatus === 'TERMINE') return normalized === 'TERMINE';
                 return true;
             });
         }
         
         // Filtre opérateur
         const operatorSelect = this.domCache.get('operatorFilter');
-        const selectedOperatorCode = operatorSelect?.value?.toString().trim();
+        const selectedOperatorCode = (this.selectedOperatorCode || operatorSelect?.value || '').toString().trim();
         if (selectedOperatorCode) {
             this.logger.log('👤 Filtrage par opérateur:', selectedOperatorCode);
             filteredOperations = filteredOperations.filter(op => {

@@ -430,6 +430,56 @@ function scheduleDailyAutoCloseOperations() {
     scheduleNextRun();
 }
 
+// Contrôle Factorial toutes les 30 min à partir de 17h (heure serveur)
+function scheduleFactorialDepointedChecks() {
+    const enabled = String(process.env.ENABLE_FACTORIAL_AUTOCLOSE || 'true').toLowerCase() === 'true';
+    if (!enabled) {
+        console.log('🕔 Contrôle Factorial désactivé (ENABLE_FACTORIAL_AUTOCLOSE!=true)');
+        return;
+    }
+
+    const maintenance = new MaintenanceManager();
+    const parsedStartHour = Number.parseInt(process.env.FACTORIAL_CHECK_START_HOUR || '17', 10);
+    const startHour = Number.isNaN(parsedStartHour) ? 17 : Math.min(Math.max(parsedStartHour, 0), 23);
+    const parsedInterval = Number.parseInt(process.env.FACTORIAL_CHECK_INTERVAL_MINUTES || '30', 10);
+    const intervalMinutes = Number.isNaN(parsedInterval) || parsedInterval <= 0 ? 30 : parsedInterval;
+
+    const scheduleNextRun = () => {
+        const now = new Date();
+        const next = new Date(now);
+
+        // Aligner sur les demi-heures (ou interval configuré) à partir de l'heure courante.
+        next.setSeconds(0, 0);
+        const currentMinutes = next.getMinutes();
+        const remainder = currentMinutes % intervalMinutes;
+        if (remainder === 0) {
+            next.setMinutes(currentMinutes + intervalMinutes);
+        } else {
+            next.setMinutes(currentMinutes + (intervalMinutes - remainder));
+        }
+
+        const delay = Math.max(1000, next.getTime() - now.getTime());
+        console.log(`🕔 Prochain contrôle Factorial planifié à ${next.toISOString()} (dans ${Math.round(delay / 1000)} secondes).`);
+
+        setTimeout(async () => {
+            try {
+                const currentHour = new Date().getHours();
+                    if (currentHour >= startHour) {
+                        await maintenance.syncFactorialInOutAndAutoCloseClockOut();
+                } else {
+                    console.log(`🕔 Contrôle Factorial ignoré: avant ${startHour}h.`);
+                }
+            } catch (error) {
+                console.error('❌ Erreur lors du contrôle Factorial:', error);
+            } finally {
+                scheduleNextRun();
+            }
+        }, delay);
+    };
+
+    scheduleNextRun();
+}
+
 if (shouldStartServer()) {
     // Utiliser le port 3033 pour le développement local, sinon utiliser PORT (3001)
     const devPort = process.env.NODE_ENV === 'development' ? 3033 : PORT;
@@ -457,6 +507,9 @@ if (shouldStartServer()) {
 
                 // Planifier la clôture automatique quotidienne des opérations (par défaut activée)
                 scheduleDailyAutoCloseOperations();
+
+                // Vérifier les dépointages Factorial à partir de 17h toutes les 30 minutes
+                scheduleFactorialDepointedChecks();
                 
                 resolve(serverInstance);
             });

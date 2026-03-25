@@ -41,7 +41,10 @@ const scripts = [
     { name: '6. Scripts: Procédures stockées mapping opérateurs', file: 'scripts_operator_mapping.sql' },
     { name: '7. Migration: Table de mapping lancements (V_LCTC)', file: 'migration_create_lancement_mapping.sql' },
     { name: '8. Scripts: Procédures stockées mapping lancements', file: 'scripts_lancement_mapping.sql' },
-    { name: '9. Migration: Update V_LCTC (ajout désignations)', file: 'migration_update_v_lctc_add_designations.sql' }
+    { name: '9. Migration: Update V_LCTC (ajout désignations)', file: 'migration_update_v_lctc_add_designations.sql' },
+    { name: '10. Migration: Mapping opérateurs Factorial', file: 'migration_create_factorial_operator_mapping.sql' },
+    { name: '11. Migration: Nettoyage colonnes mapping Factorial', file: 'migration_cleanup_factorial_mapping_columns.sql' },
+    { name: '12. Migration: Tables Factorial IN/OUT', file: 'migration_create_factorial_clock_tables.sql' }
 ];
 
 function splitSqlBatches(sqlContent) {

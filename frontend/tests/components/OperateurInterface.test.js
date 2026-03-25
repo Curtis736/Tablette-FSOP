@@ -366,6 +366,13 @@ describe('OperateurInterface', () => {
             
             expect(mockNotificationManager.error).toHaveBeenCalled();
         });
+
+        it('devrait bloquer un double démarrage simultané', async () => {
+            operInterface.startRequestInFlight = true;
+            await operInterface.handleStart();
+            expect(mockApiService.startOperation).not.toHaveBeenCalled();
+            expect(mockNotificationManager.warning).toHaveBeenCalled();
+        });
     });
 
     describe('handlePause', () => {
@@ -417,7 +424,6 @@ describe('OperateurInterface', () => {
             
             expect(mockApiService.stopOperation).toHaveBeenCalledWith('OP001', 'LT1234567', {});
             expect(operInterface.setFinalEndTime).toHaveBeenCalled();
-            expect(operInterface.stopTimer).toHaveBeenCalled();
             expect(operInterface.resetControls).toHaveBeenCalled();
             expect(mockNotificationManager.success).toHaveBeenCalled();
         });
