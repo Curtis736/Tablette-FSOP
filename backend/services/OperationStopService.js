@@ -57,7 +57,11 @@ class OperationStopService {
                         db: tx
                     });
 
-                    if (consolidationResult?.skipped) return consolidationResult;
+                    if (consolidationResult?.skipped) {
+                        // Ne pas considérer "skipped" comme une erreur côté arrêt d'opération.
+                        // Exemple normal: lancement absent de V_LCTC => VLCTC_MISSING.
+                        return { ...consolidationResult, success: true };
+                    }
                     if (!consolidationResult?.success) {
                         const msg = consolidationResult?.error || consolidationResult?.message || 'Consolidation échouée';
                         throw new Error(msg);
