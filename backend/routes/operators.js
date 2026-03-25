@@ -861,10 +861,9 @@ router.post('/start', validateOperatorSession, logSecurityAction, async (req, re
                 CodeRubrique
             FROM [SEDI_APP_INDEPENDANTE].[dbo].[ABHISTORIQUE_OPERATEURS]
             WHERE OperatorCode = @operatorId
-              AND CAST(DateCreation AS DATE) = CAST(@currentDate AS DATE)
             ORDER BY DateCreation DESC, NoEnreg DESC
         `;
-        const opLastRows = await executeQuery(operatorLastEventQuery, { operatorId, currentDate });
+        const opLastRows = await executeQuery(operatorLastEventQuery, { operatorId });
         const opLast = opLastRows && opLastRows[0] ? opLastRows[0] : null;
         const opLastIdent = String(opLast?.Ident || '').toUpperCase();
         const opLastStatut = String(opLast?.Statut || '').toUpperCase();
@@ -1120,6 +1119,14 @@ router.post('/pause', validateOperatorSession, logSecurityAction, async (req, re
             });
         }
         
+        // Récupérer la session active et mettre à jour LastActivityTime (pour corrélation et audit)
+        const activeSession = await SessionService.getActiveSession(operatorId);
+        if (activeSession) {
+            await SessionService.updateLastActivity(operatorId, activeSession.SessionId);
+        }
+
+        const requestId = req.audit?.requestId || generateRequestId();
+
         // Obtenir l'heure française actuelle
         const { time: currentTime, date: currentDate } = TimeUtils.getCurrentDateTime();
         
@@ -1127,11 +1134,11 @@ router.post('/pause', validateOperatorSession, logSecurityAction, async (req, re
 
         // phase/codeRubrique déjà résolus plus haut
         
-        // Enregistrer l'événement PAUSE dans ABHISTORIQUE_OPERATEURS avec l'heure française
+        // Enregistrer l'événement PAUSE dans ABHISTORIQUE_OPERATEURS avec corrélation session
         await executeNonQuery(
             `
             INSERT INTO [SEDI_APP_INDEPENDANTE].[dbo].[ABHISTORIQUE_OPERATEURS]
-            (OperatorCode, CodeLanctImprod, CodeRubrique, Ident, Phase, Statut, HeureDebut, HeureFin, DateCreation)
+            (OperatorCode, CodeLanctImprod, CodeRubrique, Ident, Phase, Statut, HeureDebut, HeureFin, DateCreation, SessionId, RequestId, CreatedAt)
             VALUES (
                 @operatorId,
                 @lancementCode,
@@ -1141,10 +1148,22 @@ router.post('/pause', validateOperatorSession, logSecurityAction, async (req, re
                 'EN_PAUSE',
                 CAST(@currentTime AS TIME),
                 NULL,
-                CAST(@currentDate AS DATE)
+                CAST(@currentDate AS DATE),
+                @sessionId,
+                @requestId,
+                GETDATE()
             )
             `,
-            { operatorId, lancementCode, codeRubrique, phase, currentTime, currentDate }
+            {
+                operatorId,
+                lancementCode,
+                codeRubrique,
+                phase,
+                currentTime,
+                currentDate,
+                sessionId: activeSession ? activeSession.SessionId : null,
+                requestId
+            }
         );
         
         console.log(` Lancement ${lancementCode} mis en pause par opérateur ${operatorId}`);
@@ -1215,6 +1234,14 @@ router.post('/resume', validateOperatorSession, logSecurityAction, async (req, r
             });
         }
 
+        // Récupérer la session active et mettre à jour LastActivityTime (pour corrélation et audit)
+        const activeSession = await SessionService.getActiveSession(operatorId);
+        if (activeSession) {
+            await SessionService.updateLastActivity(operatorId, activeSession.SessionId);
+        }
+
+        const requestId = req.audit?.requestId || generateRequestId();
+
         // Obtenir l'heure française actuelle
         const { time: currentTime, date: currentDate } = TimeUtils.getCurrentDateTime();
 
@@ -1224,7 +1251,7 @@ router.post('/resume', validateOperatorSession, logSecurityAction, async (req, r
                 await executeNonQuery(
                     `
                     INSERT INTO [SEDI_APP_INDEPENDANTE].[dbo].[ABHISTORIQUE_OPERATEURS]
-                    (OperatorCode, CodeLanctImprod, CodeRubrique, Ident, Phase, Statut, HeureDebut, HeureFin, DateCreation)
+                    (OperatorCode, CodeLanctImprod, CodeRubrique, Ident, Phase, Statut, HeureDebut, HeureFin, DateCreation, SessionId, RequestId, CreatedAt)
                     VALUES (
                         @operatorId,
                         @lancementCode,
@@ -1234,10 +1261,22 @@ router.post('/resume', validateOperatorSession, logSecurityAction, async (req, r
                         'TERMINE',
                         NULL,
                         CAST(@heureFin AS TIME),
-                        CAST(@dateCreation AS DATE)
+                        CAST(@dateCreation AS DATE),
+                        @sessionId,
+                        @requestId,
+                        GETDATE()
                     )
                     `,
-                    { operatorId, lancementCode, codeRubrique, phase, heureFin: lastHeure || '23:59:00', dateCreation: lastDate }
+                    {
+                        operatorId,
+                        lancementCode,
+                        codeRubrique,
+                        phase,
+                        heureFin: lastHeure || '23:59:00',
+                        dateCreation: lastDate,
+                        sessionId: activeSession ? activeSession.SessionId : null,
+                        requestId
+                    }
                 );
                 console.log(`✅ Auto-FIN (veille) via /resume pour ${operatorId}/${lancementCode} (${lastDate})`);
             } catch (e) {
@@ -1248,7 +1287,7 @@ router.post('/resume', validateOperatorSession, logSecurityAction, async (req, r
             await executeNonQuery(
                 `
                 INSERT INTO [SEDI_APP_INDEPENDANTE].[dbo].[ABHISTORIQUE_OPERATEURS]
-                (OperatorCode, CodeLanctImprod, CodeRubrique, Ident, Phase, Statut, HeureDebut, HeureFin, DateCreation)
+                (OperatorCode, CodeLanctImprod, CodeRubrique, Ident, Phase, Statut, HeureDebut, HeureFin, DateCreation, SessionId, RequestId, CreatedAt)
                 VALUES (
                     @operatorId,
                     @lancementCode,
@@ -1258,10 +1297,22 @@ router.post('/resume', validateOperatorSession, logSecurityAction, async (req, r
                     'EN_COURS',
                     CAST(@currentTime AS TIME),
                     NULL,
-                    CAST(@currentDate AS DATE)
+                    CAST(@currentDate AS DATE),
+                    @sessionId,
+                    @requestId,
+                    GETDATE()
                 )
                 `,
-                { operatorId, lancementCode, codeRubrique, phase, currentTime, currentDate }
+                {
+                    operatorId,
+                    lancementCode,
+                    codeRubrique,
+                    phase,
+                    currentTime,
+                    currentDate,
+                    sessionId: activeSession ? activeSession.SessionId : null,
+                    requestId
+                }
             );
 
             return res.json({
@@ -1290,11 +1341,11 @@ router.post('/resume', validateOperatorSession, logSecurityAction, async (req, r
 
         // phase/codeRubrique déjà résolus plus haut
         
-        // Enregistrer l'événement REPRISE dans ABHISTORIQUE_OPERATEURS avec l'heure française
+        // Enregistrer l'événement REPRISE dans ABHISTORIQUE_OPERATEURS avec corrélation session
         await executeNonQuery(
             `
             INSERT INTO [SEDI_APP_INDEPENDANTE].[dbo].[ABHISTORIQUE_OPERATEURS]
-            (OperatorCode, CodeLanctImprod, CodeRubrique, Ident, Phase, Statut, HeureDebut, HeureFin, DateCreation)
+            (OperatorCode, CodeLanctImprod, CodeRubrique, Ident, Phase, Statut, HeureDebut, HeureFin, DateCreation, SessionId, RequestId, CreatedAt)
             VALUES (
                 @operatorId,
                 @lancementCode,
@@ -1304,10 +1355,22 @@ router.post('/resume', validateOperatorSession, logSecurityAction, async (req, r
                 'EN_COURS',
                 CAST(@currentTime AS TIME),
                 NULL,
-                CAST(@currentDate AS DATE)
+                CAST(@currentDate AS DATE),
+                @sessionId,
+                @requestId,
+                GETDATE()
             )
             `,
-            { operatorId, lancementCode, codeRubrique, phase, currentTime, currentDate }
+            {
+                operatorId,
+                lancementCode,
+                codeRubrique,
+                phase,
+                currentTime,
+                currentDate,
+                sessionId: activeSession ? activeSession.SessionId : null,
+                requestId
+            }
         );
         
         console.log(` Lancement ${lancementCode} repris par opérateur ${operatorId}`);
