@@ -101,10 +101,13 @@ services:
       context: ..
       dockerfile: docker/Dockerfile.frontend
     container_name: sedi-tablette-frontend
+    user: "0:0"
     ports:
       - "8080:80"
     environment:
       - TZ=Europe/Paris
+    volumes:
+      - /etc/letsencrypt:/etc/letsencrypt:ro
     depends_on:
       - backend
     networks:
