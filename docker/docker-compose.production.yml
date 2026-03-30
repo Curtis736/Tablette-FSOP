@@ -44,6 +44,10 @@ services:
       - DB_ERP_PASSWORD=${DB_ERP_PASSWORD}
       - DB_ERP_ENCRYPT=${DB_ERP_ENCRYPT:-false}
       - DB_ERP_TRUST_CERT=${DB_ERP_TRUST_CERT:-true}
+      # SQL timeouts/retries (important when SQL Server is temporarily slow)
+      - DB_REQUEST_TIMEOUT_MS=${DB_REQUEST_TIMEOUT_MS:-60000}
+      - DB_CONNECTION_TIMEOUT_MS=${DB_CONNECTION_TIMEOUT_MS:-60000}
+      - DB_QUERY_RETRIES=${DB_QUERY_RETRIES:-2}
       # Default container paths (override via docker/.env if needed)
       - TRACEABILITY_DIR=${TRACEABILITY_DIR:-/mnt/services/Tracabilite}
       - FSOP_SEARCH_DEPTH=${FSOP_SEARCH_DEPTH:-3}
