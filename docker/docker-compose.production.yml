@@ -28,6 +28,8 @@ services:
       # Admin authentication (override via docker/.env if needed)
       - ADMIN_USERNAME=${ADMIN_USERNAME:-admin}
       - ADMIN_PASSWORD=${ADMIN_PASSWORD}
+      - JWT_SECRET=${JWT_SECRET}
+      - SESSION_SECRET=${SESSION_SECRET:-${JWT_SECRET}}
       # Database (override via docker/.env for your VM)
       # DB principale de l'app (SEDI_APP_INDEPENDANTE) + base ERP (SEDI_ERP)
       - DB_SERVER=${DB_SERVER:-SERVEURERP}
