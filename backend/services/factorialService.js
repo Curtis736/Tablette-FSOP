@@ -1,6 +1,38 @@
 const axios = require('axios');
 
 class FactorialService {
+    static _classifyAxiosError(error) {
+        if (error?.code === 'ECONNABORTED' || error?.code === 'ETIMEDOUT') {
+            return { reason: 'timeout', httpStatus: null };
+        }
+        if (error?.code === 'ECONNREFUSED' || error?.code === 'ENOTFOUND') {
+            return { reason: 'network_unreachable', httpStatus: null };
+        }
+        const status = error?.response?.status ?? null;
+        if (status === 401 || status === 403) {
+            return { reason: 'auth_error', httpStatus: status };
+        }
+        if (status && status >= 500) {
+            return { reason: 'server_error', httpStatus: status };
+        }
+        if (status && status >= 400) {
+            return { reason: 'client_error', httpStatus: status };
+        }
+        return { reason: 'request_failed', httpStatus: status };
+    }
+
+    static _buildErrorReturn(error, extra = {}) {
+        const { reason, httpStatus } = this._classifyAxiosError(error);
+        return {
+            success: false,
+            skipped: true,
+            reason,
+            httpStatus,
+            error: error?.response?.data || error?.message || 'unknown_error',
+            ...extra
+        };
+    }
+
     static _baseApiUrl() {
         return (process.env.FACTORIAL_API_BASE_URL || '').replace(/\/+$/, '');
     }
@@ -42,7 +74,7 @@ class FactorialService {
 
         const status = String(payload?.status || payload?.attendance_status || payload?.attendanceStatus || '').toUpperCase();
         if (status) {
-            if (['CLOCKED_OUT', 'CHECKED_OUT', 'OFF', 'OUT', 'DEPOINTE', 'DEPOINTE'].includes(status)) return true;
+            if (['CLOCKED_OUT', 'CHECKED_OUT', 'OFF', 'OUT', 'DEPOINTE'].includes(status)) return true;
             if (['CLOCKED_IN', 'CHECKED_IN', 'IN', 'WORKING', 'POINTE', 'POINTEE'].includes(status)) return false;
         }
 
@@ -91,13 +123,7 @@ class FactorialService {
                 raw: payload
             };
         } catch (error) {
-            return {
-                success: false,
-                skipped: true,
-                reason: 'request_failed',
-                depointed: null,
-                error: error?.response?.data || error?.message || 'unknown_error'
-            };
+            return this._buildErrorReturn(error, { depointed: null });
         }
     }
 
@@ -144,13 +170,7 @@ class FactorialService {
                 shifts: this._extractShiftsArray(response?.data || {})
             };
         } catch (error) {
-            return {
-                success: false,
-                skipped: true,
-                reason: 'request_failed',
-                shifts: [],
-                error: error?.response?.data || error?.message || 'unknown_error'
-            };
+            return this._buildErrorReturn(error, { shifts: [] });
         }
     }
 
@@ -190,13 +210,7 @@ class FactorialService {
                 shifts: this._extractShiftsArray(response?.data || {})
             };
         } catch (error) {
-            return {
-                success: false,
-                skipped: true,
-                reason: 'request_failed',
-                shifts: [],
-                error: error?.response?.data || error?.message || 'unknown_error'
-            };
+            return this._buildErrorReturn(error, { shifts: [] });
         }
     }
 }

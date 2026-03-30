@@ -1,7 +1,50 @@
 const { executeQuery, executeNonQuery } = require('../config/database');
-const FactorialService = require('./factorialService');
+const FactorialService = require('./FactorialService');
 
 class FactorialShiftSyncService {
+    static _isUniqueConstraintViolation(error) {
+        const n = error?.number ?? error?.originalError?.number;
+        return n === 2601 || n === 2627;
+    }
+
+    static _eventLookupKey(e) {
+        return `${String(e.FactorialEmployeeId).trim()}|${String(e.ShiftId).trim()}|${String(e.EventType).trim()}`;
+    }
+
+    static async _loadExistingEventKeysSet(events) {
+        const tuples = events
+            .filter(ev => ev?.FactorialEmployeeId && ev?.ShiftId && ev?.EventType)
+            .map(ev => ({
+                FactorialEmployeeId: ev.FactorialEmployeeId,
+                ShiftId: ev.ShiftId,
+                EventType: ev.EventType
+            }));
+        if (tuples.length === 0) return new Set();
+
+        const keysJson = JSON.stringify(tuples);
+        const rows = await executeQuery(
+            `
+            SELECT ce.FactorialEmployeeId, ce.ShiftId, ce.EventType
+            FROM OPENJSON(@keysJson) WITH (
+                FactorialEmployeeId NVARCHAR(100) '$.FactorialEmployeeId',
+                ShiftId NVARCHAR(100) '$.ShiftId',
+                EventType NVARCHAR(3) '$.EventType'
+            ) j
+            INNER JOIN [SEDI_APP_INDEPENDANTE].[dbo].[AB_FACTORIAL_CLOCK_EVENTS] ce
+              ON ce.FactorialEmployeeId = j.FactorialEmployeeId
+             AND ce.ShiftId = j.ShiftId
+             AND ce.EventType = j.EventType
+            `,
+            { keysJson }
+        );
+
+        const set = new Set();
+        for (const row of rows || []) {
+            set.add(this._eventLookupKey(row));
+        }
+        return set;
+    }
+
     static _toDate(value) {
         if (!value) return null;
         const d = value instanceof Date ? value : new Date(value);
@@ -126,7 +169,6 @@ class FactorialShiftSyncService {
     }
 
     static async _upsertPollStateForEmployees(updates) {
-        // updates: [{ FactorialEmployeeId, LastProcessedClockInAt, LastProcessedClockOutAt, LastProcessedShiftId }]
         for (const u of updates) {
             await executeNonQuery(
                 `
@@ -159,27 +201,51 @@ class FactorialShiftSyncService {
             return { success: true, checkedEmployees: 0, insertedOutEvents: [], insertedInEvents: 0, skipped: true, reason: 'no_employees' };
         }
 
-        // Poll window
         const now = new Date();
         const fromAt = new Date(now.getTime() - lookbackDays * 24 * 60 * 60 * 1000);
 
         const pollStateByEmployee = await this._getPollStateForEmployees(cleaned);
 
-        // 1) open shifts (clock-in for open shifts)
         const openResp = await FactorialService.getOpenShifts(cleaned);
-        const openShifts = openResp?.success ? openResp.shifts : [];
+        const openOk = openResp?.success === true;
+        const openShifts = openOk ? openResp.shifts : [];
 
-        // 2) shifts (clock-out)
         const shiftsResp = await FactorialService.getShifts(cleaned, { fromAt, toAt: now });
-        const shifts = shiftsResp?.success ? shiftsResp.shifts : [];
+        const shiftsOk = shiftsResp?.success === true;
+        const shifts = shiftsOk ? shiftsResp.shifts : [];
 
-        // Normalize events for all shifts
+        const openErr = openOk ? null : openResp?.error ?? openResp?.reason ?? 'request_failed';
+        const shiftsErr = shiftsOk ? null : shiftsResp?.error ?? shiftsResp?.reason ?? 'request_failed';
+
+        if (!openOk && !shiftsOk) {
+            return {
+                success: false,
+                skipped: false,
+                reason: 'factorial_api_failed',
+                apiErrors: { openShifts: openErr, shifts: shiftsErr },
+                partialApiFailure: false,
+                apiPartialDetails: null,
+                checkedEmployees: cleaned.length,
+                insertedOutEvents: [],
+                insertedInEvents: 0
+            };
+        }
+
+        const partialApiFailure = !openOk || !shiftsOk;
+        const apiPartialDetails = partialApiFailure
+            ? {
+                  openShiftsOk: openOk,
+                  shiftsOk,
+                  ...(openOk ? {} : { openShiftsError: openErr }),
+                  ...(shiftsOk ? {} : { shiftsError: shiftsErr })
+              }
+            : null;
+
         const allEvents = [
             ...openShifts.flatMap(s => this._buildEventTypeEventsForShift(s)),
             ...shifts.flatMap(s => this._buildEventTypeEventsForShift(s))
         ];
 
-        // Deduplicate events in-memory (by unique key)
         const seen = new Set();
         const events = [];
         for (const e of allEvents) {
@@ -190,11 +256,11 @@ class FactorialShiftSyncService {
             events.push(e);
         }
 
-        // Candidate “new OUT” detection based on poll state
         const insertedOutEvents = [];
         let insertedInEvents = 0;
 
-        // Preload candidates existence per event (simple per-event existence check)
+        const existingKeys = await this._loadExistingEventKeysSet(events);
+
         for (const e of events) {
             const prev = pollStateByEmployee[String(e.FactorialEmployeeId).trim()] || null;
             const prevOut = prev?.LastProcessedClockOutAt ? new Date(prev.LastProcessedClockOutAt) : null;
@@ -207,34 +273,34 @@ class FactorialShiftSyncService {
                 return !prevIn || e.EventAt > prevIn;
             })();
 
-            const existsRows = await executeQuery(
-                `
-                SELECT TOP 1 Id
-                FROM [SEDI_APP_INDEPENDANTE].[dbo].[AB_FACTORIAL_CLOCK_EVENTS]
-                WHERE FactorialEmployeeId = @FactorialEmployeeId
-                  AND ShiftId = @ShiftId
-                  AND EventType = @EventType
-                `,
-                { FactorialEmployeeId: e.FactorialEmployeeId, ShiftId: e.ShiftId, EventType: e.EventType }
-            );
+            const lookupKey = this._eventLookupKey(e);
+            if (existingKeys.has(lookupKey)) continue;
 
-            if (existsRows && existsRows.length > 0) continue;
-
-            await executeNonQuery(
-                `
+            try {
+                await executeNonQuery(
+                    `
                 INSERT INTO [SEDI_APP_INDEPENDANTE].[dbo].[AB_FACTORIAL_CLOCK_EVENTS]
                     (FactorialEmployeeId, ShiftId, EventType, EventAt, RawPayload)
                 VALUES
                     (@FactorialEmployeeId, @ShiftId, @EventType, @EventAt, @RawPayload)
                 `,
-                {
-                    FactorialEmployeeId: e.FactorialEmployeeId,
-                    ShiftId: e.ShiftId,
-                    EventType: e.EventType,
-                    EventAt: e.EventAt,
-                    RawPayload: e.RawPayload
+                    {
+                        FactorialEmployeeId: e.FactorialEmployeeId,
+                        ShiftId: e.ShiftId,
+                        EventType: e.EventType,
+                        EventAt: e.EventAt,
+                        RawPayload: e.RawPayload
+                    }
+                );
+            } catch (err) {
+                if (this._isUniqueConstraintViolation(err)) {
+                    existingKeys.add(lookupKey);
+                    continue;
                 }
-            );
+                throw err;
+            }
+
+            existingKeys.add(lookupKey);
 
             if (e.EventType === 'IN') insertedInEvents += 1;
             if (e.EventType === 'OUT' && isNewByState) {
@@ -246,7 +312,6 @@ class FactorialShiftSyncService {
             }
         }
 
-        // Update poll state: set max processed in/out for each employee (based on inserted events)
         const updatesByEmployee = new Map();
         for (const outE of insertedOutEvents) {
             const id = outE.FactorialEmployeeId;
@@ -261,12 +326,8 @@ class FactorialShiftSyncService {
             updatesByEmployee.set(id, curr);
         }
 
-        // For IN events: we only know insertedInEvents count, but not their timestamps
-        // To keep correctness, we can update IN state to now for employees where we inserted IN
-        // or we can re-query max(IN) from DB. We'll do the latter to keep it accurate.
-        // (Small cost; events per run are limited by employee_ids + lookback window.)
         if (insertedInEvents > 0) {
-            const employeesWithMaybeIn = cleaned; // simple conservative update for these employees
+            const employeesWithMaybeIn = cleaned;
             const inRows = await executeQuery(
                 `
                 SELECT FactorialEmployeeId, MAX(CASE WHEN EventType='IN' THEN EventAt ELSE NULL END) AS MaxInAt
@@ -305,7 +366,6 @@ class FactorialShiftSyncService {
             await this._upsertPollStateForEmployees(updates);
         }
 
-        // Raw payload retention cleanup
         const retentionDays = Number.parseInt(process.env.FACTORIAL_RAW_PAYLOAD_RETENTION_DAYS || rawRetentionDays || '30', 10) || 30;
         await executeNonQuery(
             `
@@ -321,10 +381,11 @@ class FactorialShiftSyncService {
             insertedOutEvents,
             insertedInEvents,
             skipped: false,
-            reason: 'ok'
+            reason: 'ok',
+            partialApiFailure,
+            apiPartialDetails
         };
     }
 }
 
 module.exports = FactorialShiftSyncService;
-

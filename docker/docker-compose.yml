@@ -46,6 +46,11 @@ services:
       - FACTORIAL_API_TIMEOUT_MS=${FACTORIAL_API_TIMEOUT_MS:-10000}
       - FACTORIAL_CHECK_START_HOUR=${FACTORIAL_CHECK_START_HOUR:-17}
       - FACTORIAL_CHECK_INTERVAL_MINUTES=${FACTORIAL_CHECK_INTERVAL_MINUTES:-30}
+      # SILOG EDI_JOB : ne pas déclencher depuis le backend (tâche planifiée sur SVC_SILOG)
+      - SILOG_REMOTE_MODE=${SILOG_REMOTE_MODE:-scheduled}
+      # Validation auto des temps terminés → StatutTraitement='O' (V_REMONTE_TEMPS)
+      - ENABLE_AUTO_VALIDATE_TEMPS=${ENABLE_AUTO_VALIDATE_TEMPS:-true}
+      - AUTO_VALIDATE_TEMPS_HOUR=${AUTO_VALIDATE_TEMPS_HOUR:-20}
       # FSOP (tracabilité / templates)
       - TRACEABILITY_DIR=${TRACEABILITY_DIR:-/mnt/services}
       - FSOP_TEMPLATES_DIR=${FSOP_TEMPLATES_DIR:-}

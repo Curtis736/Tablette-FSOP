@@ -15,7 +15,7 @@ vi.mock('../config/database', () => {
   };
 });
 
-const FactorialService = require('../services/factorialService.js');
+const FactorialService = require('../services/FactorialService.js');
 const FactorialShiftSyncService = require('../services/FactorialShiftSyncService');
 
 describe('FactorialShiftSyncService', () => {
@@ -124,6 +124,27 @@ describe('FactorialShiftSyncService', () => {
 
     const run = await FactorialShiftSyncService.sync({ factorialEmployeeIds, lookbackDays: 2, rawRetentionDays: 30 });
     expect(run.insertedOutEvents).toHaveLength(1);
+  });
+
+  it('returns success false when both Factorial API calls fail', async () => {
+    FactorialService.getOpenShifts.mockResolvedValue({
+      success: false,
+      reason: 'timeout',
+      error: 'network'
+    });
+    FactorialService.getShifts.mockResolvedValue({
+      success: false,
+      reason: 'server_error',
+      error: 'timeout'
+    });
+
+    const run = await FactorialShiftSyncService.sync({ factorialEmployeeIds: ['E1'], lookbackDays: 2 });
+    expect(run.success).toBe(false);
+    expect(run.reason).toBe('factorial_api_failed');
+    expect(run.apiErrors).toEqual({
+      openShifts: 'network',
+      shifts: 'timeout'
+    });
   });
 });
 

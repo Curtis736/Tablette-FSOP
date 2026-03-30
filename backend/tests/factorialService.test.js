@@ -3,7 +3,7 @@ import { createRequire } from 'node:module';
 
 const require = createRequire(import.meta.url);
 const axios = require('axios');
-const FactorialService = require('../services/factorialService');
+const FactorialService = require('../services/FactorialService');
 
 describe('FactorialService', () => {
   beforeEach(() => {

@@ -379,38 +379,6 @@ class ConsolidationService {
                 }
             }
             
-            // 8. Vérifier à nouveau si déjà consolidé (race condition)
-            if (!force) {
-                const doubleCheckQuery = `
-                    SELECT TempsId 
-                    FROM [SEDI_APP_INDEPENDANTE].[dbo].[ABTEMPS_OPERATEURS]
-                    WHERE OperatorCode = @operatorCode 
-                      AND LancementCode = @lancementCode
-                      AND ISNULL(LTRIM(RTRIM(Phase)), '') = ISNULL(LTRIM(RTRIM(@phase)), '')
-                      AND ISNULL(LTRIM(RTRIM(CodeRubrique)), '') = ISNULL(LTRIM(RTRIM(@codeRubrique)), '')
-                      AND DateCreation = @dateCreation
-                `;
-                
-                const doubleCheck = await db.executeQuery(doubleCheckQuery, {
-                    operatorCode,
-                    lancementCode,
-                    phase,
-                    codeRubrique,
-                    dateCreation: opDate
-                });
-                
-                if (doubleCheck.length > 0) {
-                    console.log(`ℹ️ Opération consolidée entre-temps: TempsId=${doubleCheck[0].TempsId}`);
-                    return {
-                        success: true,
-                        tempsId: doubleCheck[0].TempsId,
-                        error: null,
-                        warnings: ['Opération consolidée par un autre processus'],
-                        alreadyExists: true
-                    };
-                }
-            }
-            
             // 7. Vérifier que ProductiveDuration > 0 (SILOG n'accepte pas les temps à 0)
             if (durations.productiveDuration <= 0) {
                 console.warn(`⚠️ ProductiveDuration = ${durations.productiveDuration} (Total=${durations.totalDuration}, Pause=${durations.pauseDuration})`);
@@ -419,31 +387,59 @@ class ConsolidationService {
                 // L'admin pourra corriger manuellement si nécessaire
             }
             
-            // 8. Insérer dans ABTEMPS_OPERATEURS
-            // IMPORTANT: ProductiveDuration est en MINUTES (TotalDuration - PauseDuration)
-            const insertQuery = `
-                INSERT INTO [SEDI_APP_INDEPENDANTE].[dbo].[ABTEMPS_OPERATEURS]
-                (OperatorCode, LancementCode, StartTime, EndTime, TotalDuration, PauseDuration, ProductiveDuration, EventsCount, Phase, CodeRubrique, DateCreation, StatutTraitement)
-                OUTPUT INSERTED.TempsId
-                VALUES (@operatorCode, @lancementCode, @startTime, @endTime, @totalDuration, @pauseDuration, @productiveDuration, @eventsCount, @phase, @codeRubrique, CAST(@dateCreation AS DATE), NULL)
-            `;
-            
-            const insertResult = await db.executeQuery(insertQuery, {
+            // 8. Insérer ou mettre à jour dans ABTEMPS_OPERATEURS
+            // En mode force, on UPDATE la ligne existante au lieu d'en créer une nouvelle.
+            const durationParams = {
                 operatorCode,
                 lancementCode,
                 startTime,
                 endTime,
-                totalDuration: durations.totalDuration, // en minutes
-                pauseDuration: durations.pauseDuration, // en minutes
-                productiveDuration: durations.productiveDuration, // en minutes (TotalDuration - PauseDuration)
+                totalDuration: durations.totalDuration,
+                pauseDuration: durations.pauseDuration,
+                productiveDuration: durations.productiveDuration,
                 eventsCount: durations.eventsCount,
                 phase,
                 codeRubrique,
                 dateCreation: opDate
-            });
-            
-            const tempsId = insertResult && insertResult[0] ? insertResult[0].TempsId : null;
-            
+            };
+
+            let tempsId = null;
+
+            if (force) {
+                const existingForUpdate = await db.executeQuery(
+                    `SELECT TOP 1 TempsId
+                     FROM [SEDI_APP_INDEPENDANTE].[dbo].[ABTEMPS_OPERATEURS]
+                     WHERE OperatorCode = @operatorCode AND LancementCode = @lancementCode
+                       AND CAST(DateCreation AS DATE) = CAST(@dateCreation AS DATE)
+                     ORDER BY TempsId DESC`,
+                    { operatorCode, lancementCode, dateCreation: opDate }
+                );
+                if (existingForUpdate && existingForUpdate.length > 0) {
+                    tempsId = existingForUpdate[0].TempsId;
+                    await db.executeNonQuery(
+                        `UPDATE [SEDI_APP_INDEPENDANTE].[dbo].[ABTEMPS_OPERATEURS]
+                         SET StartTime = @startTime, EndTime = @endTime,
+                             TotalDuration = @totalDuration, PauseDuration = @pauseDuration,
+                             ProductiveDuration = @productiveDuration, EventsCount = @eventsCount,
+                             Phase = @phase, CodeRubrique = @codeRubrique
+                         WHERE TempsId = @tempsId`,
+                        { ...durationParams, tempsId }
+                    );
+                    console.log(`✅ Reconsolidation (UPDATE): TempsId=${tempsId}, Durée=${durations.totalDuration}min (${durations.productiveDuration}min productif)`);
+                }
+            }
+
+            if (!tempsId) {
+                const insertQuery = `
+                    INSERT INTO [SEDI_APP_INDEPENDANTE].[dbo].[ABTEMPS_OPERATEURS]
+                    (OperatorCode, LancementCode, StartTime, EndTime, TotalDuration, PauseDuration, ProductiveDuration, EventsCount, Phase, CodeRubrique, DateCreation, StatutTraitement)
+                    OUTPUT INSERTED.TempsId
+                    VALUES (@operatorCode, @lancementCode, @startTime, @endTime, @totalDuration, @pauseDuration, @productiveDuration, @eventsCount, @phase, @codeRubrique, CAST(@dateCreation AS DATE), NULL)
+                `;
+                const insertResult = await db.executeQuery(insertQuery, durationParams);
+                tempsId = insertResult && insertResult[0] ? insertResult[0].TempsId : null;
+            }
+
             if (!tempsId) {
                 return {
                     success: false,

@@ -1,8 +1,56 @@
-# SILOG — Exécution de `EDI_JOB` (remontée des temps)
+# SILOG — Remontée des temps vers l'ERP (EDI_JOB / SEDI_ETDIFF)
 
-## Commande de référence (PowerShell)
+## Architecture du flux
 
-Franck MAILLARD a fourni la commande suivante pour lancer SILOG en ligne de commande :
+```
+┌──────────────┐     ┌──────────────────────────┐     ┌───────────────────────┐     ┌──────────┐
+│  Tablette    │     │ SEDI_APP_INDEPENDANTE     │     │ Tâche planifiée       │     │ SILOG    │
+│  (frontend)  │────>│ ABTEMPS_OPERATEURS        │────>│ SILOG.exe -eEDI_JOB   │────>│ ERP      │
+│              │     │                           │     │ sur SVC_SILOG         │     │ SEDI_ERP │
+└──────────────┘     │  StatutTraitement:        │     │ utilisateur:          │     └──────────┘
+                     │  NULL → 'O' → 'T'        │     │  Production8          │
+                     │                           │     │ code tâche:           │
+                     │  V_REMONTE_TEMPS          │     │  SEDI_ETDIFF          │
+                     │  (filtre: 'O' + dur>0)    │     └───────────────────────┘
+                     └──────────────────────────┘
+```
+
+### Flux détaillé
+
+| Étape | Qui | Action | StatutTraitement |
+|-------|-----|--------|-----------------|
+| 1 | Backend (opérations) | INSERT dans ABTEMPS_OPERATEURS | `NULL` |
+| 2 | Backend (auto 20h ou admin) | UPDATE StatutTraitement = 'O' | `NULL` → `'O'` |
+| 3 | V_REMONTE_TEMPS | Expose les lignes 'O' + ProductiveDuration > 0 | `'O'` |
+| 4 | SEDI_ETDIFF (SVC_SILOG) | Lit V_REMONTE_TEMPS, intègre dans SILOG | `'O'` |
+| 5 | **⚠️ À CONFIRMER** | Qui passe 'T' ? SILOG directement ou le backend ? | `'O'` → `'T'` |
+
+### Point critique : passage en 'T'
+
+**Question ouverte pour Franck MAILLARD** : après que SEDI_ETDIFF a intégré les temps,
+est-ce que SILOG met à jour `StatutTraitement = 'T'` directement dans
+`SEDI_APP_INDEPENDANTE.dbo.ABTEMPS_OPERATEURS`, ou faut-il que le backend s'en charge ?
+
+Si c'est SILOG qui écrit 'T' :
+- Le backend n'a rien à faire après l'étape 2
+- Le backend surveille les enregistrements 'O' non consommés (watchdog)
+
+Si c'est le backend qui doit écrire 'T' :
+- Il faut un mécanisme de callback ou de polling pour savoir que SILOG a bien traité
+- Route existante : `MonitoringService.markBatchAsTransmitted()`
+
+## Infrastructure
+
+### Poste d'exécution
+
+- **Poste** : `SVC_SILOG` (et NON `SERVEURERP`)
+- **Utilisateur SILOG** : `Production8`
+- **Planificateur de tâches** : sur `SVC_SILOG` (accès requis pour vérifier la fréquence)
+- **Fréquence constatée** : ~1 exécution/minute (capture du 30/03/2026)
+
+### Commande de référence
+
+Franck MAILLARD a fourni la commande suivante :
 
 ```powershell
 start-process -FilePath "\\SERVEURERP\SILOG8\SILOG.exe" `
@@ -10,51 +58,61 @@ start-process -FilePath "\\SERVEURERP\SILOG8\SILOG.exe" `
   -workingdirectory "\\SERVEURERP\SILOG8" -wait
 ```
 
-## Variables (test / prod)
+### Variables (test / prod)
 
-- `SEDI_TESTS` : base de données de tests (mettre `SEDI_ERP` en production)
-- `Production8` : utilisateur (peut évoluer)
-- `SEDI_ETDIFF` : **code tâche** d’intégration (identique en test/prod)
+| Variable | Test | Production |
+|----------|------|-----------|
+| Base de données (`-b`) | `SEDI_TESTS` | `SEDI_ERP` |
+| Utilisateur (`-u`) | `Production8` | `Production8` |
+| Code tâche (`-optcodetache`) | `SEDI_ETDIFF` | `SEDI_ETDIFF` |
 
 ## Configuration backend
 
-Configurer ces variables dans l’environnement du backend (voir `env.example`) :
+Le backend est en mode `SILOG_REMOTE_MODE=scheduled` : il **ne déclenche pas** SILOG.exe.
+Il se contente de :
+1. Écrire dans `ABTEMPS_OPERATEURS`
+2. Passer `StatutTraitement = 'O'` (validation auto à 20h ou manuelle)
+3. Surveiller que les enregistrements 'O' sont consommés (watchdog)
 
-- `SILOG_EXE_PATH` : chemin vers `SILOG.exe` (UNC recommandé)
-- `SILOG_WORKDIR` : working directory (UNC)
-- `SILOG_DB` : `SEDI_TESTS` ou `SEDI_ERP`
-- `SILOG_USER` : utilisateur SILOG
-- `SILOG_PASSWORD` : optionnel (si vide, le backend utilise `-p` sans valeur)
-- `SILOG_LANG` : ex `fr_fr`
-- `SILOG_TASK_CODE` : ex `SEDI_ETDIFF`
-- `SILOG_MODE` : ex `COMPACT`
+### Variables d'environnement pertinentes
 
-## Backend sur Linux (runner Windows requis)
+```env
+SILOG_REMOTE_MODE=scheduled
 
-Si le backend tourne sur Linux (`process.platform=linux`), il **ne peut pas exécuter** `SILOG.exe`.
+# Validation automatique des temps
+ENABLE_AUTO_VALIDATE_TEMPS=true
+AUTO_VALIDATE_TEMPS_HOUR=20
 
-Deux options :
+# Watchdog : alerte si des enregistrements 'O' ne sont pas passés 'T' après X heures
+SILOG_STALE_THRESHOLD_HOURS=24
+```
 
-1) **Exécuter le backend sur Windows** (recommandé si possible)
+## Diagnostic
 
-2) **Runner Windows distant via SSH** (Linux -> Windows)
+### Endpoints admin
 
-- Installer/activer **OpenSSH Server** sur un hôte Windows qui a accès au partage `\\SERVEURERP\\SILOG8`
-- Configurer l’auth SSH (idéalement par clé)
-- Définir dans `.env` côté backend Linux :
-  - `SILOG_REMOTE_MODE=ssh`
-  - `SILOG_SSH_HOST=...`
-  - `SILOG_SSH_USER=...`
-  - `SILOG_SSH_KEY_PATH=...` (optionnel)
+| Route | Méthode | Description |
+|-------|---------|-------------|
+| `/api/admin/diagnostic-temps` | GET | État de ABTEMPS (durées 0, non validés, OK) |
+| `/api/admin/diagnostic-orphans` | GET | Opérations terminées sans ligne ABTEMPS |
+| `/api/admin/silog-pipeline-status` | GET | Santé du flux : enregistrements 'O' en attente, ancienneté |
+| `/api/admin/reconsolidate` | POST | Recalcule toutes les durées depuis l'historique |
+| `/api/admin/validate-temps` | POST | Passe en 'O' (masse ou sélectif) |
+| `/api/admin/edi-job/config` | GET | Configuration EDI_JOB |
 
-Le backend lancera alors PowerShell sur l’hôte Windows via SSH, en utilisant `Start-Process ... -Wait`.
+### Vérifications SQL directes
 
-## API (admin)
+```sql
+-- Combien d'enregistrements par statut ?
+SELECT StatutTraitement, COUNT(*) AS Nb
+FROM [SEDI_APP_INDEPENDANTE].[dbo].[ABTEMPS_OPERATEURS]
+GROUP BY StatutTraitement;
 
-Le backend expose des routes admin pour vérifier la config et déclencher le job :
+-- V_REMONTE_TEMPS retourne-t-elle des lignes ?
+SELECT TOP 10 * FROM [SEDI_APP_INDEPENDANTE].[dbo].[V_REMONTE_TEMPS];
 
-- `GET /api/admin/edi-job/config`
-- `POST /api/admin/edi-job/execute`
-
-> Note: l’app déclenche généralement l’EDI_JOB automatiquement après un transfert (batch) via les routes monitoring.
-
+-- Enregistrements 'O' non consommés depuis plus de 24h (SEDI_ETDIFF bloquée ?)
+SELECT * FROM [SEDI_APP_INDEPENDANTE].[dbo].[ABTEMPS_OPERATEURS]
+WHERE StatutTraitement = 'O'
+  AND DATEDIFF(HOUR, DateCreation, GETDATE()) > 24;
+```

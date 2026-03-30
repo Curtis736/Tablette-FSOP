@@ -430,6 +430,55 @@ function scheduleDailyAutoCloseOperations() {
     scheduleNextRun();
 }
 
+// Validation automatique quotidienne des temps terminés (StatutTraitement NULL → 'O')
+// Exécutée après la clôture auto des opérations pour que V_REMONTE_TEMPS expose les lignes à SILOG.
+function scheduleDailyAutoValidateTemps() {
+    const enabled = String(process.env.ENABLE_AUTO_VALIDATE_TEMPS || 'true').toLowerCase() === 'true';
+    if (!enabled) {
+        console.log('📋 Validation automatique des temps désactivée (ENABLE_AUTO_VALIDATE_TEMPS!=true)');
+        return;
+    }
+
+    const targetHour = Number.parseInt(process.env.AUTO_VALIDATE_TEMPS_HOUR || '20', 10);
+    const hour = Number.isNaN(targetHour) ? 20 : Math.min(Math.max(targetHour, 0), 23);
+
+    const scheduleNextRun = () => {
+        const now = new Date();
+        const next = new Date(now);
+        next.setHours(hour, 0, 0, 0);
+        if (next <= now) next.setDate(next.getDate() + 1);
+        const delay = next.getTime() - now.getTime();
+        console.log(`📋 Prochaine validation auto des temps planifiée à ${next.toISOString()} (dans ${Math.round(delay / 1000)}s).`);
+
+        setTimeout(async () => {
+            try {
+                console.log('📋 Validation automatique des temps terminés...');
+                const result = await executeNonQuery(
+                    `
+                    UPDATE [SEDI_APP_INDEPENDANTE].[dbo].[ABTEMPS_OPERATEURS]
+                    SET StatutTraitement = 'O'
+                    WHERE StatutTraitement IS NULL
+                      AND ProductiveDuration > 0
+                      AND CAST(DateCreation AS DATE) < CAST(GETDATE() AS DATE)
+                    `
+                );
+                const count = result?.rowsAffected || 0;
+                if (count > 0) {
+                    console.log(`✅ ${count} enregistrement(s) validé(s) automatiquement (StatutTraitement → 'O').`);
+                } else {
+                    console.log('📋 Aucun temps à valider automatiquement.');
+                }
+            } catch (error) {
+                console.error('❌ Erreur validation automatique des temps:', error);
+            } finally {
+                scheduleNextRun();
+            }
+        }, delay);
+    };
+
+    scheduleNextRun();
+}
+
 // Contrôle Factorial toutes les 30 min à partir de 17h (heure serveur)
 function scheduleFactorialDepointedChecks() {
     const enabled = String(process.env.ENABLE_FACTORIAL_AUTOCLOSE || 'true').toLowerCase() === 'true';
@@ -507,6 +556,9 @@ if (shouldStartServer()) {
 
                 // Planifier la clôture automatique quotidienne des opérations (par défaut activée)
                 scheduleDailyAutoCloseOperations();
+
+                // Validation automatique des temps terminés (pour V_REMONTE_TEMPS → SILOG)
+                scheduleDailyAutoValidateTemps();
 
                 // Vérifier les dépointages Factorial à partir de 17h toutes les 30 minutes
                 scheduleFactorialDepointedChecks();

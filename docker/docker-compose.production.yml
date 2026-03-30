@@ -58,6 +58,9 @@ services:
       # Required for Linux backend to trigger SILOG.exe on a Windows runner (OpenSSH Server).
       # If you do NOT have SSH access to SERVEURERP, use scheduled mode (Windows Scheduled Task).
       - SILOG_REMOTE_MODE=${SILOG_REMOTE_MODE:-scheduled}
+      # Validation auto des temps terminés → StatutTraitement='O' (V_REMONTE_TEMPS → SILOG)
+      - ENABLE_AUTO_VALIDATE_TEMPS=${ENABLE_AUTO_VALIDATE_TEMPS:-true}
+      - AUTO_VALIDATE_TEMPS_HOUR=${AUTO_VALIDATE_TEMPS_HOUR:-20}
       - SILOG_SSH_HOST=${SILOG_SSH_HOST:-SERVEURERP}
       - SILOG_SSH_USER=${SILOG_SSH_USER:-maintenance}
       - SILOG_SSH_PORT=${SILOG_SSH_PORT:-22}

@@ -4630,6 +4630,344 @@ router.get('/edi-job/config', async (req, res) => {
     }
 });
 
+// ============================================
+// RECONSOLIDATION & DIAGNOSTIC
+// ============================================
+
+// POST /api/admin/reconsolidate
+// Reconsolide toutes les opérations terminées (ou un sous-ensemble filtré) en recalculant
+// les durées depuis ABHISTORIQUE_OPERATEURS → ABTEMPS_OPERATEURS.
+// Corrige les durées incohérentes ET crée les lignes manquantes.
+router.post('/reconsolidate', async (req, res) => {
+    try {
+        const ConsolidationService = require('../services/ConsolidationService');
+        const { operatorCode, lancementCode, dateStart, dateEnd, dryRun = false } = req.body || {};
+
+        let whereClause = `WHERE h.Ident = 'FIN'`;
+        const params = {};
+        if (operatorCode) {
+            whereClause += ` AND h.OperatorCode = @operatorCode`;
+            params.operatorCode = operatorCode;
+        }
+        if (lancementCode) {
+            whereClause += ` AND h.CodeLanctImprod = @lancementCode`;
+            params.lancementCode = lancementCode;
+        }
+        if (dateStart) {
+            whereClause += ` AND CAST(h.DateCreation AS DATE) >= @dateStart`;
+            params.dateStart = dateStart;
+        }
+        if (dateEnd) {
+            whereClause += ` AND CAST(h.DateCreation AS DATE) <= @dateEnd`;
+            params.dateEnd = dateEnd;
+        }
+
+        const opsQuery = `
+            SELECT DISTINCT h.OperatorCode, h.CodeLanctImprod AS LancementCode
+            FROM [SEDI_APP_INDEPENDANTE].[dbo].[ABHISTORIQUE_OPERATEURS] h
+            ${whereClause}
+        `;
+        const ops = await executeQuery(opsQuery, params);
+
+        if (!ops || ops.length === 0) {
+            return res.json({ success: true, message: 'Aucune opération terminée à reconsolider.', count: 0, results: [] });
+        }
+
+        if (dryRun) {
+            return res.json({
+                success: true,
+                dryRun: true,
+                message: `${ops.length} opération(s) seraient reconsolidées.`,
+                operations: ops.slice(0, 200)
+            });
+        }
+
+        const results = await ConsolidationService.consolidateBatch(
+            ops.map(o => ({ OperatorCode: o.OperatorCode, LancementCode: o.LancementCode })),
+            { force: true, autoFix: true }
+        );
+
+        res.json({
+            success: true,
+            message: `Reconsolidation terminée: ${results.success.length} OK, ${results.skipped.length} ignorées, ${results.errors.length} erreurs.`,
+            count: ops.length,
+            successCount: results.success.length,
+            skippedCount: results.skipped.length,
+            errorCount: results.errors.length,
+            errors: results.errors.slice(0, 50)
+        });
+    } catch (error) {
+        console.error('❌ Erreur reconsolidation:', error);
+        res.status(500).json({ success: false, error: error.message });
+    }
+});
+
+// POST /api/admin/validate-temps
+// Passe StatutTraitement = 'O' pour les enregistrements sélectionnés ou tous ceux éligibles.
+router.post('/validate-temps', async (req, res) => {
+    try {
+        const { tempsIds, all = false, beforeDate } = req.body || {};
+
+        if (!all && (!tempsIds || !Array.isArray(tempsIds) || tempsIds.length === 0)) {
+            return res.status(400).json({ success: false, error: 'Fournir tempsIds (tableau) ou all=true.' });
+        }
+
+        let result;
+        if (all) {
+            let dateCond = `CAST(DateCreation AS DATE) < CAST(GETDATE() AS DATE)`;
+            const params = {};
+            if (beforeDate) {
+                dateCond = `CAST(DateCreation AS DATE) <= @beforeDate`;
+                params.beforeDate = beforeDate;
+            }
+            result = await executeNonQuery(
+                `UPDATE [SEDI_APP_INDEPENDANTE].[dbo].[ABTEMPS_OPERATEURS]
+                 SET StatutTraitement = 'O'
+                 WHERE StatutTraitement IS NULL
+                   AND ProductiveDuration > 0
+                   AND ${dateCond}`,
+                params
+            );
+        } else {
+            const ids = tempsIds.map(Number).filter(n => !isNaN(n));
+            if (ids.length === 0) return res.status(400).json({ success: false, error: 'Aucun TempsId valide.' });
+            const idList = ids.join(',');
+            result = await executeNonQuery(
+                `UPDATE [SEDI_APP_INDEPENDANTE].[dbo].[ABTEMPS_OPERATEURS]
+                 SET StatutTraitement = 'O'
+                 WHERE TempsId IN (${idList})
+                   AND StatutTraitement IS NULL
+                   AND ProductiveDuration > 0`
+            );
+        }
+
+        const count = result?.rowsAffected || 0;
+        res.json({ success: true, validated: count, message: `${count} enregistrement(s) passé(s) en StatutTraitement='O'.` });
+    } catch (error) {
+        console.error('❌ Erreur validate-temps:', error);
+        res.status(500).json({ success: false, error: error.message });
+    }
+});
+
+// GET /api/admin/diagnostic-temps
+// Compare ABTEMPS_OPERATEURS avec ABHISTORIQUE_OPERATEURS pour identifier les incohérences.
+router.get('/diagnostic-temps', async (req, res) => {
+    try {
+        const { dateStart, dateEnd, operatorCode } = req.query;
+        let whereClause = 'WHERE 1=1';
+        const params = {};
+        if (operatorCode) {
+            whereClause += ` AND t.OperatorCode = @operatorCode`;
+            params.operatorCode = operatorCode;
+        }
+        if (dateStart) {
+            whereClause += ` AND CAST(t.DateCreation AS DATE) >= @dateStart`;
+            params.dateStart = dateStart;
+        }
+        if (dateEnd) {
+            whereClause += ` AND CAST(t.DateCreation AS DATE) <= @dateEnd`;
+            params.dateEnd = dateEnd;
+        }
+
+        const diagnosticQuery = `
+            SELECT
+                t.TempsId,
+                t.OperatorCode,
+                t.LancementCode,
+                t.Phase,
+                t.CodeRubrique,
+                t.DateCreation,
+                t.StatutTraitement,
+                t.ProductiveDuration AS Temps_ProductiveDuration_min,
+                t.TotalDuration      AS Temps_TotalDuration_min,
+                t.PauseDuration      AS Temps_PauseDuration_min,
+                t.StartTime,
+                t.EndTime,
+                -- Durée recalculée depuis l'historique
+                (SELECT COUNT(*) FROM [SEDI_APP_INDEPENDANTE].[dbo].[ABHISTORIQUE_OPERATEURS] h
+                 WHERE h.OperatorCode = t.OperatorCode AND h.CodeLanctImprod = t.LancementCode
+                   AND CAST(h.DateCreation AS DATE) = CAST(t.DateCreation AS DATE)) AS NbEvenements,
+                CASE
+                    WHEN t.ProductiveDuration = 0 AND t.TotalDuration = 0 THEN 'ZERO_DUREE'
+                    WHEN t.StatutTraitement IS NULL THEN 'NON_VALIDE'
+                    ELSE 'OK'
+                END AS DiagStatus
+            FROM [SEDI_APP_INDEPENDANTE].[dbo].[ABTEMPS_OPERATEURS] t
+            ${whereClause}
+            ORDER BY t.DateCreation DESC, t.OperatorCode
+        `;
+
+        const rows = await executeQuery(diagnosticQuery, params);
+
+        const summary = {
+            total: rows.length,
+            zeroDuree: rows.filter(r => r.DiagStatus === 'ZERO_DUREE').length,
+            nonValide: rows.filter(r => r.DiagStatus === 'NON_VALIDE').length,
+            ok: rows.filter(r => r.DiagStatus === 'OK').length
+        };
+
+        res.json({ success: true, summary, data: rows });
+    } catch (error) {
+        console.error('❌ Erreur diagnostic-temps:', error);
+        res.status(500).json({ success: false, error: error.message });
+    }
+});
+
+// GET /api/admin/diagnostic-orphans
+// Opérations terminées dans ABHISTORIQUE sans correspondance dans ABTEMPS (non consolidées).
+router.get('/diagnostic-orphans', async (req, res) => {
+    try {
+        const { dateStart, dateEnd } = req.query;
+        let dateCond = '';
+        const params = {};
+        if (dateStart) {
+            dateCond += ` AND CAST(h.DateCreation AS DATE) >= @dateStart`;
+            params.dateStart = dateStart;
+        }
+        if (dateEnd) {
+            dateCond += ` AND CAST(h.DateCreation AS DATE) <= @dateEnd`;
+            params.dateEnd = dateEnd;
+        }
+
+        const orphanQuery = `
+            SELECT DISTINCT
+                h.OperatorCode,
+                h.CodeLanctImprod AS LancementCode,
+                CAST(h.DateCreation AS DATE) AS DateOp,
+                (SELECT COUNT(*) FROM [SEDI_APP_INDEPENDANTE].[dbo].[ABHISTORIQUE_OPERATEURS] e
+                 WHERE e.OperatorCode = h.OperatorCode AND e.CodeLanctImprod = h.CodeLanctImprod
+                   AND CAST(e.DateCreation AS DATE) = CAST(h.DateCreation AS DATE)) AS NbEvenements
+            FROM [SEDI_APP_INDEPENDANTE].[dbo].[ABHISTORIQUE_OPERATEURS] h
+            WHERE h.Ident = 'FIN'
+              ${dateCond}
+              AND NOT EXISTS (
+                  SELECT 1 FROM [SEDI_APP_INDEPENDANTE].[dbo].[ABTEMPS_OPERATEURS] t
+                  WHERE t.OperatorCode = h.OperatorCode
+                    AND t.LancementCode = h.CodeLanctImprod
+                    AND CAST(t.DateCreation AS DATE) = CAST(h.DateCreation AS DATE)
+              )
+            ORDER BY DateOp DESC, h.OperatorCode
+        `;
+
+        const orphans = await executeQuery(orphanQuery, params);
+        res.json({
+            success: true,
+            count: orphans.length,
+            message: `${orphans.length} opération(s) terminée(s) sans ligne dans ABTEMPS_OPERATEURS.`,
+            data: orphans
+        });
+    } catch (error) {
+        console.error('❌ Erreur diagnostic-orphans:', error);
+        res.status(500).json({ success: false, error: error.message });
+    }
+});
+
+// GET /api/admin/silog-pipeline-status
+// Santé du flux ABTEMPS → V_REMONTE_TEMPS → SEDI_ETDIFF (SILOG).
+// Détecte si des enregistrements 'O' traînent (SEDI_ETDIFF bloquée ou arrêtée).
+router.get('/silog-pipeline-status', async (req, res) => {
+    try {
+        const staleHours = Number.parseInt(process.env.SILOG_STALE_THRESHOLD_HOURS || '24', 10);
+        const remoteMode = String(process.env.SILOG_REMOTE_MODE || '').trim().toLowerCase();
+
+        const statusQuery = `
+            SELECT
+                StatutTraitement,
+                COUNT(*) AS Nb,
+                MIN(DateCreation) AS PlusAncien,
+                MAX(DateCreation) AS PlusRecent
+            FROM [SEDI_APP_INDEPENDANTE].[dbo].[ABTEMPS_OPERATEURS]
+            GROUP BY StatutTraitement
+        `;
+
+        const staleQuery = `
+            SELECT COUNT(*) AS NbStale,
+                   MIN(DateCreation) AS PlusAncienStale
+            FROM [SEDI_APP_INDEPENDANTE].[dbo].[ABTEMPS_OPERATEURS]
+            WHERE StatutTraitement = 'O'
+              AND DATEDIFF(HOUR, DateCreation, GETDATE()) > @staleHours
+        `;
+
+        const viewCountQuery = `
+            SELECT COUNT(*) AS NbVue
+            FROM [SEDI_APP_INDEPENDANTE].[dbo].[V_REMONTE_TEMPS]
+        `;
+
+        const [statuses, stale, viewCount] = await Promise.all([
+            executeQuery(statusQuery),
+            executeQuery(staleQuery, { staleHours }),
+            executeQuery(viewCountQuery).catch(() => [{ NbVue: -1 }])
+        ]);
+
+        const statusMap = {};
+        for (const row of statuses) {
+            const key = row.StatutTraitement === null ? 'NULL' : row.StatutTraitement;
+            statusMap[key] = { count: row.Nb, oldest: row.PlusAncien, newest: row.PlusRecent };
+        }
+
+        const nbStale = stale?.[0]?.NbStale || 0;
+        const oldestStale = stale?.[0]?.PlusAncienStale || null;
+        const nbInView = viewCount?.[0]?.NbVue ?? -1;
+
+        let health = 'OK';
+        const warnings = [];
+
+        if (nbStale > 0) {
+            health = 'WARNING';
+            warnings.push(
+                `${nbStale} enregistrement(s) en StatutTraitement='O' depuis plus de ${staleHours}h (plus ancien : ${oldestStale}). ` +
+                `SEDI_ETDIFF est peut-être bloquée ou arrêtée sur SVC_SILOG.`
+            );
+        }
+
+        const nbNull = statusMap['NULL']?.count || 0;
+        const nbO = statusMap['O']?.count || 0;
+        const nbT = statusMap['T']?.count || 0;
+
+        if (nbNull > 0 && nbO === 0 && nbT === 0) {
+            health = 'WARNING';
+            warnings.push(
+                `Tous les enregistrements (${nbNull}) sont en StatutTraitement=NULL. ` +
+                `La validation automatique (20h) n'a pas encore tourné ou est désactivée. ` +
+                `Utilisez POST /api/admin/validate-temps pour forcer.`
+            );
+        }
+
+        if (nbInView === 0 && nbO > 0) {
+            health = 'WARNING';
+            warnings.push(
+                `V_REMONTE_TEMPS retourne 0 lignes alors que ${nbO} enregistrements sont en 'O'. Vérifiez la vue.`
+            );
+        }
+
+        res.json({
+            success: true,
+            health,
+            warnings,
+            pipeline: {
+                remoteMode: remoteMode || '(non défini)',
+                executionPoste: 'SVC_SILOG (tâche planifiée Windows)',
+                utilisateurSilog: process.env.SILOG_USER || 'Production8',
+                codeTache: process.env.SILOG_TASK_CODE || process.env.SILOG_CODE_TACHE || 'SEDI_ETDIFF',
+                staleThresholdHours: staleHours
+            },
+            counts: {
+                NULL: nbNull,
+                O: nbO,
+                T: nbT,
+                total: nbNull + nbO + nbT,
+                vueRemonteTemps: nbInView,
+                staleO: nbStale,
+                oldestStale
+            },
+            detail: statusMap
+        });
+    } catch (error) {
+        console.error('❌ Erreur silog-pipeline-status:', error);
+        res.status(500).json({ success: false, error: error.message });
+    }
+});
+
 module.exports = router;
 module.exports.processLancementEventsWithPauses = processLancementEventsWithPauses;
 module.exports.getAdminOperations = getAdminOperations;

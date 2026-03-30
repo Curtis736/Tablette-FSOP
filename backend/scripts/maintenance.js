@@ -14,7 +14,7 @@
 const { executeQuery } = require('../config/database');
 const fs = require('fs');
 const path = require('path');
-const FactorialService = require('../services/factorialService');
+const FactorialService = require('../services/FactorialService');
 const OperationStopService = require('../services/OperationStopService');
 const FactorialOperatorMappingService = require('../services/FactorialOperatorMappingService');
 const FactorialShiftSyncService = require('../services/FactorialShiftSyncService');

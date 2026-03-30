@@ -4,7 +4,17 @@ class FactorialClockOutClosureService {
     static _toParisDateKey(date) {
         const d = date instanceof Date ? date : new Date(date);
         if (Number.isNaN(d.getTime())) return null;
-        return d.toLocaleDateString('fr-CA', { timeZone: 'Europe/Paris' });
+        const fmt = new Intl.DateTimeFormat('en', {
+            timeZone: 'Europe/Paris',
+            year: 'numeric',
+            month: '2-digit',
+            day: '2-digit'
+        });
+        const p = fmt.formatToParts(d);
+        const y = p.find(x => x.type === 'year').value;
+        const m = p.find(x => x.type === 'month').value;
+        const dd = p.find(x => x.type === 'day').value;
+        return `${y}-${m}-${dd}`;
     }
 
     static _toParisTimeHHMMSS(date) {
@@ -53,8 +63,11 @@ class FactorialClockOutClosureService {
                 if (!stopResult?.alreadyFinished) {
                     closedCount += 1;
                 }
-            } catch (_) {
-                // Non bloquant: on veut clore le maximum possible
+            } catch (err) {
+                console.warn(
+                    `[FactorialClockOutClosure] stopOperation échoué op=${operatorId} lanct=${lancementCode}:`,
+                    err?.message || err
+                );
             }
         }
 
