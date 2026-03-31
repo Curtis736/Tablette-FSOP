@@ -35,6 +35,12 @@ function sendDbTimeout(res, context) {
     });
 }
 
+function getOperatorHistoryDays() {
+    const raw = parseInt(process.env.OPERATOR_HISTORY_DAYS || '1', 10);
+    if (!Number.isFinite(raw) || raw <= 0) return 1;
+    return Math.min(raw, 7);
+}
+
 
 // Fonction utilitaire pour formater les dates/heures (format HH:mm seulement, fuseau horaire Paris)
 function formatDateTime(dateTime) {
@@ -1572,8 +1578,9 @@ router.get('/:operatorCode/operations',
         const { page = 1, limit = 50 } = req.query; // ⚡ OPTIMISATION : Pagination
         const pageNum = parseInt(page, 10);
         const limitNum = Math.min(parseInt(limit, 10), 100); // Max 100 par page
+        const historyDays = getOperatorHistoryDays();
         
-        console.log(`🔍 Récupération de l'historique pour l'opérateur ${operatorCode} (page ${pageNum}, limit ${limitNum})...`);
+        console.log(`🔍 Récupération de l'historique pour l'opérateur ${operatorCode} (page ${pageNum}, limit ${limitNum}, historyDays=${historyDays})...`);
         
         // Récupérer tous les événements de cet opérateur depuis ABHISTORIQUE_OPERATEURS
         // 🔒 FILTRE IMPORTANT : Exclure les lancements transférés (StatutTraitement = 'T')
@@ -1609,13 +1616,16 @@ router.get('/:operatorCode/operations',
             -- ⚡ OPTIMISATION : Utiliser h.Phase directement (plus simple et fiable)
             -- Si Phase n'est pas dans h, on utilise 'PRODUCTION' par défaut
             WHERE h.OperatorCode = @operatorCode
+              -- Évite de réafficher l'historique de la veille à l'opérateur.
+              AND CAST(h.DateCreation AS DATE) >= DATEADD(DAY, -(@historyDays - 1), CAST(GETDATE() AS DATE))
+              AND CAST(h.DateCreation AS DATE) <= CAST(GETDATE() AS DATE)
               -- Masquer pour l'opérateur uniquement les opérations réellement transmises/traitées (StatutTraitement = 'T').
               -- Les enregistrements en attente (ex: 'O') doivent rester visibles tant que l'admin n'a pas validé le transfert final.
               AND (t.StatutTraitement IS NULL OR t.StatutTraitement != 'T')
             ORDER BY h.DateCreation DESC, h.NoEnreg DESC
         `;
         
-        const events = await executeQuery(eventsQuery, { operatorCode }, 1);
+        const events = await executeQuery(eventsQuery, { operatorCode, historyDays }, 1);
         console.log(`📊 ${events.length} événements trouvés pour l'opérateur ${operatorCode}`);
         
         // Utiliser la fonction qui garde les pauses séparées
@@ -1740,8 +1750,9 @@ router.get('/:operatorCode/operations',
 router.get('/current/:operatorCode', authenticateOperator, async (req, res) => {
     try {
         const { operatorCode } = req.params;
+        const historyDays = getOperatorHistoryDays();
         
-        console.log(`🔍 Recherche d'opération en cours pour l'opérateur ${operatorCode}...`);
+        console.log(`🔍 Recherche d'opération en cours pour l'opérateur ${operatorCode} (historyDays=${historyDays})...`);
         
         // Chercher le DERNIER événement de l'opérateur, puis déduire l'état.
         // ⚠️ Important: on ne doit pas filtrer sur Statut IN ('EN_COURS','EN_PAUSE'),
@@ -1763,10 +1774,12 @@ router.get('/current/:operatorCode', authenticateOperator, async (req, res) => {
             FROM [SEDI_APP_INDEPENDANTE].[dbo].[ABHISTORIQUE_OPERATEURS] h
             LEFT JOIN [SEDI_ERP].[dbo].[LCTE] l ON l.CodeLancement = h.CodeLanctImprod
             WHERE h.OperatorCode = @operatorCode
+              AND CAST(h.DateCreation AS DATE) >= DATEADD(DAY, -(@historyDays - 1), CAST(GETDATE() AS DATE))
+              AND CAST(h.DateCreation AS DATE) <= CAST(GETDATE() AS DATE)
             ORDER BY h.DateCreation DESC, h.NoEnreg DESC
         `;
         
-        const result = await executeQuery(query, { operatorCode }, 1);
+        const result = await executeQuery(query, { operatorCode, historyDays }, 1);
         
         if (result.length === 0) {
             return res.json({

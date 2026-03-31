@@ -7,6 +7,9 @@
 # Validation de l'intégrité des données toutes les 6 heures
 0 */6 * * * docker exec sedi-tablette-backend node scripts/maintenance.js validate >> /var/log/sedi-validation.log 2>&1
 
+# Vérification FSOP templates toutes les 5 minutes
+*/5 * * * * cd /home/Tablette-FSOP && docker exec sedi-tablette-backend sh -lc 'test -d "/mnt/templates/Qualite/4_Public/A disposition/DOSSIER SMI/Formulaires" && test -f "/mnt/templates/Qualite/4_Public/A disposition/DOSSIER SMI/Formulaires/Liste des formulaires.xlsx"' || echo "$(date -Iseconds) FSOP_TEMPLATES_MISSING" >> /var/log/fsop-health.log
+
 # Nettoyage des logs anciens (plus de 30 jours)
 0 3 * * * find /var/log/sedi-*.log -mtime +30 -delete
 

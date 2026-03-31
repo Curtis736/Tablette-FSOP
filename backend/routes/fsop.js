@@ -92,6 +92,23 @@ const DEFAULT_TEMPLATES_XLSX_LINUX = '/mnt/templates/Qualite/4_Public/A disposit
 const DEFAULT_TEMPLATES_XLSX_LINUX_SERVICES = '/mnt/templates/Services/Qualite/4_Public/A disposition/DOSSIER SMI/Formulaires/Liste des formulaires.xlsx';
 const DEFAULT_TEMPLATES_XLSX_LINUX_ALT = '/mnt/services/Qualite/4_Public/A disposition/DOSSIER SMI/Formulaires/Liste des formulaires.xlsx';
 
+function dedupeNonEmpty(values) {
+    return [...new Set((values || []).filter(Boolean))];
+}
+
+function withServicesPathFallbacks(rawPath) {
+    const p = String(rawPath || '').trim();
+    if (!p) return [];
+    const normalized = p.replace(/\\/g, '/');
+    const out = [p];
+    if (normalized.includes('/Services/')) {
+        out.push(normalized.replace('/Services/', '/'));
+    } else if (normalized.includes('/mnt/templates/')) {
+        out.push(normalized.replace('/mnt/templates/', '/mnt/templates/Services/'));
+    }
+    return dedupeNonEmpty(out);
+}
+
 async function resolveFirstExistingDir(candidates) {
     for (const p of candidates) {
         if (!p) continue;
@@ -106,6 +123,19 @@ async function resolveFirstExistingFile(candidates) {
         if (await safeIsFile(p)) return p;
     }
     return null;
+}
+
+let _lastTemplatesResolveLog = 0;
+function logTemplatesResolution(kind, chosen, candidates) {
+    const now = Date.now();
+    // Throttle periodic logs to reduce noise in hot routes.
+    if (now - _lastTemplatesResolveLog < 60_000) return;
+    _lastTemplatesResolveLog = now;
+    if (chosen) {
+        console.log(`✅ FSOP ${kind} resolved: ${chosen}`);
+    } else {
+        console.warn(`❌ FSOP ${kind} unresolved. Candidates tried:`, candidates);
+    }
 }
 
 // Cache pour findTemplateFile (TTL 5 min) — évite les parcours SMB répétés
@@ -134,29 +164,37 @@ async function resolveLtRootCached(traceRoot, launchNumber) {
 
 // Résout le répertoire des templates (appelé une fois, résultat mis en cache)
 let _templatesDirCache = null;
+let _templatesDirCandidatesCache = [];
 async function resolveTemplatesDir() {
     if (_templatesDirCache && await safeIsDirectory(_templatesDirCache)) return _templatesDirCache;
-    _templatesDirCache = await resolveFirstExistingDir([
-        process.env.FSOP_TEMPLATES_DIR,
+    const candidates = dedupeNonEmpty([
+        ...withServicesPathFallbacks(process.env.FSOP_TEMPLATES_DIR),
         DEFAULT_TEMPLATES_DIR_LINUX,
         DEFAULT_TEMPLATES_DIR_LINUX_SERVICES,
         DEFAULT_TEMPLATES_DIR_LINUX_ALT,
         DEFAULT_TEMPLATES_DIR_WIN
     ]);
+    _templatesDirCandidatesCache = candidates;
+    _templatesDirCache = await resolveFirstExistingDir(candidates);
+    logTemplatesResolution('templates directory', _templatesDirCache, candidates);
     return _templatesDirCache;
 }
 
 // Résout le fichier Excel des templates (appelé une fois, résultat mis en cache)
 let _templatesXlsxCache = null;
+let _templatesXlsxCandidatesCache = [];
 async function resolveTemplatesXlsx() {
     if (_templatesXlsxCache && await safeIsFile(_templatesXlsxCache)) return _templatesXlsxCache;
-    _templatesXlsxCache = await resolveFirstExistingFile([
-        process.env.FSOP_TEMPLATES_XLSX_PATH,
+    const candidates = dedupeNonEmpty([
+        ...withServicesPathFallbacks(process.env.FSOP_TEMPLATES_XLSX_PATH),
         DEFAULT_TEMPLATES_XLSX_LINUX,
         DEFAULT_TEMPLATES_XLSX_LINUX_SERVICES,
         DEFAULT_TEMPLATES_XLSX_LINUX_ALT,
         DEFAULT_TEMPLATES_XLSX_WIN
     ]);
+    _templatesXlsxCandidatesCache = candidates;
+    _templatesXlsxCache = await resolveFirstExistingFile(candidates);
+    logTemplatesResolution('templates xlsx', _templatesXlsxCache, candidates);
     return _templatesXlsxCache;
 }
 
@@ -378,7 +416,11 @@ router.get('/templates', async (req, res) => {
     try {
         const excelPath = await resolveTemplatesXlsx();
         if (!excelPath) {
-            return res.status(503).json({ error: 'TEMPLATES_SOURCE_UNAVAILABLE', hint: 'Définissez FSOP_TEMPLATES_XLSX_PATH dans .env' });
+            return res.status(503).json({
+                error: 'TEMPLATES_SOURCE_UNAVAILABLE',
+                tried: _templatesXlsxCandidatesCache,
+                hint: 'Définissez FSOP_TEMPLATES_XLSX_PATH dans .env (sans /Services si votre montage est déjà /mnt/templates).'
+            });
         }
 
         console.log(`📋 Lecture des templates depuis: ${excelPath}`);
@@ -394,6 +436,7 @@ router.get('/templates', async (req, res) => {
                 error: 'TEMPLATES_SOURCE_UNAVAILABLE',
                 message: 'Le fichier Excel des templates est introuvable ou inaccessible',
                 path: process.env.FSOP_TEMPLATES_XLSX_PATH || DEFAULT_TEMPLATES_XLSX_WIN,
+                tried: _templatesXlsxCandidatesCache,
                 hint: 'Vérifiez que le fichier existe et que le chemin est correct. Vous pouvez définir FSOP_TEMPLATES_XLSX_PATH (Linux: /mnt/templates/... ou /mnt/services/... ).'
             });
         }
@@ -427,8 +470,9 @@ router.get('/template/:templateCode/structure', async (req, res) => {
                 error: 'TEMPLATES_DIR_NOT_FOUND',
                 message: 'Répertoire des templates introuvable',
                 tried: [
-                    process.env.FSOP_TEMPLATES_DIR,
+                    ...withServicesPathFallbacks(process.env.FSOP_TEMPLATES_DIR),
                     DEFAULT_TEMPLATES_DIR_LINUX,
+                    DEFAULT_TEMPLATES_DIR_LINUX_SERVICES,
                     DEFAULT_TEMPLATES_DIR_LINUX_ALT,
                     DEFAULT_TEMPLATES_DIR_WIN
                 ].filter(Boolean),
