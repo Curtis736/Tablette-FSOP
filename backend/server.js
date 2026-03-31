@@ -188,8 +188,8 @@ app.get('/api/health', (req, res) => {
     });
 });
 
-// Route métriques Prometheus (admin uniquement)
-app.get('/metrics', authenticateAdmin, async (req, res) => {
+// Route métriques Prometheus (publique sur le réseau docker de monitoring)
+app.get('/metrics', async (req, res) => {
     try {
         res.set('Content-Type', register.contentType);
         const metrics = await getMetrics();
