@@ -4393,7 +4393,7 @@ router.post('/monitoring/:tempsId/transmit', async (req, res) => {
 
         return res.json({
             success: true,
-            message: isScheduledMode ? 'Enregistrement validé (planifié: tâche SILOG sur SERVEURERP)' : 'Enregistrement transmis',
+                message: isScheduledMode ? 'Enregistrement validé (planifié: tâche SILOG sur SVC_SILOG/runner Windows)' : 'Enregistrement transmis',
             data: isScheduledMode ? { validated: validate } : { validated: validate, transmitted: mark },
             ediJob: ediJobResult
         });
@@ -4477,7 +4477,7 @@ router.post('/monitoring/validate-and-transmit-batch', async (req, res) => {
         const isScheduledMode = ['scheduled', 'disable', 'disabled', 'none'].includes(remoteMode);
 
         // Déclencher l'EDI_JOB après validation (les lignes sont en 'O', donc visibles via V_REMONTE_TEMPS)
-        // En mode "scheduled/disabled", on ne déclenche rien ici: une tâche planifiée Windows sur SERVEURERP s'en charge.
+        // En mode "scheduled/disabled", on ne déclenche rien ici: une tâche planifiée Windows sur SVC_SILOG (ou runner) s'en charge.
         let ediJobResult = null;
         if (triggerEdiJob && !isScheduledMode) {
             try {
@@ -4507,7 +4507,7 @@ router.post('/monitoring/validate-and-transmit-batch', async (req, res) => {
         return res.json({
             success: isScheduledMode || !triggerEdiJob || (ediJobResult && ediJobResult.success),
             message: isScheduledMode
-                ? `${result.message} (planifié: tâche SILOG sur SERVEURERP)`
+                ? `${result.message} (planifié: tâche SILOG sur SVC_SILOG/runner Windows)`
                 : result.message,
             count: result.count,
             ediJob: ediJobResult,

@@ -32,9 +32,12 @@ class OperateurInterface {
         this.MAX_LANCEMENT_DIGITS = 8;
 
         this.log = Logger.child('OperateurInterface');
+        this._sessionExpiredHandled = false;
+        this._onSessionExpired = (event) => this.handleSessionExpired(event?.detail || {});
 
         this.initializeElements();
         this.setupEventListeners();
+        window.addEventListener('sedi:session-expired', this._onSessionExpired);
         this.initializeLancementInput();
         this.checkCurrentOperation({ promptIfRunning: false });
         this.loadOperatorHistory();
@@ -59,9 +62,47 @@ class OperateurInterface {
             clearInterval(this._syncInterval);
             this._syncInterval = null;
         }
+        window.removeEventListener('sedi:session-expired', this._onSessionExpired);
         // Réinitialiser tout l'état interne pour éviter les fuites
         this._resetFullState();
         this.log.info('🗑️ OperateurInterface détruite proprement');
+    }
+
+    isSessionRequiredResponse(data, statusCode = null) {
+        const security = String(data?.security || '').toUpperCase();
+        const errorCode = String(data?.error || '').toUpperCase();
+        return Number(statusCode) === 401 || security === 'SESSION_REQUIRED' || errorCode === 'SESSION_REQUIRED';
+    }
+
+    handleSessionExpired(detail = {}) {
+        if (this._sessionExpiredHandled) return;
+        this._sessionExpiredHandled = true;
+        const operatorCode = this.operator?.code || this.operator?.id || this.operator?.coderessource;
+        try {
+            if (operatorCode) this.apiService.setOperatorSessionActive(operatorCode, false);
+            this.apiService.clearOperatorSessions();
+        } catch (_) {
+            // non bloquant
+        }
+
+        this.notificationManager.error('Session opérateur expirée. Merci de vous reconnecter.');
+        this.log.warn('SESSION_REQUIRED reçu, retour écran login.', detail || {});
+
+        setTimeout(() => {
+            try {
+                if (this.app && typeof this.app.handleLogout === 'function') {
+                    this.app.handleLogout();
+                } else {
+                    localStorage.removeItem('currentOperator');
+                    window.location.reload();
+                }
+            } catch (_) {
+                localStorage.removeItem('currentOperator');
+                window.location.reload();
+            } finally {
+                this._sessionExpiredHandled = false;
+            }
+        }, 100);
     }
 
     /**
@@ -981,6 +1022,11 @@ class OperateurInterface {
             const data = await res.json();
             console.log('🔍 [VALIDATION] Réponse API:', data);
 
+            if (this.isSessionRequiredResponse(data, res.status)) {
+                this.handleSessionExpired({ endpoint: '/fsop/validate-serial', source: 'validateSerialNumber' });
+                return;
+            }
+
             if (res.ok && data.exists) {
                 // Numéro trouvé - afficher un message de succès discret
                 console.log('✅ [VALIDATION] Numéro de série trouvé dans le fichier mesure');
@@ -1035,6 +1081,11 @@ class OperateurInterface {
 
             const data = await res.json();
             console.log('🔍 [VALIDATION OBLIGATOIRE] Réponse API:', data);
+
+            if (this.isSessionRequiredResponse(data, res.status)) {
+                this.handleSessionExpired({ endpoint: '/fsop/validate-serial', source: 'handleOpenFsopForm' });
+                return;
+            }
 
             if (!res.ok || !data.exists) {
                 // Numéro non trouvé - empêcher de continuer
@@ -1801,6 +1852,10 @@ class OperateurInterface {
             
         } catch (error) {
             console.error('Erreur:', error);
+            if (error?.errorCode === 'SESSION_REQUIRED' || error?.errorData?.security === 'SESSION_REQUIRED') {
+                this.handleSessionExpired({ endpoint: '/operators/start', source: 'handleStart', error });
+                return;
+            }
             // Si le backend demande un choix d'étape (Phase), afficher le sélecteur
             if (error?.errorCode === 'CODE_OPERATION_REQUIRED' && error?.errorData?.steps) {
                 this.renderOperationSteps(error.errorData);

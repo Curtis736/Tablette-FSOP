@@ -10,6 +10,12 @@
 # Nettoyage des logs anciens (plus de 30 jours)
 0 3 * * * find /var/log/sedi-*.log -mtime +30 -delete
 
+# IMPORTANT PROD
+# - NE PAS planifier EDI_JOB/SEDI_ETDIFF ici (Linux).
+# - Le déclenchement SILOG est géré sur Windows (poste SVC_SILOG / utilisateur Production8).
+# - En exploitation, éviter tout déclenchement "toutes les minutes".
+#   Si une tâche périodique SILOG est nécessaire côté Windows, cible recommandée: toutes les 15 minutes.
+
 
 
 
