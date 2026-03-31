@@ -14,13 +14,12 @@
 */10 * * * * cd /home/Tablette-FSOP && docker exec sedi-tablette-backend node scripts/proactive-watchdog.js >> /var/log/sedi-watchdog.log 2>&1 || echo "$(date -Iseconds) WATCHDOG_WARNING (db/templates/silog pipeline)" >> /var/log/sedi-watchdog-alert.log
 
 # Nettoyage des logs anciens (plus de 30 jours)
-0 3 * * * find /var/log/sedi-*.log -mtime +30 -delete
+0 3 * * * find /var/log/sedi-*.log /var/log/fsop-*.log -mtime +30 -delete
 
 # IMPORTANT PROD
 # - NE PAS planifier EDI_JOB/SEDI_ETDIFF ici (Linux).
 # - Le déclenchement SILOG est géré sur Windows (poste SVC_SILOG / utilisateur Production8).
-# - En exploitation, éviter tout déclenchement "toutes les minutes".
-#   Si une tâche périodique SILOG est nécessaire côté Windows, cible recommandée: toutes les 15 minutes.
+# - En exploitation actuelle, la tâche Windows est planifiée en quotidien à 07:00 (processus métier validé).
 
 
 

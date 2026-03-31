@@ -41,6 +41,12 @@ function getOperatorHistoryDays() {
     return Math.min(raw, 7);
 }
 
+function getOperatorCurrentLookbackDays() {
+    // Keep current operation detection robust for cycles crossing midnight.
+    const historyDays = getOperatorHistoryDays();
+    return Math.max(historyDays, 2);
+}
+
 
 // Fonction utilitaire pour formater les dates/heures (format HH:mm seulement, fuseau horaire Paris)
 function formatDateTime(dateTime) {
@@ -1750,7 +1756,7 @@ router.get('/:operatorCode/operations',
 router.get('/current/:operatorCode', authenticateOperator, async (req, res) => {
     try {
         const { operatorCode } = req.params;
-        const historyDays = getOperatorHistoryDays();
+        const historyDays = getOperatorCurrentLookbackDays();
         
         console.log(`🔍 Recherche d'opération en cours pour l'opérateur ${operatorCode} (historyDays=${historyDays})...`);
         
