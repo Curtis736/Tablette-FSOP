@@ -138,7 +138,6 @@ class SessionService {
                 `;
                 params = { sessionId };
             } else {
-                const ttlHours = this._getTtlHours();
                 query = `
                     UPDATE [SEDI_APP_INDEPENDANTE].[dbo].[ABSESSIONS_OPERATEURS]
                     SET LogoutTime = GETDATE(),
@@ -146,9 +145,8 @@ class SessionService {
                         ActivityStatus = 'INACTIVE'
                     WHERE OperatorCode = @operatorCode
                       AND SessionStatus = 'ACTIVE'
-                      AND COALESCE(LastActivityTime, LoginTime, DateCreation) >= DATEADD(hour, -@ttlHours, GETDATE())
                 `;
-                params = { operatorCode, ttlHours };
+                params = { operatorCode };
             }
             
             await executeNonQuery(query, params);

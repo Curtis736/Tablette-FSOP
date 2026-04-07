@@ -47,6 +47,14 @@ function getOperatorCurrentLookbackDays() {
     return Math.max(historyDays, 2);
 }
 
+function getCurrentStateMaxAgeHours() {
+    // Anti-ghost guard: if last non-finished event is too old, ignore it.
+    // Must remain permissive enough to allow logout/reconnect resume on same shift.
+    const raw = parseInt(process.env.OPERATOR_CURRENT_MAX_AGE_HOURS || '16', 10);
+    if (!Number.isFinite(raw) || raw <= 0) return 16;
+    return Math.min(raw, 72);
+}
+
 
 // Fonction utilitaire pour formater les dates/heures (format HH:mm seulement, fuseau horaire Paris)
 function formatDateTime(dateTime) {
@@ -1800,6 +1808,17 @@ router.get('/current/:operatorCode', authenticateOperator, async (req, res) => {
 
         // Si le dernier event est FIN/terminé => pas d'opération en cours
         if (lastEvent === 'FIN' || lastStatus === 'TERMINE' || lastStatus === 'TERMINÉ') {
+            return res.json({ success: true, data: null });
+        }
+
+        // Defensive guard: ignore stale active-looking events (ghost states),
+        // while allowing real resumes after a logout/reconnect.
+        const currentMaxAgeHours = getCurrentStateMaxAgeHours();
+        const createdAt = operation?.CreatedAt ? new Date(operation.CreatedAt) : null;
+        const ageMs = createdAt && !Number.isNaN(createdAt.getTime()) ? (Date.now() - createdAt.getTime()) : null;
+        const ageHours = Number.isFinite(ageMs) ? (ageMs / (1000 * 60 * 60)) : null;
+        if (ageHours !== null && ageHours > currentMaxAgeHours) {
+            console.warn(`⚠️ État actif ignoré pour ${operatorCode}: évènement trop ancien (${ageHours.toFixed(1)}h > ${currentMaxAgeHours}h).`);
             return res.json({ success: true, data: null });
         }
 
