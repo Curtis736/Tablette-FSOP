@@ -178,7 +178,22 @@ class ApiService {
         const operatorHeaders = {};
         const isOperatorRoute = ep.startsWith('/operators/');
         if (isOperatorRoute && !ep.startsWith('/operators/login')) {
-            const ctx = this.currentOperatorContext;
+            let ctx = this.currentOperatorContext;
+            // Fallback de robustesse après refresh/cache: réhydrater le contexte depuis localStorage.
+            if ((!ctx?.code || !ctx?.sessionId) && typeof window !== 'undefined') {
+                try {
+                    const savedRaw = window.localStorage?.getItem('currentOperator');
+                    const saved = savedRaw ? JSON.parse(savedRaw) : null;
+                    const code = String(saved?.code || saved?.id || '').trim();
+                    const sid = String(saved?.sessionId || '').trim();
+                    if (code && sid) {
+                        this.setCurrentOperatorContext(code, sid);
+                        ctx = this.currentOperatorContext;
+                    }
+                } catch (_) {
+                    // ignore parsing/localStorage errors
+                }
+            }
             if (ctx?.code && ctx?.sessionId) {
                 operatorHeaders['x-operator-code'] = ctx.code;
                 operatorHeaders['x-operator-session-id'] = ctx.sessionId;
@@ -267,8 +282,17 @@ class ApiService {
                         // ignore
                     }
                 }
-                if (response.status === 401 && (errorData?.security === 'SESSION_CONTEXT_REQUIRED' || errorData?.security === 'SESSION_MISMATCH')) {
+                if (response.status === 401 && (
+                    errorData?.security === 'SESSION_CONTEXT_REQUIRED' ||
+                    errorData?.security === 'SESSION_MISMATCH' ||
+                    errorData?.security === 'DEVICE_MISMATCH'
+                )) {
                     this.currentOperatorContext = null;
+                    try {
+                        window.dispatchEvent(new CustomEvent('sedi:session-expired', { detail: { endpoint, errorData } }));
+                    } catch (_) {
+                        // ignore
+                    }
                 }
                 
                 // Build a comprehensive error message
