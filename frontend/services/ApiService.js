@@ -47,9 +47,25 @@ class ApiService {
         this.cache = new Map();
         this.cacheTimeout = 10000; // 10 secondes de cache par défaut
         this.operatorSessionByCode = new Map();
+        this.currentOperatorContext = null;
+        this.deviceId = this.getOrCreateDeviceId();
         
         console.log(`🔗 ApiService configuré pour: ${this.baseUrl}`);
         console.log(`🔍 Host détecté: ${currentHost}:${currentPort}`);
+    }
+
+    getOrCreateDeviceId() {
+        const key = 'sedi_device_id';
+        try {
+            const existing = window.localStorage?.getItem(key);
+            if (existing && String(existing).trim()) return String(existing).trim();
+            const randomPart = Math.random().toString(36).slice(2, 10);
+            const deviceId = `tab-${Date.now().toString(36)}-${randomPart}`;
+            window.localStorage?.setItem(key, deviceId);
+            return deviceId;
+        } catch (_) {
+            return `tab-fallback-${Date.now().toString(36)}`;
+        }
     }
 
     setOperatorSessionActive(operatorCode, isActive) {
@@ -70,6 +86,17 @@ class ApiService {
 
     clearOperatorSessions() {
         this.operatorSessionByCode.clear();
+        this.currentOperatorContext = null;
+    }
+
+    setCurrentOperatorContext(operatorCode, sessionId) {
+        const code = String(operatorCode || '').trim();
+        const sid = String(sessionId || '').trim();
+        if (!code || !sid) {
+            this.currentOperatorContext = null;
+            return;
+        }
+        this.currentOperatorContext = { code, sessionId: sid };
     }
 
     clearMemoryCacheByPrefix(prefix) {
@@ -147,8 +174,28 @@ class ApiService {
         const shouldAttachAdminToken = adminToken && (endpoint.startsWith('/admin') || endpoint.startsWith('/auth'));
         const authHeaders = shouldAttachAdminToken ? { Authorization: `Bearer ${adminToken}` } : {};
 
+        const ep = String(endpoint || '');
+        const operatorHeaders = {};
+        const isOperatorRoute = ep.startsWith('/operators/');
+        if (isOperatorRoute && !ep.startsWith('/operators/login')) {
+            const ctx = this.currentOperatorContext;
+            if (ctx?.code && ctx?.sessionId) {
+                operatorHeaders['x-operator-code'] = ctx.code;
+                operatorHeaders['x-operator-session-id'] = ctx.sessionId;
+            }
+        }
+
         const config = {
-            headers: { ...this.defaultHeaders, ...authHeaders, ...options.headers },
+            // Avoid browser/proxy caching for API calls (prevents stale "steps started"/state glitches).
+            // Allow caller override (rare).
+            cache: options.cache || 'no-store',
+            headers: {
+                ...this.defaultHeaders,
+                ...authHeaders,
+                'x-device-id': this.deviceId,
+                ...operatorHeaders,
+                ...options.headers
+            },
             ...options
         };
 
@@ -219,6 +266,9 @@ class ApiService {
                     } catch (_) {
                         // ignore
                     }
+                }
+                if (response.status === 401 && (errorData?.security === 'SESSION_CONTEXT_REQUIRED' || errorData?.security === 'SESSION_MISMATCH')) {
+                    this.currentOperatorContext = null;
                 }
                 
                 // Build a comprehensive error message
@@ -332,13 +382,16 @@ class ApiService {
     async operatorLogin(code) {
         const result = await this.post('/operators/login', { code });
         const operatorCode = result?.operator?.code || result?.operator?.id || code;
+        const sessionId = result?.operator?.sessionId || null;
         this.setOperatorSessionActive(operatorCode, true);
+        this.setCurrentOperatorContext(operatorCode, sessionId);
         return result;
     }
 
     async operatorLogout(code) {
         const result = await this.post('/operators/logout', { code });
         this.setOperatorSessionActive(code, false);
+        this.currentOperatorContext = null;
         return result;
     }
 

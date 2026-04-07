@@ -9,6 +9,8 @@ const SessionService = require('../services/SessionService');
 async function authenticateOperator(req, res, next) {
     try {
         const { operatorCode } = req.params;
+        const sessionIdHeader = String(req.headers['x-operator-session-id'] || '').trim();
+        const deviceIdHeader = String(req.headers['x-device-id'] || '').trim();
         
         if (!operatorCode) {
             return res.status(400).json({
@@ -39,14 +41,48 @@ async function authenticateOperator(req, res, next) {
         // Vérifier s'il y a une session active (TTL glissant via SessionService)
         // NOTE: Ne pas filtrer par "aujourd'hui" (sinon cassé après minuit).
         const activeSession = await SessionService.getActiveSession(operatorCode);
+        if (!activeSession) {
+            return res.status(401).json({
+                success: false,
+                error: 'SESSION_REQUIRED',
+                security: 'SESSION_REQUIRED',
+                message: 'Opérateur non connecté ou session expirée'
+            });
+        }
+        if (!sessionIdHeader) {
+            return res.status(401).json({
+                success: false,
+                error: 'SESSION_CONTEXT_REQUIRED',
+                security: 'SESSION_CONTEXT_REQUIRED',
+                message: 'Contexte de session manquant, reconnectez-vous.'
+            });
+        }
+        if (String(activeSession.SessionId) !== sessionIdHeader) {
+            return res.status(401).json({
+                success: false,
+                error: 'SESSION_MISMATCH',
+                security: 'SESSION_MISMATCH',
+                message: 'Session invalide pour cet opérateur.'
+            });
+        }
+        const sessionDeviceId = String(activeSession.DeviceId || '').trim();
+        if (sessionDeviceId && sessionDeviceId !== deviceIdHeader) {
+            return res.status(401).json({
+                success: false,
+                error: 'DEVICE_MISMATCH',
+                security: 'DEVICE_MISMATCH',
+                message: 'Session invalide pour cet appareil.'
+            });
+        }
         
         // Ajouter les informations de l'opérateur à la requête
         req.operator = {
             code: operators[0].Coderessource,
             name: operators[0].Designation1,
             type: operators[0].Typeressource,
-            sessionId: activeSession ? activeSession.SessionId : null,
-            hasActiveSession: Boolean(activeSession)
+            sessionId: activeSession.SessionId,
+            deviceId: sessionDeviceId || null,
+            hasActiveSession: true
         };
 
         next();

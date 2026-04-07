@@ -7,6 +7,10 @@ import ApiService from '../services/ApiService.js?v=20260309-operator-session-ca
 import StorageService from '../services/StorageService.js?v=20251007-final';
 import notificationManager from '../utils/NotificationManager.js';
 
+// Bump this on deployments that change frontend behavior/state.
+// When it changes, the app will auto-clear local caches to avoid stale UI states.
+const APP_BUILD_ID = '2026-03-31.2';
+
 class App {
     constructor() {
         this.currentScreen = 'login';
@@ -52,6 +56,22 @@ class App {
     }
 
     async initializeApp() {
+        // Auto-clear local cache on new deployments to avoid stale "residual cache" issues.
+        try {
+            const key = 'sedi_app_build_id';
+            const prev = window.localStorage?.getItem(key) || '';
+            if (prev && prev !== APP_BUILD_ID) {
+                console.warn(`🧹 App build changed (${prev} -> ${APP_BUILD_ID}): clearing local caches`);
+                window.sessionStorage?.removeItem('sedi_admin_token');
+                this.apiService.clearOperatorSessions();
+                this.storageService.clearCurrentOperator();
+                this.storageService.clearAllCache?.();
+            }
+            window.localStorage?.setItem(key, APP_BUILD_ID);
+        } catch (_) {
+            // ignore
+        }
+
         // Démarrer la déconnexion automatique quotidienne
         if (!this._midnightLogoutScheduled) {
             this._midnightLogoutScheduled = true;
@@ -78,17 +98,26 @@ class App {
                 // Simple vérification d'existence, sans créer de nouvelle session
                 const validOperator = await this.apiService.getOperator(code);
                 if (validOperator) {
+                    // IMPORTANT: le backend exige maintenant x-operator-session-id
+                    // sur /operators/* (hors login). Poser le contexte AVANT getCurrentOperation.
+                    const restoredSessionId = savedOperator?.sessionId || null;
+                    if (code && restoredSessionId) {
+                        this.apiService.setCurrentOperatorContext(code, restoredSessionId);
+                    }
                     // Vérifier que la session est bien valide côté serveur (sinon forcer login)
                     try {
                         await this.apiService.getCurrentOperation(code);
                     } catch (_) {
+                        this.apiService.setCurrentOperatorContext(null, null);
                         this.storageService.clearCurrentOperator();
                         this.showLoginScreen();
                         return;
                     }
                     this.currentOperator = { ...savedOperator, ...validOperator };
                     const restoredCode = this.currentOperator?.code || this.currentOperator?.id;
+                    const mergedSessionId = this.currentOperator?.sessionId || restoredSessionId || null;
                     if (restoredCode) this.apiService.setOperatorSessionActive(restoredCode, true);
+                    if (restoredCode && mergedSessionId) this.apiService.setCurrentOperatorContext(restoredCode, mergedSessionId);
                     this.storageService.setCurrentOperator(this.currentOperator);
                     this.showOperatorScreen();
                     console.log('✅ Opérateur restauré:', validOperator.nom);
@@ -187,6 +216,9 @@ class App {
         
         try {
             this.showLoading(true);
+            // Mode tablette mono-opérateur: repartir d'un état local propre à chaque login.
+            this.apiService.clearOperatorSessions();
+            this.storageService.clearCurrentOperator();
             const loginResp = await this.apiService.operatorLogin(operatorCode);
             const operator = loginResp?.operator || loginResp?.data?.operator || null;
             if (!operator) {
@@ -195,7 +227,9 @@ class App {
 
             this.currentOperator = operator;
             const code = operator.code || operator.id;
+            const sessionId = operator.sessionId || null;
             if (code) this.apiService.setOperatorSessionActive(code, true);
+            if (code && sessionId) this.apiService.setCurrentOperatorContext(code, sessionId);
             this.storageService.setCurrentOperator(operator);
             this.showOperatorScreen();
             notificationManager.success(`Bienvenue ${operator.nom}`);
@@ -244,14 +278,9 @@ class App {
         }
     }
 
-    async handleLogout() {
-        // Fermer la session opérateur côté serveur (ne pas bloquer l'UI si erreur réseau)
-        try {
-            const code = this.currentOperator?.code || this.currentOperator?.id || null;
-            if (code) await this.apiService.operatorLogout(code);
-        } catch (e) {
-            // Non bloquant
-        }
+    handleLogout() {
+        // Nettoyer l'UI immédiatement (ne pas bloquer sur le réseau)
+        const code = this.currentOperator?.code || this.currentOperator?.id || null;
         this.currentOperator = null;
         this.isAdmin = false;
         window.sessionStorage?.removeItem('sedi_admin_token');
@@ -259,6 +288,13 @@ class App {
         this.storageService.clearCurrentOperator();
         this.showLoginScreen();
         notificationManager.info('Déconnexion réussie');
+
+        // Fermer la session opérateur côté serveur en arrière-plan
+        if (code) {
+            Promise.resolve()
+                .then(() => this.apiService.operatorLogout(code))
+                .catch(() => {});
+        }
     }
 
     showLoginScreen() {
@@ -269,8 +305,14 @@ class App {
         }
 
         this.hideAllScreens();
-        document.getElementById('loginScreen').classList.add('active');
-        document.getElementById('operatorCode').value = '';
+        const loginScreenEl = document.getElementById('loginScreen');
+        if (loginScreenEl && loginScreenEl.classList) {
+            loginScreenEl.classList.add('active');
+        }
+        const operatorCodeEl = document.getElementById('operatorCode');
+        if (operatorCodeEl) {
+            operatorCodeEl.value = '';
+        }
         this.currentScreen = 'login';
 
         this.currentOperator = null;
@@ -278,17 +320,21 @@ class App {
         // Vider le cache local pour éviter les données persistantes
         this.storageService.clearCurrentOperator();
         this.storageService.clearAllCache();
-        this.apiService.cache.clear();
+        this.apiService.cache?.clear?.();
         console.log('🧹 Cache local + mémoire API vidés');
     }
 
     showOperatorScreen() {
         this.hideAllScreens();
-        document.getElementById('operatorScreen').classList.add('active');
+        const operatorScreenEl = document.getElementById('operatorScreen');
+        if (operatorScreenEl && operatorScreenEl.classList) {
+            operatorScreenEl.classList.add('active');
+        }
         this.currentScreen = 'operator';
 
         if (this.currentOperator) {
-            document.getElementById('currentOperator').textContent = this.currentOperator.nom;
+            const currentOperatorEl = document.getElementById('currentOperator');
+            if (currentOperatorEl) currentOperatorEl.textContent = this.currentOperator.nom;
 
             // Toujours recréer une interface fraîche pour éviter les fuites de timers/état
             if (this.operateurInterface) {

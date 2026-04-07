@@ -1767,6 +1767,13 @@ router.get('/current/:operatorCode', authenticateOperator, async (req, res) => {
         const historyDays = getOperatorCurrentLookbackDays();
         
         console.log(`🔍 Recherche d'opération en cours pour l'opérateur ${operatorCode} (historyDays=${historyDays})...`);
+
+        // Garde-fou d'isolation: sans session ACTIVE valide, ne jamais exposer un "en cours".
+        // Cela évite les faux positifs entre deux connexions successives sur la même tablette.
+        const activeSession = await SessionService.getActiveSession(operatorCode);
+        if (!activeSession) {
+            return res.json({ success: true, data: null });
+        }
         
         // Chercher le DERNIER événement de l'opérateur, puis déduire l'état.
         // ⚠️ Important: on ne doit pas filtrer sur Statut IN ('EN_COURS','EN_PAUSE'),
@@ -1776,6 +1783,7 @@ router.get('/current/:operatorCode', authenticateOperator, async (req, res) => {
         // redémarré après transfert (cas LT2500795 / opératrice 592).
         const query = `
             SELECT TOP 1
+                h.OperatorCode,
                 h.CodeLanctImprod,
                 h.Ident,
                 h.Statut,
@@ -1803,6 +1811,11 @@ router.get('/current/:operatorCode', authenticateOperator, async (req, res) => {
         }
         
         const operation = result[0];
+        const rowOperatorCode = String(operation.OperatorCode || '').trim();
+        if (rowOperatorCode && rowOperatorCode !== String(operatorCode || '').trim()) {
+            console.warn(`⚠️ Isolation current: mismatch operator row=${rowOperatorCode} param=${operatorCode}`);
+            return res.json({ success: true, data: null });
+        }
         const lastEvent = String(operation.Ident || '').toUpperCase();
         const lastStatus = String(operation.Statut || '').toUpperCase();
 

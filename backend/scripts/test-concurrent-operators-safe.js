@@ -8,7 +8,9 @@ function parseArgs(argv) {
     lancement: '',
     lancementPrefix: '26',
     codeOperation: '',
+    autoCodeOperation: true,
     limit: 500,
+    maxOperators: 0,
     concurrency: 40,
     dryRun: false
   };
@@ -19,7 +21,9 @@ function parseArgs(argv) {
     else if (a === '--lancement') out.lancement = String(argv[++i] || '');
     else if (a === '--lancement-prefix') out.lancementPrefix = String(argv[++i] || '26');
     else if (a === '--code-operation') out.codeOperation = String(argv[++i] || '');
+    else if (a === '--no-auto-code-operation') out.autoCodeOperation = false;
     else if (a === '--limit') out.limit = Math.max(1, parseInt(argv[++i] || '500', 10) || 500);
+    else if (a === '--max-operators') out.maxOperators = Math.max(0, parseInt(argv[++i] || '0', 10) || 0);
     else if (a === '--concurrency') out.concurrency = Math.max(1, parseInt(argv[++i] || '40', 10) || 40);
     else if (a === '--dry-run') out.dryRun = true;
   }
@@ -37,6 +41,38 @@ async function mapWithConcurrency(items, worker, concurrency) {
   });
   await Promise.all(runners);
   return results;
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function parseRetryAfterMs(err, fallbackMs = 3000) {
+  const seconds = Number(err?.response?.data?.retryAfter);
+  if (Number.isFinite(seconds) && seconds > 0) {
+    return Math.min(seconds * 1000, 30 * 60 * 1000);
+  }
+  return fallbackMs;
+}
+
+async function loginWithRetry(client, code, maxAttempts = 3) {
+  let attempt = 0;
+  while (attempt < maxAttempts) {
+    attempt += 1;
+    try {
+      await client.post('/operators/login', { code });
+      return { ok: true };
+    } catch (e) {
+      const status = Number(e?.response?.status || 0);
+      if (status === 429 && attempt < maxAttempts) {
+        const waitMs = parseRetryAfterMs(e, 3000);
+        await sleep(waitMs);
+        continue;
+      }
+      return { ok: false, status, error: e };
+    }
+  }
+  return { ok: false, status: 0, error: new Error('LOGIN_RETRY_EXHAUSTED') };
 }
 
 async function main() {
@@ -89,10 +125,11 @@ async function main() {
       .map((x) => String(x.lancementCode).trim())
       .filter((x) => x.length > 0)
   );
-  const candidates = codes.filter((c) => !activeSet.has(c));
+  const candidatesAll = codes.filter((c) => !activeSet.has(c));
+  const candidates = cfg.maxOperators > 0 ? candidatesAll.slice(0, cfg.maxOperators) : candidatesAll;
 
   console.log(`[INFO] Exclus (deja actifs): ${activeSet.size}`);
-  console.log(`[INFO] Candidats testables: ${candidates.length}`);
+  console.log(`[INFO] Candidats testables: ${candidates.length}${cfg.maxOperators > 0 ? ` (cap=${cfg.maxOperators})` : ''}`);
 
   if (isAutoLancement) {
     const launchResp = await client.get('/lancements', { params: { search: cfg.lancementPrefix, limit: 500 } });
@@ -114,17 +151,39 @@ async function main() {
     console.log(`[INFO] Lancement cible: ${cfg.lancement}`);
   }
 
+  if (!cfg.codeOperation && cfg.autoCodeOperation) {
+    try {
+      const stepsResp = await client.get(`/operators/steps/${encodeURIComponent(cfg.lancement)}`);
+      const uniqueOps = stepsResp?.data?.uniqueOperations || [];
+      if (Array.isArray(uniqueOps) && uniqueOps.length > 0) {
+        cfg.codeOperation = String(uniqueOps[0]).trim();
+        console.log(`[INFO] CodeOperation auto-selectionne: ${cfg.codeOperation}`);
+      } else {
+        console.log('[INFO] Aucun CodeOperation detecte automatiquement (fallback sans codeOperation).');
+      }
+    } catch (e) {
+      console.log(`[WARN] Impossible d'auto-resoudre codeOperation: ${e.message}`);
+    }
+  }
+
   if (cfg.dryRun) {
     console.log('[DRY-RUN] Aucun login/start envoye.');
     process.exit(0);
   }
 
+  const effectiveConcurrency = Math.max(1, Math.min(cfg.concurrency, 5));
+  console.log(`[INFO] Concurrency effective: ${effectiveConcurrency}`);
+
   const results = await mapWithConcurrency(
     candidates,
     async (code) => {
       const out = { code, login: 'KO', start: 'SKIP', error: '' };
+      const loginRes = await loginWithRetry(client, code, 3);
+      if (!loginRes.ok) {
+        out.error = `login:${loginRes.status || 'ERR'}:${loginRes.error?.message || 'FAILED'}`;
+        return out;
+      }
       try {
-        await client.post('/operators/login', { code });
         out.login = 'OK';
       } catch (e) {
         out.error = `login:${e?.response?.status || 'ERR'}:${e.message}`;
@@ -142,7 +201,7 @@ async function main() {
       }
       return out;
     },
-    cfg.concurrency
+    effectiveConcurrency
   );
 
   const ok = results.filter((r) => r.login === 'OK' && r.start === 'OK').length;
@@ -169,6 +228,12 @@ async function main() {
 }
 
 main().catch((e) => {
+  if (Number(e?.response?.status || 0) === 429) {
+    const retryAfter = Number(e?.response?.data?.retryAfter || 0);
+    const sec = Number.isFinite(retryAfter) && retryAfter > 0 ? retryAfter : 'quelques';
+    console.error(`[FATAL] Rate limit login atteint. Réessaie dans ${sec} secondes.`);
+    process.exit(98);
+  }
   const msg = e?.message || e?.code || JSON.stringify(e);
   const status = e?.response?.status ? ` status=${e.response.status}` : '';
   const data = e?.response?.data ? ` data=${JSON.stringify(e.response.data)}` : '';

@@ -1,5 +1,13 @@
 // Middleware de sécurité pour les opérateurs
 const { executeQuery } = require('../config/database');
+const SessionService = require('../services/SessionService');
+
+function getSessionIdFromHeader(req) {
+    return String(req.headers['x-operator-session-id'] || '').trim();
+}
+function getDeviceIdFromHeader(req) {
+    return String(req.headers['x-device-id'] || '').trim();
+}
 
 /**
  * Middleware pour valider qu'un opérateur est connecté et autorisé
@@ -33,21 +41,9 @@ async function validateOperatorSession(req, res, next) {
             });
         }
 
-        // Vérifier que l'opérateur a une session active (TTL glissant, évite le problème à minuit)
-        const ttlHoursRaw = parseInt(process.env.OPERATOR_SESSION_TTL_HOURS || '12', 10);
-        const ttlHours = Number.isFinite(ttlHoursRaw) && ttlHoursRaw > 0 ? Math.min(ttlHoursRaw, 72) : 12;
-        const sessionQuery = `
-            SELECT TOP 1 SessionId, LoginTime, SessionStatus, DeviceInfo
-            FROM [SEDI_APP_INDEPENDANTE].[dbo].[ABSESSIONS_OPERATEURS]
-            WHERE OperatorCode = @operatorId 
-            AND SessionStatus = 'ACTIVE'
-            AND COALESCE(LastActivityTime, LoginTime, DateCreation) >= DATEADD(hour, -@ttlHours, GETDATE())
-            ORDER BY DateCreation DESC
-        `;
-        
-        const activeSessions = await executeQuery(sessionQuery, { operatorId, ttlHours });
-        
-        if (activeSessions.length === 0) {
+        // Session ACTIVE obligatoire + contrôle strict du SessionId client (anti-mélange opérateurs).
+        const activeSession = await SessionService.getActiveSession(operatorId);
+        if (!activeSession) {
             return res.status(401).json({
                 success: false,
                 error: 'SESSION_REQUIRED',
@@ -55,12 +51,39 @@ async function validateOperatorSession(req, res, next) {
                 security: 'SESSION_REQUIRED'
             });
         }
+        const sessionIdHeader = getSessionIdFromHeader(req);
+        const deviceIdHeader = getDeviceIdFromHeader(req);
+        if (!sessionIdHeader) {
+            return res.status(401).json({
+                success: false,
+                error: 'SESSION_CONTEXT_REQUIRED',
+                message: 'Contexte de session manquant, merci de vous reconnecter.',
+                security: 'SESSION_CONTEXT_REQUIRED'
+            });
+        }
+        if (String(activeSession.SessionId) !== sessionIdHeader) {
+            return res.status(401).json({
+                success: false,
+                error: 'SESSION_MISMATCH',
+                message: 'Contexte session invalide pour cet opérateur.',
+                security: 'SESSION_MISMATCH'
+            });
+        }
+        const sessionDeviceId = String(activeSession.DeviceId || '').trim();
+        if (sessionDeviceId && sessionDeviceId !== deviceIdHeader) {
+            return res.status(401).json({
+                success: false,
+                error: 'DEVICE_MISMATCH',
+                message: 'Contexte appareil invalide pour cet opérateur.',
+                security: 'DEVICE_MISMATCH'
+            });
+        }
 
         // Ajouter les informations de sécurité à la requête
         req.security = {
             operatorId: operatorId,
             operatorInfo: operators[0],
-            sessionInfo: activeSessions[0],
+            sessionInfo: activeSession,
             timestamp: new Date().toISOString(),
             validated: true
         };
