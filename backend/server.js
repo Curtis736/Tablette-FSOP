@@ -601,30 +601,32 @@ if (shouldStartServer()) {
     console.log('🧪 Mode test détecté - Serveur non démarré');
 }
 
-// Gestion propre de l'arrêt
-process.on('SIGTERM', () => {
-    console.log('🛑 Arrêt du serveur...');
-    if (server) {
-        server.close(() => {
-            console.log('✅ Serveur fermé proprement');
-            process.exit(0);
-        });
-    } else {
-        process.exit(0);
-    }
+// Crash-safety: log and exit on unhandled errors
+process.on('unhandledRejection', (reason, promise) => {
+    console.error('[FATAL] Unhandled Rejection:', reason);
 });
 
-process.on('SIGINT', () => {
-    console.log('🛑 Arrêt du serveur...');
+process.on('uncaughtException', (err) => {
+    console.error('[FATAL] Uncaught Exception:', err);
+    process.exit(1);
+});
+
+// Gestion propre de l'arrêt
+function gracefulShutdown(signal) {
+    console.log(`🛑 ${signal} reçu — arrêt du serveur...`);
     if (server) {
         server.close(() => {
             console.log('✅ Serveur fermé proprement');
             process.exit(0);
         });
+        setTimeout(() => process.exit(1), 10000);
     } else {
         process.exit(0);
     }
-});
+}
+
+process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
+process.on('SIGINT', () => gracefulShutdown('SIGINT'));
 
 // Fonction pour fermer le serveur proprement (utile pour les tests)
 const closeServer = () => {

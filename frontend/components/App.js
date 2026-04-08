@@ -37,10 +37,10 @@ class App {
         next.setDate(next.getDate() + 1);
         const delay = next.getTime() - now.getTime();
 
-        setTimeout(() => {
+        if (this._midnightTimerId) clearTimeout(this._midnightTimerId);
+        this._midnightTimerId = setTimeout(() => {
             try {
                 console.log('🌙 Minuit: déconnexion locale forcée');
-                // Ne pas dépendre du réseau: vider local + UI
                 const code = this.currentOperator?.code || this.currentOperator?.id;
                 if (code) this.apiService.setOperatorSessionActive(code, false);
                 this.currentOperator = null;
@@ -167,7 +167,7 @@ class App {
 
         // Vérification de la connexion (seulement si un opérateur est connecté)
         this.lastHealthStatus = true;
-        setInterval(() => this.runHealthCheck(), 30000);
+        this._healthCheckInterval = setInterval(() => this.runHealthCheck(), 30000);
 
         // Session expirée côté serveur -> retour login + nettoyage local
         window.addEventListener('sedi:session-expired', () => {
@@ -252,11 +252,8 @@ class App {
         }
         
         try {
-            console.log('🔐 Tentative de connexion admin:', username);
             this.showLoading(true);
             const response = await this.apiService.adminLogin(username, password);
-            
-            console.log('📡 Réponse du serveur:', response);
             
             if (response.success) {
                 console.log('✅ Connexion admin réussie');
@@ -404,11 +401,7 @@ class App {
     showLoading(show) {
         // Limiter le chargement aux boutons des formulaires de connexion
         const selectors = ['#loginForm button', '#adminLoginForm button'];
-        let buttons = document.querySelectorAll(selectors.join(','));
-        if (!buttons || buttons.length === 0) {
-            // Fallback pour compatibilité si les sélecteurs ne trouvent rien
-            buttons = document.querySelectorAll('button');
-        }
+        const buttons = document.querySelectorAll(selectors.join(','));
         buttons.forEach(btn => {
             if (show) {
                 btn.disabled = true;

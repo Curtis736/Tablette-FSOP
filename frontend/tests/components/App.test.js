@@ -123,7 +123,7 @@ describe('App', () => {
     it('should handle successful login', async () => {
       app = new App();
       const mockOperator = { code: 'OP001', nom: 'Test' };
-      app.apiService.getOperator = vi.fn().mockResolvedValue(mockOperator);
+      app.apiService.operatorLogin = vi.fn().mockResolvedValue({ operator: mockOperator });
       
       document.getElementById('operatorCode').value = 'OP001';
       const event = { preventDefault: vi.fn() };
@@ -136,7 +136,7 @@ describe('App', () => {
 
     it('should handle login error', async () => {
       app = new App();
-      app.apiService.getOperator = vi.fn().mockRejectedValue(new Error('Not found'));
+      app.apiService.operatorLogin = vi.fn().mockRejectedValue(new Error('Not found'));
       
       document.getElementById('operatorCode').value = 'OP001';
       const event = { preventDefault: vi.fn() };

@@ -1606,9 +1606,9 @@ class OperateurInterface {
             };
             
             this.lancementDetails.innerHTML = `
-                <strong>Lancement: ${code}</strong><br>
-                <strong>Article: ${lancement.CodeArticle || 'N/A'}</strong><br>
-                <strong>Désignation: ${lancement.DesignationLct1 || 'N/A'}</strong><br>
+                <strong>Lancement: ${this.escapeHtml(code)}</strong><br>
+                <strong>Article: ${this.escapeHtml(lancement.CodeArticle || 'N/A')}</strong><br>
+                <strong>Désignation: ${this.escapeHtml(lancement.DesignationLct1 || 'N/A')}</strong><br>
                 <small>✅ Lancement validé dans LCTE - Prêt à démarrer</small>
             `;
             this.notificationManager.success('Lancement trouvé et validé dans la base de données');
@@ -1770,7 +1770,7 @@ class OperateurInterface {
         this.statusDisplay.textContent = 'En cours';
         
         this.lancementDetails.innerHTML = `
-            <strong>Lancement: ${operation.lancementCode || operation.CodeLancement}</strong><br>
+            <strong>Lancement: ${this.escapeHtml(operation.lancementCode || operation.CodeLancement)}</strong><br>
             <small>Opération en cours depuis ${this.startTime.toLocaleTimeString('fr-FR', { timeZone: 'Europe/Paris', hour: '2-digit', minute: '2-digit' })}</small>
         `;
         
@@ -1808,7 +1808,7 @@ class OperateurInterface {
             : new Date();
         
         this.lancementDetails.innerHTML = `
-            <strong>Lancement: ${lancementCode}</strong><br>
+            <strong>Lancement: ${this.escapeHtml(lancementCode)}</strong><br>
             <small>Opération en pause depuis ${pauseSince.toLocaleTimeString('fr-FR', { timeZone: 'Europe/Paris', hour: '2-digit', minute: '2-digit' })}</small>
         `;
         
@@ -2254,13 +2254,13 @@ class OperateurInterface {
             const normalizedStatusCode = (operation.statusCode || 'EN_COURS').toUpperCase().replace(/[^A-Z0-9_]/g, '_');
             
             row.innerHTML = `
-                <td>${operation.lancementCode || '-'} ${operation.type === 'pause' ? '<i class="fas fa-pause-circle pause-icon"></i>' : ''}</td>
-                <td>${operation.article || '-'}</td>
-                <td>${operation.phase || 'PRODUCTION'}</td>
-                <td>${operation.startTime || '-'}</td>
-                <td>${operation.endTime || '-'}</td>
+                <td>${this.escapeHtml(operation.lancementCode || '-')} ${operation.type === 'pause' ? '<i class="fas fa-pause-circle pause-icon"></i>' : ''}</td>
+                <td>${this.escapeHtml(operation.article || '-')}</td>
+                <td>${this.escapeHtml(operation.phase || 'PRODUCTION')}</td>
+                <td>${this.escapeHtml(operation.startTime || '-')}</td>
+                <td>${this.escapeHtml(operation.endTime || '-')}</td>
                 <td>
-                    <span class="status-badge status-${normalizedStatusCode}">${operation.status || 'En cours'}</span>
+                    <span class="status-badge status-${normalizedStatusCode}">${this.escapeHtml(operation.status || 'En cours')}</span>
                 </td>
             `;
             this.operatorHistoryTableBody.appendChild(row);
@@ -2403,8 +2403,8 @@ class OperateurInterface {
             <div class="comment-item">
                 <div class="comment-header">
                     <div>
-                        <span class="comment-author">${comment.operatorName || comment.operatorCode}</span>
-                        <span class="comment-lancement">${comment.lancementCode}</span>
+                        <span class="comment-author">${this.escapeHtml(comment.operatorName || comment.operatorCode)}</span>
+                        <span class="comment-lancement">${this.escapeHtml(comment.lancementCode)}</span>
                     </div>
                     <div class="comment-timestamp">${this.formatCommentTimestamp(comment.timestamp)}</div>
                 </div>
@@ -2617,9 +2617,9 @@ class OperateurInterface {
                     <button class="admin-notification-close" onclick="this.parentElement.parentElement.remove()">×</button>
                 </div>
                 <div class="admin-notification-body">
-                    <p><strong>Lancement:</strong> ${lancementCode}</p>
-                    <p><strong>Opérateur:</strong> ${this.operator.nom || this.operator.name}</p>
-                    <p><strong>Commentaire:</strong> ${comment.substring(0, 100)}${comment.length > 100 ? '...' : ''}</p>
+                    <p><strong>Lancement:</strong> ${this.escapeHtml(lancementCode)}</p>
+                    <p><strong>Opérateur:</strong> ${this.escapeHtml(this.operator.nom || this.operator.name)}</p>
+                    <p><strong>Commentaire:</strong> ${this.escapeHtml(comment.substring(0, 100))}${comment.length > 100 ? '...' : ''}</p>
                     <p><strong>Heure:</strong> ${new Date().toLocaleString('fr-FR')}</p>
                 </div>
             </div>

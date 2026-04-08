@@ -2,6 +2,7 @@
 const express = require('express');
 const router = express.Router();
 const { executeQuery } = require('../config/database');
+const { authenticateOperator } = require('../middleware/auth');
 const { validateOperatorSession, validateDataOwnership, logSecurityAction } = require('../middleware/operatorSecurity');
 const dataValidation = require('../services/DataValidationService');
 const { validateConcurrency, releaseResources } = require('../middleware/concurrencyManager');
@@ -65,7 +66,7 @@ router.post('/test-sedi-table', async (req, res) => {
 });
 
 // POST /api/operations/start - Démarrer une opération (UTILISE LES 3 TABLES)
-router.post('/start', validateConcurrency, releaseResources, async (req, res) => {
+router.post('/start', authenticateOperator, validateConcurrency, releaseResources, async (req, res) => {
     try {
         console.log('🚀 Démarrage opération avec 3 tables:', req.body);
         const { operatorId, lancementCode } = req.body;
@@ -280,7 +281,7 @@ router.post('/start', validateConcurrency, releaseResources, async (req, res) =>
 });
 
 // POST /api/operations/pause - Mettre en pause
-router.post('/pause', async (req, res) => {
+router.post('/pause', authenticateOperator, async (req, res) => {
     try {
         const { operatorId } = req.body;
         
@@ -335,7 +336,7 @@ router.post('/pause', async (req, res) => {
 });
 
 // POST /api/operations/resume - Reprendre
-router.post('/resume', async (req, res) => {
+router.post('/resume', authenticateOperator, async (req, res) => {
     try {
         const { operatorId } = req.body;
         
@@ -390,7 +391,7 @@ router.post('/resume', async (req, res) => {
 });
 
 // POST /api/operations/stop - Terminer (CALCULE LES DURÉES FINALES)
-router.post('/stop', async (req, res) => {
+router.post('/stop', authenticateOperator, async (req, res) => {
     try {
         console.log('🏁 Arrêt opération avec calcul des durées:', req.body);
         const { operatorId } = req.body;
@@ -547,7 +548,7 @@ router.post('/stop', async (req, res) => {
 });
 
 // GET /api/operations/current/:operatorId - État actuel
-router.get('/current/:operatorId', async (req, res) => {
+router.get('/current/:operatorId', authenticateOperator, async (req, res) => {
     try {
         const { operatorId } = req.params;
         
@@ -667,7 +668,7 @@ router.post('/close-session', async (req, res) => {
 });
 
 // POST /api/operations/update-temps - Mettre à jour ABTEMPS_OPERATEURS
-router.post('/update-temps', async (req, res) => {
+router.post('/update-temps', authenticateOperator, async (req, res) => {
     try {
         const { 
             operatorCode, 

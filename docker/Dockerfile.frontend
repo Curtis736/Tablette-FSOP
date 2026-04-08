@@ -1,5 +1,5 @@
 # Dockerfile optimisé pour le frontend SEDI Tablette
-FROM nginx:1.25-alpine
+FROM nginx:1.27-alpine
 
 # Installer curl, dumb-init et tzdata pour les health checks, la gestion des signaux et le timezone
 RUN apk add --no-cache curl dumb-init tzdata

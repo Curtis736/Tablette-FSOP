@@ -5,6 +5,19 @@
 
 const { executeQuery, executeNonQuery } = require('../config/database');
 
+// Cache for audit table existence (checked once at startup, refreshed every 10 min)
+let _auditTableExists = null;
+async function _checkAuditTable() {
+    try {
+        const r = await executeQuery(`SELECT COUNT(*) as c FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_SCHEMA='dbo' AND TABLE_NAME='AB_AUDIT_EVENTS'`);
+        _auditTableExists = r && r.length > 0 && r[0].c > 0;
+    } catch (_) {
+        _auditTableExists = false;
+    }
+}
+setTimeout(() => _checkAuditTable(), 5000);
+setInterval(() => _checkAuditTable(), 10 * 60 * 1000);
+
 // Cache pour éviter les requêtes répétées
 const sessionCache = new Map();
 const CACHE_TTL = 5 * 60 * 1000; // 5 minutes
@@ -74,18 +87,17 @@ function auditMiddleware(req, res, next) {
         startTime
     };
     
-    // Intercepter la réponse pour logger
+    // Intercepter la réponse pour logger (only override res.send to avoid double-fire,
+    // since Express's res.json() internally calls res.send())
     const originalSend = res.send;
-    const originalJson = res.json;
+    let auditFired = false;
     
     res.send = function(data) {
-        logAuditEvent(req, res, startTime, correlationId, requestId, data);
+        if (!auditFired) {
+            auditFired = true;
+            logAuditEvent(req, res, startTime, correlationId, requestId, data);
+        }
         return originalSend.call(this, data);
-    };
-    
-    res.json = function(data) {
-        logAuditEvent(req, res, startTime, correlationId, requestId, data);
-        return originalJson.call(this, data);
     };
     
     next();
@@ -175,20 +187,7 @@ async function logAuditEvent(req, res, startTime, correlationId, requestId, resp
         // Insérer l'événement d'audit (asynchrone, ne pas bloquer la réponse)
         setImmediate(async () => {
             try {
-                // Vérifier si la table existe avant d'insérer
-                const checkTableQuery = `
-                    SELECT COUNT(*) as tableExists
-                    FROM INFORMATION_SCHEMA.TABLES
-                    WHERE TABLE_SCHEMA = 'dbo' AND TABLE_NAME = 'AB_AUDIT_EVENTS'
-                `;
-                
-                const tableCheck = await executeQuery(checkTableQuery);
-                const tableExists = tableCheck && tableCheck.length > 0 && tableCheck[0].tableExists > 0;
-                
-                if (!tableExists) {
-                    // Table n'existe pas, on skip silencieusement (pas d'erreur)
-                    return;
-                }
+                if (!_auditTableExists) return;
                 
                 const insertQuery = `
                     INSERT INTO [SEDI_APP_INDEPENDANTE].[dbo].[AB_AUDIT_EVENTS]
@@ -237,6 +236,8 @@ async function logAuditEvent(req, res, startTime, correlationId, requestId, resp
  */
 async function logCustomAuditEvent(eventData) {
     try {
+        if (!_auditTableExists) return;
+        
         const {
             operatorCode,
             sessionId,
@@ -249,21 +250,6 @@ async function logCustomAuditEvent(eventData) {
             errorMessage,
             severity = 'INFO'
         } = eventData;
-        
-        // Vérifier si la table existe avant d'insérer
-        const checkTableQuery = `
-            SELECT COUNT(*) as tableExists
-            FROM INFORMATION_SCHEMA.TABLES
-            WHERE TABLE_SCHEMA = 'dbo' AND TABLE_NAME = 'AB_AUDIT_EVENTS'
-        `;
-        
-        const tableCheck = await executeQuery(checkTableQuery);
-        const tableExists = tableCheck && tableCheck.length > 0 && tableCheck[0].tableExists > 0;
-        
-        if (!tableExists) {
-            // Table n'existe pas, on skip silencieusement
-            return;
-        }
         
         const insertQuery = `
             INSERT INTO [SEDI_APP_INDEPENDANTE].[dbo].[AB_AUDIT_EVENTS]

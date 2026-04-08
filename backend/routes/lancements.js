@@ -7,8 +7,9 @@ router.get('/', async (req, res) => {
     try {
         const { search, limit = 100 } = req.query;
         
+        const limitNum = Math.max(1, Math.min(parseInt(limit, 10) || 100, 500));
         let query = `
-            SELECT TOP ${limit}
+            SELECT TOP (@limitNum)
                 t.NoEnreg,
                 t.Ident,
                 t.DateTravail,
@@ -23,7 +24,7 @@ router.get('/', async (req, res) => {
             WHERE 1=1
         `;
         
-        const params = {};
+        const params = { limitNum };
         
         // Filtre de recherche
         if (search) {

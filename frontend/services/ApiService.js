@@ -446,9 +446,10 @@ class ApiService {
     }
 
     // DELETE request
-    async delete(endpoint) {
+    async delete(endpoint, options = {}) {
         return this.request(endpoint, {
-            method: 'DELETE'
+            method: 'DELETE',
+            ...options
         });
     }
 

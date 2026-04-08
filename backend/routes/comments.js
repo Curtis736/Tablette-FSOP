@@ -4,6 +4,7 @@ const router = express.Router();
 const Comment = require('../models/Comment');
 const emailService = require('../services/emailService');
 const { executeQuery } = require('../config/database');
+const { authenticateOperator } = require('../middleware/auth');
 
 // Validation des données d'entrée
 const validateComment = (req, res, next) => {

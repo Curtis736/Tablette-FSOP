@@ -2489,13 +2489,16 @@ router.post('/cleanup-duplicates', async (req, res) => {
             );
             
             if (eventsToDelete.length > 0) {
-                const deleteIds = eventsToDelete.map(e => e.NoEnreg).join(',');
+                const deleteIds = eventsToDelete.map(e => e.NoEnreg);
+                const idPlaceholders = deleteIds.map((_, i) => `@delId${i}`).join(',');
+                const deleteParams = {};
+                deleteIds.forEach((id, i) => { deleteParams[`delId${i}`] = id; });
                 const deleteQuery = `
                     DELETE FROM [SEDI_APP_INDEPENDANTE].[dbo].[ABHISTORIQUE_OPERATEURS]
-                    WHERE NoEnreg IN (${deleteIds})
+                    WHERE NoEnreg IN (${idPlaceholders})
                 `;
                 
-                await executeQuery(deleteQuery);
+                await executeQuery(deleteQuery, deleteParams);
                 cleanedCount += eventsToDelete.length;
                 console.log(`✅ Supprimé ${eventsToDelete.length} doublons pour ${duplicate.OperatorCode}_${duplicate.CodeLanctImprod}`);
             }
@@ -3486,11 +3489,11 @@ router.get('/abetemps', async (req, res) => {
                     [Phase],
                     [CodeOperateur]
                 FROM [SEDI_ERP].[GPSQL].[abetemps]
-                WHERE [CodeLanctImprod] = '${lancement}'
+                WHERE [CodeLanctImprod] = @lancement
                 ORDER BY [NoEnreg] DESC
             `;
             
-            const result = await executeQuery(query);
+            const result = await executeQuery(query, { lancement });
             console.log(`✅ ${result.length} entrées trouvées pour ${lancement} dans abetemps`);
             
             res.json({
@@ -3537,8 +3540,9 @@ router.get('/lcte', async (req, res) => {
         
         console.log(`🔍 Récupération de ${limit} lancements depuis LCTE...`);
         
+        const limitNum = Math.max(1, Math.min(parseInt(limit, 10) || 10, 500));
         const query = `
-            SELECT TOP ${parseInt(limit)} 
+            SELECT TOP (@limitNum) 
                 [CodeLancement],
                 [CodeArticle],
                 [DesignationLct1],
@@ -3549,7 +3553,7 @@ router.get('/lcte', async (req, res) => {
             ORDER BY [CodeLancement]
         `;
         
-        const result = await executeQuery(query);
+        const result = await executeQuery(query, { limitNum });
         
         console.log(` ${result.length} lancements récupérés depuis LCTE`);
         
@@ -3583,8 +3587,9 @@ router.get('/lancements/search', async (req, res) => {
         console.log(`🔍 Recherche de lancements avec le terme: ${term}`);
         
         const searchTerm = `%${term}%`;
+        const limitNum = Math.max(1, Math.min(parseInt(limit, 10) || 10, 500));
         const query = `
-            SELECT TOP ${parseInt(limit)} 
+            SELECT TOP (@limitNum) 
                 [CodeLancement],
                 [CodeArticle],
                 [DesignationLct1],
@@ -3592,13 +3597,13 @@ router.get('/lancements/search', async (req, res) => {
                 [DesignationArt1],
                 [DesignationArt2]
             FROM [SEDI_ERP].[dbo].[LCTE]
-            WHERE [CodeLancement] LIKE '${searchTerm}'
-               OR [DesignationLct1] LIKE '${searchTerm}'
-               OR [CodeArticle] LIKE '${searchTerm}'
+            WHERE [CodeLancement] LIKE @searchTerm
+               OR [DesignationLct1] LIKE @searchTerm
+               OR [CodeArticle] LIKE @searchTerm
             ORDER BY [CodeLancement]
         `;
         
-        const result = await executeQuery(query);
+        const result = await executeQuery(query, { searchTerm, limitNum });
         
         console.log(` ${result.length} lancements trouvés`);
         
@@ -3773,9 +3778,9 @@ router.post('/debug/create-test-pause-reprise', async (req, res) => {
             INSERT INTO [SEDI_APP_INDEPENDANTE].[dbo].[ABHISTORIQUE_OPERATEURS]
             (OperatorCode, CodeLanctImprod, CodeRubrique, Ident, Phase, Statut, HeureDebut, HeureFin, DateCreation, SessionId, RequestId, CreatedAt)
             VALUES (
-                '${operatorCode}',
-                '${lancementCode}',
-                '${operatorCode}',
+                @operatorCode,
+                @lancementCode,
+                @operatorCode,
                 'PAUSE',
                 'PRODUCTION',
                 'EN_PAUSE',
@@ -3783,7 +3788,7 @@ router.post('/debug/create-test-pause-reprise', async (req, res) => {
                 NULL,
                 CAST(GETDATE() AS DATE),
                 NULL,
-                '${requestId}',
+                @requestId,
                 GETDATE()
             )
         `;
@@ -3792,9 +3797,9 @@ router.post('/debug/create-test-pause-reprise', async (req, res) => {
             INSERT INTO [SEDI_APP_INDEPENDANTE].[dbo].[ABHISTORIQUE_OPERATEURS]
             (OperatorCode, CodeLanctImprod, CodeRubrique, Ident, Phase, Statut, HeureDebut, HeureFin, DateCreation, SessionId, RequestId, CreatedAt)
             VALUES (
-                '${operatorCode}',
-                '${lancementCode}',
-                '${operatorCode}',
+                @operatorCode,
+                @lancementCode,
+                @operatorCode,
                 'REPRISE',
                 'PRODUCTION',
                 'EN_COURS',
@@ -3802,13 +3807,14 @@ router.post('/debug/create-test-pause-reprise', async (req, res) => {
                 NULL,
                 CAST(GETDATE() AS DATE),
                 NULL,
-                '${requestId}',
+                @requestId,
                 GETDATE()
             )
         `;
         
-        await executeQuery(pauseQuery);
-        await executeQuery(repriseQuery);
+        const debugParams = { operatorCode, lancementCode, requestId };
+        await executeQuery(pauseQuery, debugParams);
+        await executeQuery(repriseQuery, debugParams);
         
         console.log('✅ Données de test créées');
         
@@ -3940,11 +3946,11 @@ router.get('/debug/pause-reprise/:lancementCode', async (req, res) => {
                 h.HeureFin,
                 h.DateCreation
             FROM [SEDI_APP_INDEPENDANTE].[dbo].[ABHISTORIQUE_OPERATEURS] h
-            WHERE h.CodeLanctImprod = '${lancementCode}'
+            WHERE h.CodeLanctImprod = @lancementCode
             ORDER BY h.DateCreation ASC, h.NoEnreg ASC
         `;
         
-        const events = await executeQuery(eventsQuery);
+        const events = await executeQuery(eventsQuery, { lancementCode });
         
         // Analyser les événements
         const pauseEvents = events.filter(e => e.Ident === 'PAUSE');

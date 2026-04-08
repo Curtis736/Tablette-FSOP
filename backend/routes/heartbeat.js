@@ -6,9 +6,10 @@ const express = require('express');
 const router = express.Router();
 const SessionService = require('../services/SessionService');
 const AuditService = require('../services/AuditService');
+const { authenticateOperator } = require('../middleware/auth');
 
 // POST /api/heartbeat - Heartbeat pour maintenir la session active
-router.post('/', async (req, res) => {
+router.post('/', authenticateOperator, async (req, res) => {
     try {
         const { operatorCode } = req.body;
         

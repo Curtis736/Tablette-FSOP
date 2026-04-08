@@ -12,12 +12,17 @@ const DEFAULT_TTL_MS = 12 * 60 * 60 * 1000; // 12h
 // Taille limitée : nettoyée périodiquement
 const revokedTokens = new Set();
 
+let _cachedFallbackSecret = null;
 function getSecret() {
     const s = process.env.JWT_SECRET || process.env.SESSION_SECRET || '';
     if (!s || s === 'change-me-in-production') {
         console.warn('⚠️ JWT_SECRET non défini ou valeur par défaut — définissez JWT_SECRET dans .env');
+        if (!_cachedFallbackSecret) {
+            _cachedFallbackSecret = crypto.randomBytes(32).toString('hex');
+        }
+        return _cachedFallbackSecret;
     }
-    return s || crypto.randomBytes(32).toString('hex');
+    return s;
 }
 
 function getAdminCredentials() {
@@ -45,7 +50,9 @@ function verifyPayload(token) {
     const b64 = token.slice(0, dot);
     const sig = token.slice(dot + 1);
     const expected = crypto.createHmac('sha256', getSecret()).update(b64).digest('base64url');
-    if (!crypto.timingSafeEqual(Buffer.from(sig), Buffer.from(expected))) return null;
+    const sigBuf = Buffer.from(sig);
+    const expectedBuf = Buffer.from(expected);
+    if (sigBuf.length !== expectedBuf.length || !crypto.timingSafeEqual(sigBuf, expectedBuf)) return null;
     try {
         return JSON.parse(Buffer.from(b64, 'base64url').toString());
     } catch (_) {
@@ -78,10 +85,15 @@ function verifyToken(token) {
 }
 
 function cleanupExpiredTokens() {
-    // La liste noire n'a pas besoin de nettoyage fréquent car les tokens expirés
-    // sont rejetés avant même de vérifier la liste noire.
-    // On vide juste pour éviter une croissance illimitée en cas d'usage intensif.
-    if (revokedTokens.size > 1000) revokedTokens.clear();
+    if (revokedTokens.size > 1000) {
+        const now = Date.now();
+        for (const jti of revokedTokens) {
+            if (typeof jti === 'string' && revokedTokens.size > 500) {
+                revokedTokens.delete(jti);
+            }
+        }
+        if (revokedTokens.size > 1000) revokedTokens.clear();
+    }
 }
 
 module.exports = {

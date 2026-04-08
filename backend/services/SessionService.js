@@ -88,31 +88,23 @@ class SessionService {
      */
     static async createSession(operatorCode, deviceId, ipAddress, deviceInfo) {
         try {
-            // Fermer les sessions actives existantes
-            const closeQuery = `
+            const atomicQuery = `
                 UPDATE [SEDI_APP_INDEPENDANTE].[dbo].[ABSESSIONS_OPERATEURS]
-                SET LogoutTime = GETDATE(),
-                    SessionStatus = 'CLOSED'
-                WHERE OperatorCode = @operatorCode
-                  AND SessionStatus = 'ACTIVE'
-            `;
-            await executeNonQuery(closeQuery, { operatorCode });
-            
-            // Créer la nouvelle session
-            const createQuery = `
+                SET LogoutTime = GETDATE(), SessionStatus = 'CLOSED'
+                WHERE OperatorCode = @operatorCode AND SessionStatus = 'ACTIVE';
+
                 INSERT INTO [SEDI_APP_INDEPENDANTE].[dbo].[ABSESSIONS_OPERATEURS]
                 (OperatorCode, LoginTime, SessionStatus, DeviceId, IpAddress, DeviceInfo, LastActivityTime, ActivityStatus, DateCreation)
-                VALUES (@operatorCode, GETDATE(), 'ACTIVE', @deviceId, @ipAddress, @deviceInfo, GETDATE(), 'ACTIVE', GETDATE())
+                VALUES (@operatorCode, GETDATE(), 'ACTIVE', @deviceId, @ipAddress, @deviceInfo, GETDATE(), 'ACTIVE', GETDATE());
             `;
             
-            await executeNonQuery(createQuery, {
+            await executeNonQuery(atomicQuery, {
                 operatorCode,
                 deviceId: deviceId || null,
                 ipAddress: ipAddress || null,
                 deviceInfo: deviceInfo || null
             });
             
-            // Récupérer la session créée
             return await this.getActiveSession(operatorCode);
         } catch (error) {
             console.error('❌ Erreur création session:', error);

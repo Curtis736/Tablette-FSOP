@@ -9,8 +9,9 @@ services:
     # By default the image runs as user "node". If your host bind mount is root-owned (common with CIFS),
     # you can override to run as root: BACKEND_USER=0:0 (in docker/.env).
     user: ${BACKEND_USER:-node}
-    ports:
-      - "3001:3001"
+    # Port backend accessible uniquement via nginx (pas d'accès direct)
+    expose:
+      - "3001"
     # Map SERVEURERP hostname to IP address for DNS resolution inside container
     # Set DB_SERVER_IP in docker/.env with the actual IP of your SQL Server
     # Example: DB_SERVER_IP=192.168.1.10
@@ -108,6 +109,7 @@ services:
       interval: 30s
       timeout: 10s
       retries: 3
+      start_period: 60s
 
   frontend:
     image: docker-sedi-frontend:latest
@@ -116,7 +118,8 @@ services:
       context: ..
       dockerfile: docker/Dockerfile.frontend
     container_name: sedi-tablette-frontend
-    user: "0:0"
+    # Ne pas exécuter en root - le Dockerfile gère les permissions
+    # user: "0:0"
     ports:
       - "8080:80"
     environment:
@@ -133,19 +136,21 @@ services:
       interval: 30s
       timeout: 10s
       retries: 3
+      start_period: 30s
 
   # Redis pour le cache partagé (optionnel)
   redis:
     image: redis:7-alpine
     container_name: sedi-tablette-redis
-    ports:
-      - "${REDIS_PORT:-6379}:6379"
+    # Redis accessible uniquement via sedi-network (pas de port hôte)
+    expose:
+      - "6379"
     volumes:
       - redis-data:/data
     networks:
       - sedi-network
     restart: always
-    command: redis-server --appendonly yes --maxmemory 256mb --maxmemory-policy allkeys-lru
+    command: redis-server --appendonly yes --maxmemory 256mb --maxmemory-policy allkeys-lru ${REDIS_PASSWORD:+--requirepass ${REDIS_PASSWORD}}
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 10s
