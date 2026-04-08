@@ -169,6 +169,7 @@ class ApiService {
     async executeRequest(endpoint, options = {}) {
         // One-shot retry guard (prevents infinite loops)
         const hasRetried = options && options.__retried === true;
+        const { __retried, ...fetchOptions } = options || {};
         const url = `${this.baseUrl}${endpoint}`;
 
         // Admin auth token (si présent) - envoyé uniquement sur /auth et /admin
@@ -210,15 +211,15 @@ class ApiService {
         const config = {
             // Avoid browser/proxy caching for API calls (prevents stale "steps started"/state glitches).
             // Allow caller override (rare).
-            cache: options.cache || 'no-store',
+            cache: fetchOptions.cache || 'no-store',
             headers: {
                 ...this.defaultHeaders,
                 ...authHeaders,
                 'x-device-id': this.deviceId,
                 ...operatorHeaders,
-                ...options.headers
+                ...fetchOptions.headers
             },
-            ...options
+            ...fetchOptions
         };
 
         try {
@@ -305,8 +306,9 @@ class ApiService {
                             const saved = savedRaw ? JSON.parse(savedRaw) : null;
                             const code = String(saved?.code || saved?.id || '').trim();
                             if (code) {
-                                // Recreate a fresh server session (closes previous ones) and refresh context
-                                const relog = await this.post('/operators/login', { code });
+                                // Recreate a fresh server session (closes previous ones) and refresh context.
+                                // IMPORTANT: use direct fetch (out of queue) to avoid requestQueue deadlock.
+                                const relog = await this.directOperatorLogin(code);
                                 const newSessionId = relog?.operator?.sessionId || null;
                                 this.setOperatorSessionActive(code, true);
                                 if (newSessionId) this.setCurrentOperatorContext(code, newSessionId);
@@ -395,6 +397,29 @@ class ApiService {
             console.error(`Erreur API ${endpoint}:`, error);
             throw error;
         }
+    }
+
+    // Direct login call outside request queue (used only for silent recovery).
+    async directOperatorLogin(code) {
+        const url = `${this.baseUrl}/operators/login`;
+        const response = await fetch(url, {
+            method: 'POST',
+            cache: 'no-store',
+            headers: {
+                ...this.defaultHeaders,
+                'x-device-id': this.deviceId
+            },
+            body: JSON.stringify({ code })
+        });
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok) {
+            const msg = data?.error || `HTTP ${response.status}: ${response.statusText}`;
+            const err = new Error(msg);
+            err.errorCode = data?.error || 'LOGIN_FAILED';
+            err.errorData = data;
+            throw err;
+        }
+        return data;
     }
 
     // GET request
