@@ -246,29 +246,17 @@ class ConsolidationService {
                 } else {
                     console.warn(`⚠️ Lancement ${lancementCode} non trouvé dans V_LCTC`);
                     console.warn(`⚠️ Raisons possibles: TypeRubrique <> 'O' (composant), LancementSolde <> 'N' (soldé), ou lancement inexistant dans SEDI_ERP`);
-                    console.warn(`⚠️ Cette opération ne peut pas être consolidée car Phase et CodeRubrique sont requis (clés ERP)`);
-                    return {
-                        success: false,
-                            skipped: true,
-                            skipReason: 'VLCTC_MISSING',
-                        tempsId: null,
-                            error: null,
-                            message: `Lancement ${lancementCode} ignoré: absent de V_LCTC (souvent normal si composant TypeRubrique <> 'O' ou lancement soldé LancementSolde <> 'N').`,
-                        warnings: [
-                            'Impossible de récupérer Phase et CodeRubrique depuis V_LCTC',
-                            'C\'est normal si le lancement est un composant (TypeRubrique <> \'O\') ou s\'il est soldé',
-                            'Ces opérations ne doivent pas être consolidées selon les spécifications ERP'
-                        ]
-                    };
+                    // Fallback opérationnel: ne pas bloquer la transmission si V_LCTC manque.
+                    // On reprend le comportement historique tolérant en posant des valeurs par défaut.
+                    phase = phase || 'PRODUCTION';
+                    codeRubrique = codeRubrique || String(operatorCode || '').trim() || 'UNKNOWN';
+                    console.warn(`⚠️ Fallback consolidation appliqué: Phase=${phase}, CodeRubrique=${codeRubrique}`);
                 }
             } catch (error) {
                 console.error(`❌ Erreur lors de la récupération de Phase/CodeRubrique depuis V_LCTC:`, error);
-                return {
-                    success: false,
-                    tempsId: null,
-                    error: `Erreur lors de la récupération de Phase/CodeRubrique depuis V_LCTC: ${error.message}`,
-                    warnings: ['Erreur lors de la récupération depuis V_LCTC']
-                };
+                phase = phase || 'PRODUCTION';
+                codeRubrique = codeRubrique || String(operatorCode || '').trim() || 'UNKNOWN';
+                console.warn(`⚠️ Fallback consolidation après erreur V_LCTC: Phase=${phase}, CodeRubrique=${codeRubrique}`);
                 }
             } else {
                 console.log(`✅ Phase/CodeRubrique déjà présents dans les événements: Phase=${phase}, CodeRubrique=${codeRubrique}`);
