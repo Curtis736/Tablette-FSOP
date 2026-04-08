@@ -125,6 +125,7 @@ services:
       # - 80 for domain access (http://fsop.sedi-ati.com)
       # - 8080 for legacy local access
       - "80:80"
+      - "443:443"
       - "8080:80"
     environment:
       - TZ=Europe/Paris
