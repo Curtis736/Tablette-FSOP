@@ -167,6 +167,8 @@ class ApiService {
 
     // Exécution réelle de la requête
     async executeRequest(endpoint, options = {}) {
+        // One-shot retry guard (prevents infinite loops)
+        const hasRetried = options && options.__retried === true;
         const url = `${this.baseUrl}${endpoint}`;
 
         // Admin auth token (si présent) - envoyé uniquement sur /auth et /admin
@@ -176,8 +178,13 @@ class ApiService {
 
         const ep = String(endpoint || '');
         const operatorHeaders = {};
-        const isOperatorRoute = ep.startsWith('/operators/');
-        if (isOperatorRoute && !ep.startsWith('/operators/login')) {
+        // Routes qui nécessitent le contexte opérateur (session/device) côté backend.
+        // Avec l'isolation stricte, FSOP utilise aussi validateOperatorSession => doit recevoir x-operator-session-id.
+        const needsOperatorContext =
+            (ep.startsWith('/operators/') && !ep.startsWith('/operators/login')) ||
+            ep.startsWith('/fsop/');
+
+        if (needsOperatorContext) {
             let ctx = this.currentOperatorContext;
             // Fallback de robustesse après refresh/cache: réhydrater le contexte depuis localStorage.
             if ((!ctx?.code || !ctx?.sessionId) && typeof window !== 'undefined') {
@@ -270,6 +277,54 @@ class ApiService {
                 }
                 
                 const errorData = await response.json().catch(() => ({}));
+
+                const isAuthIssue =
+                    response.status === 401 &&
+                    (
+                        errorData?.security === 'SESSION_REQUIRED' ||
+                        errorData?.error === 'SESSION_REQUIRED' ||
+                        errorData?.security === 'SESSION_CONTEXT_REQUIRED' ||
+                        errorData?.security === 'SESSION_MISMATCH' ||
+                        errorData?.security === 'DEVICE_MISMATCH'
+                    );
+
+                // Auto-resilience: for operator flows, try a silent re-login once then retry the request.
+                // This avoids "sometimes it logs me out when starting a launch" due to TTL/cache refresh.
+                if (!hasRetried && isAuthIssue) {
+                    const ep2 = String(endpoint || '');
+                    const shouldRetry =
+                        ep2.startsWith('/operators/') ||
+                        ep2.startsWith('/fsop/');
+                    const isLoginOrLogout =
+                        ep2.startsWith('/operators/login') ||
+                        ep2.startsWith('/operators/logout');
+
+                    if (shouldRetry && !isLoginOrLogout) {
+                        try {
+                            const savedRaw = window?.localStorage?.getItem('currentOperator');
+                            const saved = savedRaw ? JSON.parse(savedRaw) : null;
+                            const code = String(saved?.code || saved?.id || '').trim();
+                            if (code) {
+                                // Recreate a fresh server session (closes previous ones) and refresh context
+                                const relog = await this.post('/operators/login', { code });
+                                const newSessionId = relog?.operator?.sessionId || null;
+                                this.setOperatorSessionActive(code, true);
+                                if (newSessionId) this.setCurrentOperatorContext(code, newSessionId);
+                                // Update localStorage with refreshed sessionId
+                                try {
+                                    window.localStorage?.setItem('currentOperator', JSON.stringify({
+                                        ...(saved || {}),
+                                        ...(relog?.operator || {}),
+                                        code
+                                    }));
+                                } catch (_) {}
+                                return await this.executeRequest(endpoint, { ...options, __retried: true });
+                            }
+                        } catch (_) {
+                            // fall through to normal handling
+                        }
+                    }
+                }
 
                 // Session opérateur expirée -> notifier l'app pour forcer retour écran login
                 if (response.status === 401 && errorData && (errorData.security === 'SESSION_REQUIRED' || errorData.error === 'SESSION_REQUIRED')) {
