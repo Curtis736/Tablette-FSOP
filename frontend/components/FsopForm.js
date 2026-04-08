@@ -239,6 +239,11 @@ class FsopForm {
 
         const renderTextWithInputs = (text) => {
             if (!text) return '';
+            const makeBlankInput = (maxLen = 32) => {
+                const placeholderKey = `{{TEXT_BLANK_${++blankId}}}`;
+                const currentValue = this.formData.placeholders?.[placeholderKey] || '';
+                return `<input class="fsop-ind-input" type="text" maxlength="${maxLen}" data-placeholder="${placeholderKey}" value="${this.escapeHtml(currentValue)}" />`;
+            };
             // Replace placeholders like {{LT}} with inputs bound to formData.placeholders
             let out = this.escapeHtml(text);
             out = out.replace(/\{\{([A-Z0-9_]+)\}\}/g, (_m, tag) => {
@@ -250,13 +255,50 @@ class FsopForm {
             });
             
             // Detect "ind __" patterns (with 2+ underscores) and replace with editable input.
-            // Make it robust to punctuation at end (ex: "MO 1114 ind _____:"), or extra spaces.
-            // Pattern: "... MO #### ind __" or "... MO #### ind ___" etc.
-            out = out.replace(/\bMO\s*(\d{3,5})\s+ind\s+_{2,}(\s*[:;,.!?)]|\s*$)/gi, (match, moNumber, suffix) => {
+            // Robust to:
+            // - punctuation at end: "MO 1114 ind _____:"
+            // - spaced MO numbers: "MO 1 114 ind _____"
+            out = out.replace(/\bMO\s*([\d\s]{3,8})\s+ind\s+_{2,}(\s*[:;,.!?)]|\s*$)/gi, (match, moRaw, suffix) => {
+                const moNumber = String(moRaw || '').replace(/\s+/g, '');
                 const placeholderKey = `{{IND_MO${moNumber}}}`;
                 const currentValue = this.formData.placeholders?.[placeholderKey] || '';
                 const cleanSuffix = suffix || '';
-                return `MO ${moNumber} ind <input class="fsop-ind-input" type="text" maxlength="24" data-placeholder="${placeholderKey}" value="${this.escapeHtml(currentValue)}" />${this.escapeHtml(cleanSuffix)}`;
+                return `MO ${this.escapeHtml(String(moRaw || '').trim())} ind <input class="fsop-ind-input" type="text" maxlength="24" data-placeholder="${placeholderKey}" value="${this.escapeHtml(currentValue)}" />${this.escapeHtml(cleanSuffix)}`;
+            });
+
+            // Specific pattern often used in FSOP paragraphs:
+            // "Brulé au tir numéro ______"
+            out = out.replace(/\b(num(?:é|e)ro)\s+_{2,}/gi, (_m, label) => {
+                return `${this.escapeHtml(label)} ${makeBlankInput(32)}`;
+            });
+
+            // Fallback: any remaining blank sequence "_____" becomes an editable input.
+            out = out.replace(/_{3,}/g, () => {
+                return makeBlankInput(32);
+            });
+
+            // Global fallback for templates that encode blanks without underscores:
+            // e.g. "MO 715 ind Nombre d'essai..." or "Brulé au tir numéro" (no trailing "_____").
+            out = out.replace(/\bMO\s*([\d\s]{3,8})\s+ind\b(?!\s*<input)\s*(?=($|[A-ZÀ-Ý]))/gi, (_m, moRaw) => {
+                const moNumber = String(moRaw || '').replace(/\s+/g, '');
+                const placeholderKey = `{{IND_MO${moNumber}}}`;
+                const currentValue = this.formData.placeholders?.[placeholderKey] || '';
+                return `MO ${this.escapeHtml(String(moRaw || '').trim())} ind <input class="fsop-ind-input" type="text" maxlength="24" data-placeholder="${placeholderKey}" value="${this.escapeHtml(currentValue)}" /> `;
+            });
+            out = out.replace(/\b(num(?:é|e)ro|n°|no)\b(?!\s*<input)\s*(?=($|[A-ZÀ-Ý]))/gi, (_m, label) => {
+                return `${this.escapeHtml(label)} ${makeBlankInput(32)} `;
+            });
+
+            // Convert explicit date/time placeholders to native inputs when found in text blocks.
+            out = out.replace(/\bjj\/mm\/aaaa\b/gi, () => {
+                const placeholderKey = `{{TEXT_DATE_${++blankId}}}`;
+                const currentValue = this.formData.placeholders?.[placeholderKey] || '';
+                return `<input class="fsop-ind-input fsop-cell-input-date" type="date" data-placeholder="${placeholderKey}" value="${this.escapeHtml(currentValue)}" />`;
+            });
+            out = out.replace(/\bhh:mm\b/gi, () => {
+                const placeholderKey = `{{TEXT_TIME_${++blankId}}}`;
+                const currentValue = this.formData.placeholders?.[placeholderKey] || '';
+                return `<input class="fsop-ind-input fsop-cell-input-time" type="time" data-placeholder="${placeholderKey}" value="${this.escapeHtml(currentValue)}" />`;
             });
             
             return out;
