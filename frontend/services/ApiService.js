@@ -49,6 +49,9 @@ class ApiService {
         this.operatorSessionByCode = new Map();
         this.currentOperatorContext = null;
         this.deviceId = this.getOrCreateDeviceId();
+        this.adminToken = window.sessionStorage?.getItem('sedi_admin_token')
+            || window.localStorage?.getItem('sedi_admin_token')
+            || '';
         
         console.log(`🔗 ApiService configuré pour: ${this.baseUrl}`);
         console.log(`🔍 Host détecté: ${currentHost}:${currentPort}`);
@@ -97,6 +100,22 @@ class ApiService {
             return;
         }
         this.currentOperatorContext = { code, sessionId: sid };
+    }
+
+    setAdminToken(token) {
+        const t = String(token || '').trim();
+        this.adminToken = t;
+        try {
+            if (t) {
+                window.sessionStorage?.setItem('sedi_admin_token', t);
+                window.localStorage?.setItem('sedi_admin_token', t);
+            } else {
+                window.sessionStorage?.removeItem('sedi_admin_token');
+                window.localStorage?.removeItem('sedi_admin_token');
+            }
+        } catch (_) {
+            // ignore storage errors
+        }
     }
 
     clearMemoryCacheByPrefix(prefix) {
@@ -173,7 +192,10 @@ class ApiService {
         const url = `${this.baseUrl}${endpoint}`;
 
         // Admin auth token (si présent) - envoyé uniquement sur /auth et /admin
-        const adminToken = window.sessionStorage?.getItem('sedi_admin_token') || '';
+        const adminToken = this.adminToken
+            || window.sessionStorage?.getItem('sedi_admin_token')
+            || window.localStorage?.getItem('sedi_admin_token')
+            || '';
         const shouldAttachAdminToken = adminToken && (endpoint.startsWith('/admin') || endpoint.startsWith('/auth'));
         const authHeaders = shouldAttachAdminToken ? { Authorization: `Bearer ${adminToken}` } : {};
 
@@ -476,7 +498,9 @@ class ApiService {
     }
 
     async adminLogout() {
-        return this.post('/auth/logout');
+        const result = await this.post('/auth/logout');
+        this.setAdminToken('');
+        return result;
     }
 
     async verifyAdmin() {

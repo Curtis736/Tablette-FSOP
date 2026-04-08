@@ -1,15 +1,15 @@
 // Classe principale de l'application
 // Bump version to bust browser cache when OperateurInterface changes (session isolation, neutral LT state, etc.)
-import OperateurInterface from './OperateurInterface.js?v=20260407-oi-v2';
+import OperateurInterface from './OperateurInterface.js?v=20260408-oi-v3';
 // Bump to bust cache when AdminPage logic changes (auto consolidation, etc.)
-import AdminPage from './AdminPage.js?v=20260309-cache-bust';
-import ApiService from '../services/ApiService.js?v=20260408-session-context-v4';
+import AdminPage from './AdminPage.js?v=20260408-admin-v2';
+import ApiService from '../services/ApiService.js?v=20260408-admin-token-v1';
 import StorageService from '../services/StorageService.js?v=20251007-final';
 import notificationManager from '../utils/NotificationManager.js';
 
 // Bump this on deployments that change frontend behavior/state.
 // When it changes, the app will auto-clear local caches to avoid stale UI states.
-const APP_BUILD_ID = '2026-04-08.1';
+const APP_BUILD_ID = '2026-04-08.2';
 
 class App {
     constructor() {
@@ -257,9 +257,7 @@ class App {
             
             if (response.success) {
                 console.log('✅ Connexion admin réussie');
-                if (response.token) {
-                    window.sessionStorage?.setItem('sedi_admin_token', response.token);
-                }
+                if (response.token) this.apiService.setAdminToken(response.token);
                 this.isAdmin = true;
                 this.showAdminScreen();
                 notificationManager.success(`Bienvenue ${response.user.name}`);
@@ -280,7 +278,7 @@ class App {
         const code = this.currentOperator?.code || this.currentOperator?.id || null;
         this.currentOperator = null;
         this.isAdmin = false;
-        window.sessionStorage?.removeItem('sedi_admin_token');
+        this.apiService.setAdminToken('');
         this.apiService.clearOperatorSessions();
         this.storageService.clearCurrentOperator();
         this.showLoginScreen();
