@@ -1109,6 +1109,28 @@ class FsopForm {
                     // For other columns: make empty cells editable with real inputs (better on tablets than contenteditable),
                     // especially when the template uses highlighted (filled) cells as "zones à renseigner".
                     const hasFill = Boolean(cell?.fill);
+                    const trimmedCell = String(cellText || '').trim();
+                    const rowCells = Array.isArray(body?.[rowIdx]) ? body[rowIdx] : [];
+                    const rowLooksLikeLabelGrid =
+                        rowCells.length >= 2 &&
+                        rowCells.every((c) => {
+                            const t = String(c?.text || '').trim();
+                            return !t || /:$/.test(t);
+                        });
+
+                    // ✅ Cas "TJR PAS ICI": certaines grilles contiennent uniquement des libellés "X :"
+                    // dans les cellules (pas de cellule vide dédiée). On rend donc label + input inline.
+                    if (!isHeader && !saved && /:$/.test(trimmedCell) && trimmedCell.length <= 80 && rowLooksLikeLabelGrid) {
+                        return `
+                            <div class="fsop-cell-label-input">
+                                <span class="fsop-cell-label">${this.escapeHtml(trimmedCell)}</span>
+                                <input class="fsop-cell-input fsop-cell-input-text"
+                                    type="text"
+                                    data-row="${rowIdx}"
+                                    data-col="${colIdx}" />
+                            </div>
+                        `;
+                    }
 
                     // ✅ Définitif (sans couleur): si la cellule est vide et que la cellule précédente du même rang
                     // est un libellé "X :", alors cette cellule est une zone à renseigner -> input.
