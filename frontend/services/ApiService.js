@@ -41,7 +41,7 @@ class ApiService {
         this.requestQueue = [];
         this.isProcessing = false;
         this.lastRequestTime = 0;
-        this.minRequestInterval = 100; // 100ms minimum entre les requêtes
+        this.minRequestInterval = 30; // limiter seulement les écritures, plus réactif sur tablette
         
         // Cache simple pour éviter les requêtes redondantes
         this.cache = new Map();
@@ -148,6 +148,12 @@ class ApiService {
 
     // Méthode générique pour les requêtes avec rate limiting
     async request(endpoint, options = {}) {
+        const method = String(options?.method || 'GET').toUpperCase();
+        // Les lectures (GET/HEAD) ne doivent pas être sérialisées: sinon l'UI devient lente
+        // (chargements en cascade sur tablette). On garde la file pour les mutations.
+        if (method === 'GET' || method === 'HEAD') {
+            return this.executeRequest(endpoint, options);
+        }
         return new Promise((resolve, reject) => {
             this.requestQueue.push({ endpoint, options, resolve, reject });
             this.processQueue();
