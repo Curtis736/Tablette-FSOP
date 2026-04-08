@@ -346,12 +346,13 @@ class FsopForm {
             if (!m) return null;
             const sym = m[1];
             const label = m[2].trim();
+            const labelHtml = renderTextWithInputs(label);
             const checked = /[☑✓x]/i.test(sym);
             const id = `cb_${++blankId}`;
             return `
                 <label class="fsop-word-checkbox">
                     <input id="${id}" type="checkbox" data-checkbox-label="${this.escapeHtml(label)}" ${checked ? 'checked' : ''} />
-                    <span class="fsop-word-checkbox-label">${this.escapeHtml(label)}</span>
+                    <span class="fsop-word-checkbox-label">${labelHtml}</span>
                 </label>
             `;
         };
@@ -1108,6 +1109,34 @@ class FsopForm {
                     // For other columns: make empty cells editable with real inputs (better on tablets than contenteditable),
                     // especially when the template uses highlighted (filled) cells as "zones à renseigner".
                     const hasFill = Boolean(cell?.fill);
+
+                    // ✅ Définitif (sans couleur): si la cellule est vide et que la cellule précédente du même rang
+                    // est un libellé "X :", alors cette cellule est une zone à renseigner -> input.
+                    if (!isHeader && isBlank && !saved && rowIdx >= 0 && colIdx > 0 && body?.[rowIdx]?.[colIdx - 1]) {
+                        const prevText = String(body[rowIdx][colIdx - 1]?.text || '').trim();
+                        if (/:$/.test(prevText) && prevText.length <= 80) {
+                            return `<input class="fsop-cell-input fsop-cell-input-text" type="text" data-row="${rowIdx}" data-col="${colIdx}" />`;
+                        }
+                    }
+
+                    // ✅ Définitif: certaines zones à remplir sont des cellules colorées qui contiennent
+                    // seulement un libellé "X :" (sans underscores). On rend alors "label + input".
+                    if (!isHeader && hasFill && cellText && !saved && !cellText.includes('<input')) {
+                        const trimmed = String(cellText || '').trim();
+                        // Exemple: "Fibre 20' :" / "Lot plaquette :" / "Dymax OP-29 Lot :"
+                        if (/:$/.test(trimmed) && trimmed.length <= 80) {
+                            return `
+                                <div class="fsop-cell-label-input">
+                                    <span class="fsop-cell-label">${this.escapeHtml(trimmed)}</span>
+                                    <input class="fsop-cell-input fsop-cell-input-text"
+                                        type="text"
+                                        data-row="${rowIdx}"
+                                        data-col="${colIdx}" />
+                                </div>
+                            `;
+                        }
+                    }
+
                     if (isBlank || (hasFill && !isHeader && !saved)) {
                         // ⚡ FIX: If this is the first table (tableIdx === 0) and first data row (rowIdx === 0) and second column (colIdx === 1),
                         // and we have a launch number, make it an input (fallback detection)
