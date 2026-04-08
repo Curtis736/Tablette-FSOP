@@ -1105,8 +1105,10 @@ class FsopForm {
                         return `<input class="fsop-cell-input fsop-cell-input-text fsop-cell-input-lot" type="text" data-row="${rowIdx}" data-col="${colIdx}" placeholder="Lot" ${valueAttr} />`;
                     }
                     
-                    // For other columns: make empty cells editable, keep filled cells as text (to avoid perturbing reading)
-                    if (isBlank) {
+                    // For other columns: make empty cells editable with real inputs (better on tablets than contenteditable),
+                    // especially when the template uses highlighted (filled) cells as "zones à renseigner".
+                    const hasFill = Boolean(cell?.fill);
+                    if (isBlank || (hasFill && !isHeader && !saved)) {
                         // ⚡ FIX: If this is the first table (tableIdx === 0) and first data row (rowIdx === 0) and second column (colIdx === 1),
                         // and we have a launch number, make it an input (fallback detection)
                         if (tableIdx === 0 && rowIdx === 0 && colIdx === 1 && this.formData.placeholders?.['{{LT}}']) {
@@ -1122,8 +1124,9 @@ class FsopForm {
                                 style="width: 100%; border: 1px solid #ccc; padding: 4px; background: white;"
                             />`;
                         }
-                        const initial = saved ? this.escapeHtml(String(saved)) : '';
-                        return `<div class="fsop-cell-edit" contenteditable="true" data-row="${rowIdx}" data-col="${colIdx}">${initial}</div>`;
+                        const initial = saved ? String(saved) : '';
+                        const valueAttr = initial ? ` value="${this.escapeHtml(initial)}"` : '';
+                        return `<input class="fsop-cell-input fsop-cell-input-text" type="text" data-row="${rowIdx}" data-col="${colIdx}"${valueAttr} />`;
                     }
 
                     // If we have a saved value for a non-empty cell, prefer showing it (e.g. when re-opening a saved FSOP)
