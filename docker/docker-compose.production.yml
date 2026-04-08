@@ -121,6 +121,10 @@ services:
     # Ne pas exécuter en root - le Dockerfile gère les permissions
     # user: "0:0"
     ports:
+      # Keep both bindings:
+      # - 80 for domain access (fsop.sedi-ati.com)
+      # - 8080 for backward compatibility on existing bookmarks/tools
+      - "80:80"
       - "8080:80"
     environment:
       - TZ=Europe/Paris
