@@ -1,7 +1,7 @@
 // Interface simplifiée pour les opérateurs - v20260309-no-cache-issues
 import TimeUtils from '../utils/TimeUtils.js';
 import ScannerManager from '../utils/ScannerManager.js?v=20260309-cache-bust';
-import FsopForm from './FsopForm.js?v=20260318-fsopform-split1';
+import FsopForm from './FsopForm.js?v=20260407-fsop-blanks-v2';
 import Logger from '../utils/Logger.js?v=20260318-loglevel1';
 
 class OperateurInterface {
@@ -39,6 +39,15 @@ class OperateurInterface {
         this.setupEventListeners();
         window.addEventListener('sedi:session-expired', this._onSessionExpired);
         this.initializeLancementInput();
+        // Important: on part toujours d'un écran neutre à la connexion.
+        // Évite d'afficher un LT "résiduel" (champ conservé par le DOM / cache) quand aucune opération n'est en cours.
+        this.resetControls();
+        if (this.lancementInput) {
+            this.lancementInput.disabled = false;
+            this.lancementInput.value = '';
+        }
+        if (this.selectedLancement) this.selectedLancement.textContent = '';
+        if (this.controlsSection) this.controlsSection.style.display = 'none';
         this.checkCurrentOperation({ promptIfRunning: false });
         this.loadOperatorHistory();
 
@@ -1690,8 +1699,26 @@ class OperateurInterface {
                     this.resumePausedOperation(current);
                 }
             }
+            // Aucun lancement en cours confirmé par le backend -> rester neutre
+            if (!lancementCode) {
+                this.resetControls();
+                if (this.lancementInput) {
+                    this.lancementInput.disabled = false;
+                    this.lancementInput.value = '';
+                }
+                if (this.selectedLancement) this.selectedLancement.textContent = '';
+                if (this.controlsSection) this.controlsSection.style.display = 'none';
+            }
         } catch (error) {
+            // Erreur réseau / session -> ne jamais conserver un LT visuel résiduel
             console.log('Aucune opération en cours');
+            this.resetControls();
+            if (this.lancementInput) {
+                this.lancementInput.disabled = false;
+                this.lancementInput.value = '';
+            }
+            if (this.selectedLancement) this.selectedLancement.textContent = '';
+            if (this.controlsSection) this.controlsSection.style.display = 'none';
         }
     }
 

@@ -277,6 +277,12 @@ class FsopForm {
                 return makeBlankInput(32);
             });
 
+            // Additional fallback: templates sometimes use long dash/line sequences as blanks.
+            // Examples: "-----", "———", "───"
+            out = out.replace(/(?:[-–—─_]\s*){3,}/g, () => {
+                return makeBlankInput(32);
+            });
+
             // Global fallback for templates that encode blanks without underscores:
             // e.g. "MO 715 ind Nombre d'essai..." or "Brulé au tir numéro" (no trailing "_____").
             out = out.replace(/\bMO\s*([\d\s]{3,8})\s+ind\b(?!\s*<input)\s*(?=($|[A-ZÀ-Ý]))/gi, (_m, moRaw) => {
@@ -287,6 +293,14 @@ class FsopForm {
             });
             out = out.replace(/\b(num(?:é|e)ro|n°|no)\b(?!\s*<input)\s*(?=($|[A-ZÀ-Ý]))/gi, (_m, label) => {
                 return `${this.escapeHtml(label)} ${makeBlankInput(32)} `;
+            });
+
+            // Checkbox-like square placeholders in text blocks (e.g. "□ □ □") -> short text input.
+            // This allows writing a quick value while keeping the form editable everywhere.
+            out = out.replace(/(?:[□◻⬜]\s*){2,}/g, (match) => {
+                const boxes = (match.match(/[□◻⬜]/g) || []).length;
+                const maxLen = Math.max(2, Math.min(8, boxes));
+                return makeBlankInput(maxLen);
             });
 
             // Convert explicit date/time placeholders to native inputs when found in text blocks.
