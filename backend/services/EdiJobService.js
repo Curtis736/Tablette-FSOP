@@ -11,12 +11,25 @@ const fs = require('fs/promises');
 const execAsync = promisify(exec);
 
 class EdiJobService {
+    static _ts() {
+        return new Date().toISOString().replace('T', ' ').slice(0, 19);
+    }
+
+    static _log(level, msg, ctx = {}) {
+        const prefix = `[EDI_JOB][${this._ts()}][${level}]`;
+        const extra = Object.keys(ctx).length > 0 ? ` ${JSON.stringify(ctx)}` : '';
+        const line = `${prefix} ${msg}${extra}`;
+        if (level === 'ERROR') console.error(line);
+        else if (level === 'WARN') console.warn(line);
+        else console.log(line);
+    }
+
     static _dailyGuardPath() {
         return process.env.SILOG_DAILY_GUARD_PATH || '/app/logs/edi-job-last-run.json';
     }
 
     static _todayKey() {
-        return new Date().toISOString().slice(0, 10); // YYYY-MM-DD (UTC)
+        return new Date().toISOString().slice(0, 10);
     }
 
     static async _readDailyGuard() {
@@ -124,9 +137,11 @@ class EdiJobService {
      * @returns {Promise<Object>} Résultat de l'exécution
      */
     static async executeEdiJob(codeTache, options = {}) {
+        const startMs = Date.now();
         try {
             const gate = await this._canRunToday(options);
             if (!gate.allowed) {
+                this._log('INFO', 'Exécution ignorée (limite quotidienne atteinte)', { reason: gate.reason });
                 return {
                     success: true,
                     skipped: true,
@@ -137,14 +152,23 @@ class EdiJobService {
             }
 
             const config = this._buildConfig(codeTache, options);
+            this._log('INFO', 'Démarrage exécution', {
+                codeTache: config.codeTache,
+                profil: config.profil,
+                utilisateur: config.utilisateur,
+                platform: process.platform,
+                timeoutMs: config.timeoutMs
+            });
 
             // IMPORTANT: SILOG.exe ne peut pas être exécuté directement sur Linux.
             // Dans ce cas, on doit passer par un "runner" Windows (SSH/WinRM/etc).
             if (process.platform !== 'win32') {
                 const remoteMode = String(process.env.SILOG_REMOTE_MODE || options.remoteMode || '').trim().toLowerCase();
-                // Allow "scheduled"/"disabled": a Windows Scheduled Task runs EDI_JOB periodically on SVC_SILOG (or configured runner).
-                // In that case we don't trigger anything from Linux; we just avoid failing the admin flow.
                 if (remoteMode === 'scheduled' || remoteMode === 'disable' || remoteMode === 'disabled' || remoteMode === 'none') {
+                    this._log('INFO', 'Mode tâche planifiée Windows (non déclenché par le backend)', {
+                        remoteMode,
+                        codeTache: config.codeTache
+                    });
                     return {
                         success: true,
                         skipped: true,
@@ -155,6 +179,10 @@ class EdiJobService {
                     };
                 }
                 if (remoteMode !== 'ssh') {
+                    this._log('ERROR', 'Plateforme non supportée pour exécution directe', {
+                        platform: process.platform,
+                        remoteMode
+                    });
                     return {
                         success: false,
                         error: 'SILOG_UNSUPPORTED_PLATFORM',
@@ -183,8 +211,10 @@ class EdiJobService {
                 `-m${config.mode}`
             ];
 
-            console.log(`🚀 Exécution SILOG EDI_JOB (codeTache=${config.codeTache})`);
-            console.log(`📝 SILOG: ${this._maskCommandForLogs(`"${config.silogExe}" ${silogArgs.join(' ')}`)}`);
+            this._log('INFO', 'Commande SILOG préparée', {
+                command: this._maskCommandForLogs(`"${config.silogExe}" ${silogArgs.join(' ')}`),
+                workDir: config.workDir || '(défaut)'
+            });
 
             let stdout = '';
             let stderr = '';
@@ -222,7 +252,9 @@ class EdiJobService {
                 ].join(' ');
 
                 const command = `powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command "${ps}"`;
-                console.log(`📝 PowerShell: ${this._maskCommandForLogs(command)}`);
+                this._log('INFO', 'Exécution via PowerShell Start-Process', {
+                    command: this._maskCommandForLogs(command)
+                });
 
                 const r = await runCommand(command, {
                     timeout: config.timeoutMs,
@@ -272,7 +304,11 @@ class EdiJobService {
                     `"${remotePs.replace(/"/g, '\\"')}"`
                 ];
                 const sshCommand = parts.join(' ');
-                console.log(`📝 SSH: ${this._maskCommandForLogs(sshCommand)}`);
+                this._log('INFO', 'Exécution via SSH vers hôte Windows', {
+                    sshHost,
+                    sshUser,
+                    command: this._maskCommandForLogs(sshCommand)
+                });
 
                 const r = await runCommand(sshCommand, {
                     timeout: config.timeoutMs,
@@ -294,13 +330,24 @@ class EdiJobService {
                 exitCode = r.exitCode;
             }
             
-            // Analyser le résultat
+            const elapsedMs = Date.now() - startMs;
             const warnings = !!(stderr && String(stderr).trim().length > 0);
             const success = exitCode === 0;
             
             if (success) {
                 await this._recordRun();
-                console.log(`✅ EDI_JOB exécuté avec succès pour codeTache=${config.codeTache} (exitCode=0)`);
+                this._log('INFO', 'Exécution terminée avec succès', {
+                    codeTache: config.codeTache,
+                    exitCode,
+                    elapsedMs,
+                    hasWarnings: warnings,
+                    stdoutLines: String(stdout || '').split('\n').filter(Boolean).length
+                });
+                if (warnings) {
+                    this._log('WARN', 'Avertissements détectés dans stderr', {
+                        stderr: String(stderr).trim().slice(0, 500)
+                    });
+                }
                 return {
                     success: true,
                     message: warnings ? 'EDI_JOB exécuté avec des avertissements' : 'EDI_JOB exécuté avec succès',
@@ -308,11 +355,18 @@ class EdiJobService {
                     stdout: stdout,
                     stderr: warnings ? stderr : null,
                     warnings: warnings || undefined,
-                    exitCode: exitCode
+                    exitCode: exitCode,
+                    elapsedMs
                 };
             }
 
-            console.warn(`❌ EDI_JOB en échec pour codeTache=${config.codeTache} (exitCode=${exitCode})`);
+            this._log('ERROR', 'Exécution échouée', {
+                codeTache: config.codeTache,
+                exitCode,
+                elapsedMs,
+                stdout: String(stdout || '').trim().slice(0, 500),
+                stderr: String(stderr || '').trim().slice(0, 500)
+            });
             return {
                 success: false,
                 error: 'EDI_JOB_FAILED',
@@ -320,35 +374,41 @@ class EdiJobService {
                 codeTache: config.codeTache,
                 stdout,
                 stderr: stderr || null,
-                exitCode
+                exitCode,
+                elapsedMs
             };
             
         } catch (error) {
-            console.error(`❌ Erreur lors de l'exécution de l'EDI_JOB:`, error);
-            
-            // Analyser le type d'erreur
+            const elapsedMs = Date.now() - startMs;
             let errorMessage = 'Erreur lors de l\'exécution de l\'EDI_JOB';
             let errorDetails = null;
             
             if (error.code === 'ENOENT') {
-                errorMessage = 'Fichier SILOG.exe non trouvé. Vérifiez le chemin de configuration.';
+                errorMessage = 'Fichier SILOG.exe non trouvé';
                 errorDetails = `Chemin attendu: ${process.env.SILOG_EXE_PATH || process.env.SILOG_PATH || 'C:\\SILOG\\SILOG.exe'}`;
-            } else if (error.code === 'ETIMEDOUT') {
+            } else if (error.code === 'ETIMEDOUT' || error.killed) {
                 errorMessage = 'Timeout lors de l\'exécution de l\'EDI_JOB';
-                errorDetails = 'L\'exécution a pris plus de 5 minutes';
+                errorDetails = `L'exécution a dépassé ${Math.round((Date.now() - startMs) / 1000)}s`;
             } else if (error.stderr) {
-                errorMessage = 'Erreur lors de l\'exécution de l\'EDI_JOB';
-                errorDetails = error.stderr;
+                errorDetails = String(error.stderr).trim().slice(0, 500);
             } else {
                 errorDetails = error.message;
             }
             
+            this._log('ERROR', errorMessage, {
+                codeTache: codeTache || null,
+                errorCode: error.code || null,
+                elapsedMs,
+                details: errorDetails
+            });
+
             return {
                 success: false,
                 error: errorMessage,
                 details: errorDetails,
                 codeTache: codeTache || null,
-                exitCode: typeof error?.code === 'number' ? error.code : null
+                exitCode: typeof error?.code === 'number' ? error.code : null,
+                elapsedMs
             };
         }
     }
@@ -361,18 +421,28 @@ class EdiJobService {
      */
     static async executeEdiJobForTransmittedRecords(tempsIds, codeTache = null) {
         try {
-            // NOTE:
-            // Dans SILOG, optcodetache = "code tâche" d'intégration (ex: SEDI_ETDIFF) et est fixe.
-            // Si aucun codeTache n'est fourni, utiliser la valeur de configuration/env.
             const resolved = this._buildConfig(codeTache, {});
             codeTache = resolved.codeTache;
             
-            console.log(`🚀 Exécution de l'EDI_JOB pour ${tempsIds.length} enregistrements transmis`);
+            this._log('INFO', 'Déclenchement EDI_JOB pour lot transmis', {
+                codeTache,
+                nbRecords: tempsIds.length,
+                sampleIds: tempsIds.slice(0, 5)
+            });
             
             const result = await this.executeEdiJob(codeTache);
             
-            if (result.success) {
-                console.log(`✅ EDI_JOB exécuté avec succès pour ${tempsIds.length} enregistrements`);
+            if (result.success && !result.skipped) {
+                this._log('INFO', 'Lot transmis traité avec succès', {
+                    codeTache,
+                    nbRecords: tempsIds.length,
+                    elapsedMs: result.elapsedMs || null
+                });
+            } else if (result.skipped) {
+                this._log('INFO', 'Lot transmis ignoré (scheduled/limite)', {
+                    codeTache,
+                    reason: result.reason || result.message
+                });
             }
             
             return {
@@ -382,7 +452,11 @@ class EdiJobService {
             };
             
         } catch (error) {
-            console.error('❌ Erreur lors de l\'exécution de l\'EDI_JOB pour les enregistrements transmis:', error);
+            this._log('ERROR', 'Erreur lot transmis', {
+                codeTache,
+                nbRecords: tempsIds.length,
+                error: error.message
+            });
             return {
                 success: false,
                 error: error.message,

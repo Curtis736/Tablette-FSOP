@@ -4482,10 +4482,10 @@ router.post('/monitoring/validate-and-transmit-batch', async (req, res) => {
         if (triggerEdiJob && !isScheduledMode) {
             try {
                 const idsForJob = result.validatedIds || tempsIds;
+                console.log(`[EDI_JOB][ROUTE] validate-and-transmit-batch: déclenchement pour ${idsForJob.length} IDs`);
                 ediJobResult = await EdiJobService.executeEdiJobForTransmittedRecords(idsForJob, codeTache);
-                console.log(`✅ EDI_JOB exécuté pour ${idsForJob.length} enregistrements validés`);
             } catch (ediError) {
-                console.error('❌ Erreur lors du déclenchement de l\'EDI_JOB:', ediError);
+                console.error(`[EDI_JOB][ROUTE][ERROR] validate-and-transmit-batch: ${ediError.message}`);
                 ediJobResult = { success: false, error: ediError.message };
             }
         } else if (triggerEdiJob && isScheduledMode) {
@@ -4600,7 +4600,7 @@ router.post('/edi-job/execute', async (req, res) => {
         }
         
     } catch (error) {
-        console.error('❌ Erreur lors de l\'exécution de l\'EDI_JOB:', error);
+        console.error(`[EDI_JOB][ROUTE][ERROR] edi-job/execute: ${error.message}`);
         res.status(500).json({
             success: false,
             error: 'Erreur serveur lors de l\'exécution de l\'EDI_JOB'
