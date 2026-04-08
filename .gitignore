@@ -1,0 +1,11 @@
+# Clean: ignore secrets and build artifacts
+.env
+**/*.env
+server/config.env
+server/database/*.db
+client/build/
+vm-deploy/**/client/build/
+**/node_modules/
+tickets-deploy.zip
+deploy-package/
+_archive/
