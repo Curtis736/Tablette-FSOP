@@ -1159,7 +1159,82 @@ class FsopForm {
                         }
                     }
 
-                    if (isBlank || (hasFill && !isHeader && !saved)) {
+                    // Keep fixed template text visible. Only truly blank cells become free-text inputs here.
+                    // Template guard (generalized): some critical process rows must stay as fixed text
+                    // even when extraction yields blank cells in col 0.
+                    if (!isHeader && colIdx === 0 && isBlank) {
+                        const defaultFixedRowsByHeader = [
+                            {
+                                re: /collage de la fibre dans le tube/i,
+                                rows: {
+                                    0: '353 ND',
+                                    1: 'Polymérisation de la colle 353 ND',
+                                    2: '1h /85°C'
+                                }
+                            },
+                            {
+                                re: /collage du tube peek/i,
+                                rows: {
+                                    0: '353 ND',
+                                    1: 'Polymérisation de la colle 353 ND',
+                                    2: 'Polymérisation : Weller 330 °C Air : 18'
+                                }
+                            },
+                            {
+                                re: /collage de la gaine ltcx-?1\.8/i,
+                                rows: {
+                                    0: '353 ND',
+                                    1: 'Polymérisation de la colle 353 ND',
+                                    2: '1h /85°C'
+                                }
+                            },
+                            {
+                                re: /sertissage de pi[eè]ce d[’']encrage/i,
+                                rows: {
+                                    0: 'Pince à sertir (OPT 726 & 731-1)'
+                                }
+                            },
+                            {
+                                re: /collage du connecteur elio/i,
+                                rows: {
+                                    0: 'Colle 353 ND'
+                                }
+                            }
+                        ];
+                        // Generic fallbacks so the same behavior applies to other FSOP variants.
+                        const genericFixedRowsByHeader = [
+                            {
+                                re: /^collage de /i,
+                                rows: {
+                                    0: '353 ND'
+                                }
+                            },
+                            {
+                                re: /^sertissage de /i,
+                                rows: {
+                                    0: 'Pince à sertir (OPT 726 & 731-1)'
+                                }
+                            },
+                            {
+                                re: /connecteur/i,
+                                rows: {
+                                    0: 'Colle 353 ND'
+                                }
+                            }
+                        ];
+                        for (const cfg of defaultFixedRowsByHeader) {
+                            if (cfg.re.test(tableHeadersText) && Object.prototype.hasOwnProperty.call(cfg.rows, rowIdx)) {
+                                return this.escapeHtml(cfg.rows[rowIdx]);
+                            }
+                        }
+                        for (const cfg of genericFixedRowsByHeader) {
+                            if (cfg.re.test(tableHeadersText) && Object.prototype.hasOwnProperty.call(cfg.rows, rowIdx)) {
+                                return this.escapeHtml(cfg.rows[rowIdx]);
+                            }
+                        }
+                    }
+
+                    if (isBlank) {
                         // ⚡ FIX: If this is the first table (tableIdx === 0) and first data row (rowIdx === 0) and second column (colIdx === 1),
                         // and we have a launch number, make it an input (fallback detection)
                         if (tableIdx === 0 && rowIdx === 0 && colIdx === 1 && this.formData.placeholders?.['{{LT}}']) {
