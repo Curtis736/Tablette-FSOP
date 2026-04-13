@@ -745,6 +745,21 @@ class FsopForm {
                 const content = (() => {
                     // Header cells are never editable (except for placeholders)
                     if (isHeader) {
+                        // Some FSOP variants have an empty first header cell in extraction.
+                        // Restore a meaningful visible title instead of showing it blank.
+                        if (colIdx === 0 && isBlank) {
+                            const bannerText = String((banners && banners.length > 0) ? banners[banners.length - 1] : '').trim();
+                            const cleanBanner = bannerText
+                                .replace(/^\d{1,2}[a-z]?\s*[-–.]\s*/i, '')
+                                .replace(/\s*:\s*MO\s*\d{3,5}\s*ind.*$/i, '')
+                                .trim();
+                            if (cleanBanner) return renderTextWithInputs(cleanBanner);
+
+                            const otherHeaders = (head || []).slice(1).map((c) => normalizeCellText(c?.text).toLowerCase()).join(' | ');
+                            if (/\bdate\b/.test(otherHeaders) && /\bop[ée]rateur\b/.test(otherHeaders) && /\blot\b/.test(otherHeaders)) {
+                                return 'Opération';
+                            }
+                        }
                         return cellText ? renderTextWithInputs(cellText) : `<span class="fsop-cell-empty"></span>`;
                     }
                     // Body cells:
