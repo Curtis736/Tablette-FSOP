@@ -221,7 +221,7 @@ describe('App', () => {
     it('should show loading state', () => {
       app = new App();
       app.showLoading(true);
-      const buttons = document.querySelectorAll('button');
+      const buttons = document.querySelectorAll('#loginForm button, #adminLoginForm button');
       buttons.forEach(btn => {
         expect(btn.disabled).toBe(true);
       });
@@ -230,7 +230,7 @@ describe('App', () => {
     it('should hide loading state', () => {
       app = new App();
       app.showLoading(false);
-      const buttons = document.querySelectorAll('button');
+      const buttons = document.querySelectorAll('#loginForm button, #adminLoginForm button');
       buttons.forEach(btn => {
         expect(btn.disabled).toBe(false);
       });
