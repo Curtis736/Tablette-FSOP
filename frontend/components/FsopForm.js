@@ -1294,7 +1294,8 @@ class FsopForm {
 
                     return renderTextWithInputs(cellText);
                 })();
-                const displayText = normalizeCellText(saved || cellText);
+                const savedForDisplay = !isHeader ? getSavedCellValue(rowIdx, colIdx) : '';
+                const displayText = normalizeCellText(savedForDisplay || cellText);
                 const hasInteractiveField = /<(input|select|textarea)\b/i.test(content);
                 const shouldCenterShortLabel =
                     !isHeader &&
