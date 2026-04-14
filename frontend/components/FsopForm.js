@@ -381,6 +381,14 @@ class FsopForm {
                 return /^\d{1,2}[a-z]?\s*\.?\s*$/i.test(s);
             };
             const normalizeSectionNumber = (t) => normalizeCellText(t).replace(/\s+/g, '').replace(/\.$/, '');
+            const looksLikeStandaloneTitle = (t) => {
+                const s = normalizeCellText(t);
+                if (!s) return false;
+                if (s.length > 140) return false;
+                // Avoid promoting common table headers as section titles
+                if (/^(date|op[ée]rateur|lot|heure|mesures?|composant)$/i.test(s)) return false;
+                return /[A-Za-zÀ-ÿ]/.test(s);
+            };
 
             // We peel off up to first 3 rows if they look like merged-title rows
             for (let k = 0; k < 3; k++) {
@@ -404,10 +412,10 @@ class FsopForm {
                     // Determine which is number vs title
                     let num = '';
                     let title = '';
-                    if (isBareSectionNumber(a) && looksLikeTitleText(b)) {
+                    if (isBareSectionNumber(a) && (looksLikeTitleText(b) || looksLikeStandaloneTitle(b))) {
                         num = normalizeSectionNumber(a);
                         title = b;
-                    } else if (isBareSectionNumber(b) && looksLikeTitleText(a)) {
+                    } else if (isBareSectionNumber(b) && (looksLikeTitleText(a) || looksLikeStandaloneTitle(a))) {
                         num = normalizeSectionNumber(b);
                         title = a;
                     }
@@ -490,12 +498,10 @@ class FsopForm {
                 return '<table class="fsop-word-table"></table>';
             }
 
-            const peeled = extractTableBanners(safeRows);
-            const banners = peeled.banners;
-            const remaining = peeled.rows;
-
-            // If we peeled everything, fallback to the original rows
-            const effectiveRows = remaining.length > 0 ? remaining : safeRows;
+            // Strict base-file fidelity:
+            // do not peel/rebuild title rows from tables; keep rows exactly as extracted.
+            const banners = [];
+            const effectiveRows = safeRows;
 
             // Decide whether first row is a real "table header" row (Mesures/Date/Opérateur/etc.)
             const firstRow = effectiveRows[0] || [];
@@ -1389,11 +1395,8 @@ class FsopForm {
                     `;
                     return;
                 }
-                // Fallback: Word-numbered list headings often don't include the "1., 2., ..." in the paragraph text
-                if (isMainStepTitleWithoutNumber(text)) {
-                    html += renderAutoNumberedTitle(text);
-                    return;
-                }
+                // Strict base-file fidelity:
+                // do not auto-number headings that are not explicitly numbered in extracted text.
                 if ((/:\s*$/.test(text) && text.length <= 60) || (text.length <= 130 && /\bMO\s*\d{3,5}\b/i.test(text) && /\bind\b/i.test(text))) {
                     html += `<div class="fsop-word-subtitle">${renderTextWithInputs(text)}</div>`;
                     return;
