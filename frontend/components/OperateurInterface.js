@@ -1668,6 +1668,7 @@ class OperateurInterface {
             const resp = await this.apiService.getCurrentOperation(operatorCode);
             const payload = resp?.data ?? resp; // compat selon format ApiService
             const current = payload?.data ?? payload; // backend renvoie { success, data }
+            const hasUserInput = !!(this.lancementInput && String(this.lancementInput.value || '').trim());
             
             const lancementCode = current?.lancementCode || current?.CodeLancement || current?.CodeLanctImprod || null;
             if (lancementCode) {
@@ -1701,6 +1702,10 @@ class OperateurInterface {
             }
             // Aucun lancement en cours confirmé par le backend -> rester neutre
             if (!lancementCode) {
+                // Do not wipe a code the operator just typed/scanned while this async check is finishing.
+                if (hasUserInput) {
+                    return;
+                }
                 this.resetControls();
                 if (this.lancementInput) {
                     this.lancementInput.disabled = false;
@@ -1712,6 +1717,10 @@ class OperateurInterface {
         } catch (error) {
             // Erreur réseau / session -> ne jamais conserver un LT visuel résiduel
             console.log('Aucune opération en cours');
+            const hasUserInput = !!(this.lancementInput && String(this.lancementInput.value || '').trim());
+            if (hasUserInput) {
+                return;
+            }
             this.resetControls();
             if (this.lancementInput) {
                 this.lancementInput.disabled = false;

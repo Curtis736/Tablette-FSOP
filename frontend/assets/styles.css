@@ -2055,6 +2055,7 @@ tr:hover {
 
 .fsop-word-table thead th {
     background: #D9E2F3;
+    color: #111;
     font-weight: 700;
     text-align: center;
     position: sticky;
@@ -2067,6 +2068,18 @@ tr:hover {
     border: 1px solid #000;
     padding: 4px 6px;
     vertical-align: middle;
+    white-space: normal;
+    overflow-wrap: anywhere;
+}
+
+/* Keep left operation labels readable in blue cells */
+.fsop-word-table th:first-child,
+.fsop-word-table td:first-child {
+    width: 34%;
+}
+
+.fsop-word-table td.fsop-cell-short-center {
+    text-align: center;
 }
 
 .fsop-cell-empty {

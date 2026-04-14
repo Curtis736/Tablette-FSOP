@@ -1294,6 +1294,17 @@ class FsopForm {
 
                     return renderTextWithInputs(cellText);
                 })();
+                const displayText = normalizeCellText(saved || cellText);
+                const hasInteractiveField = /<(input|select|textarea)\b/i.test(content);
+                const shouldCenterShortLabel =
+                    !isHeader &&
+                    colIdx === 0 &&
+                    !hasInteractiveField &&
+                    !!displayText &&
+                    displayText.length <= 18;
+                if (shouldCenterShortLabel) {
+                    attrs.push('class="fsop-cell-short-center"');
+                }
                 return `<${tagName} ${attrs.join(' ')}>${content}</${tagName}>`;
             };
 
