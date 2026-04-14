@@ -331,9 +331,10 @@ class FsopForm {
             const label = m[1].trim();
             const key = label; // used by backend injection regex (field: PASS/FAIL)
             const current = this.formData.passFail?.wordlike?.[key] || '';
+            const labelHtml = renderTextWithInputs(label);
             return `
                 <div class="fsop-word-passfail">
-                    <span class="fsop-word-passfail-label">${this.escapeHtml(label)} :</span>
+                    <span class="fsop-word-passfail-label">${labelHtml} :</span>
                     <label class="fsop-word-passfail-opt ${current === 'PASS' ? 'active' : ''}">
                         <input type="radio" name="pf_${this.escapeHtml(key)}" value="PASS" data-passfail-key="${this.escapeHtml(key)}" ${current === 'PASS' ? 'checked' : ''}/>
                         PASS
