@@ -2,6 +2,11 @@ export async function loadStructure(templateCode) {
     try {
         const response = await this.apiService.get(`/fsop/template/${templateCode}/structure`);
         this.structure = response.structure || response;
+        this.structureMeta = {
+            templateCode: response.templateCode || templateCode,
+            templatePath: response.templatePath || null,
+            templatesSource: response.templatesSource || null
+        };
 
         console.log('📋 Structure chargée:', {
             sections: this.structure.sections?.length || 0,
@@ -9,6 +14,7 @@ export async function loadStructure(templateCode) {
             passFail: this.structure.sections?.filter(s => s.type === 'pass_fail').length || 0,
             headerFields: this.structure.headerFields?.length || 0
         });
+        console.log('📌 Source structure FSOP:', this.structureMeta);
 
         if (this.structure.sections) {
             console.log('📑 Détail des sections:');

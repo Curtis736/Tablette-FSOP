@@ -35,14 +35,17 @@ async function readTemplatesFromExcel(excelPath) {
             throw new Error(errorMsg);
         }
 
-        // Try to find sheet named "Liste des formulaires" first, otherwise use first sheet
-        let worksheet = workbook.getWorksheet('Liste des formulaires');
+        // Always use the dedicated master sheet as source of truth.
+        // This avoids accidentally reading another sheet with a similar layout.
+        const requiredSheetName = String(process.env.FSOP_TEMPLATES_SHEET || 'Liste des formulaires').trim();
+        let worksheet = workbook.getWorksheet(requiredSheetName);
         if (!worksheet) {
-            worksheet = workbook.worksheets[0];
+            const lower = requiredSheetName.toLowerCase();
+            worksheet = workbook.worksheets.find(ws => String(ws?.name || '').trim().toLowerCase() === lower);
         }
 
         if (!worksheet) {
-            throw new Error('TEMPLATES_PARSE_FAILED: No worksheet found in Excel file');
+            throw new Error(`TEMPLATES_PARSE_FAILED: Worksheet "${requiredSheetName}" not found in Excel file`);
         }
 
         // Find header row (look for "N°", "Désignation", "Processus")
@@ -133,6 +136,7 @@ async function readTemplatesFromExcel(excelPath) {
 
         return {
             source: excelPath,
+            sheet: worksheet.name || requiredSheetName,
             count: templates.length,
             templates
         };

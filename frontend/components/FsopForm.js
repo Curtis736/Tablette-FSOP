@@ -234,6 +234,12 @@ class FsopForm {
         // Render in "single page" mode by default: keep A4 width, but don't split by page breaks.
         // This matches the user's request to keep everything on the same page.
         let html = '<div class="fsop-word-doc"><div class="fsop-page fsop-page-single">';
+        const sourceBlocks = Array.isArray(blocks) ? blocks : [];
+        const sourceTitleCount = sourceBlocks.reduce((acc, b) => {
+            if (b?.type !== 'paragraph') return acc;
+            const text = String(b?.text || '').trim();
+            return /^\d{1,2}[a-z]?\s*[-–.]\s*\S+/i.test(text) ? acc + 1 : acc;
+        }, 0);
 
         let blankId = 0;
 
@@ -1417,6 +1423,17 @@ class FsopForm {
         });
 
         html += '</div></div>';
+        // Completeness check: detect missing numbered titles in rendered HTML.
+        const renderedTitleCount = (html.match(/fsop-word-title-number/g) || []).length;
+        if (sourceTitleCount > renderedTitleCount) {
+            console.warn('⚠️ FSOP incomplet potentiel: titres numérotés manquants', {
+                sourceTitleCount,
+                renderedTitleCount,
+                missing: sourceTitleCount - renderedTitleCount
+            });
+        } else {
+            console.log('✅ FSOP complétude titres numérotés OK', { sourceTitleCount, renderedTitleCount });
+        }
         return html;
     }
 

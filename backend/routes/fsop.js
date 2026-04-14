@@ -426,7 +426,7 @@ router.get('/templates', async (req, res) => {
         console.log(`📋 Lecture des templates depuis: ${excelPath}`);
         const result = await readTemplatesFromExcel(excelPath);
         
-        console.log(`✅ ${result.count} templates chargés avec succès`);
+        console.log(`✅ ${result.count} templates chargés avec succès (onglet: ${result.sheet || 'N/A'})`);
         return res.json(result);
     } catch (error) {
         console.error('❌ FSOP templates error:', error);
@@ -494,14 +494,24 @@ router.get('/template/:templateCode/structure', async (req, res) => {
             });
         }
 
+        const templatesXlsxPath = await resolveTemplatesXlsx();
+        const templatesSheet = String(process.env.FSOP_TEMPLATES_SHEET || 'Liste des formulaires').trim();
+
         // Parser la structure du document
         console.log(`🔍 Starting structure parsing for template ${templateCode}...`);
+        console.log(`📋 Templates source xlsx: ${templatesXlsxPath || 'N/A'}`);
+        console.log(`📄 Templates source sheet: ${templatesSheet}`);
         console.log(`📁 Template path: ${templatePath}`);
         const structure = await parseWordStructure(templatePath);
         console.log(`✅ Structure parsed successfully for template ${templateCode}`);
         
         return res.json({
             templateCode: templateCode,
+            templatePath,
+            templatesSource: {
+                xlsx: templatesXlsxPath || null,
+                sheet: templatesSheet
+            },
             structure: structure
         });
     } catch (error) {
