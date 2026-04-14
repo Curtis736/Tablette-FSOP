@@ -518,8 +518,8 @@ class FsopForm {
 
             const inferColumnKind = (headerText) => {
                 const h = String(headerText || '').toLowerCase();
-                if (h.includes('date')) return 'date';
                 if (h.includes('heure') || h.includes('time')) return 'time';
+                if (h.includes('date')) return 'date';
                 if (h.includes('opérateur') || h.includes('operateur')) return 'operator';
                 return 'text';
             };
@@ -765,16 +765,33 @@ class FsopForm {
                     // Body cells:
                     // - Keep the document look (no extra inputs) except for Date/Heure columns which must be fillable with native pickers.
                     const kind = (useThead ? (columnKinds[colIdx] || 'text') : 'text');
+                    let effectiveKind = kind;
                     const saved = getSavedCellValue(rowIdx, colIdx);
+                    const rowText = (!isHeader && Array.isArray(body[rowIdx]))
+                        ? body[rowIdx].map((c) => normalizeCellText(c?.text)).join(' | ').toLowerCase()
+                        : '';
+                    const rowLooksTimeBased = /\bheure\b|\bhh\s*[:h]\s*mm\b/.test(rowText);
+                    const prevRowSameColText = (!isHeader && rowIdx > 0 && Array.isArray(body[rowIdx - 1]))
+                        ? normalizeCellText(body[rowIdx - 1]?.[colIdx]?.text).toLowerCase()
+                        : '';
+                    if (effectiveKind === 'date' && rowLooksTimeBased && colIdx > 0) {
+                        effectiveKind = 'time';
+                    }
+                    if (effectiveKind === 'date' && /\bheure\b|\bhh\s*[:h]\s*mm\b/.test(prevRowSameColText)) {
+                        effectiveKind = 'time';
+                    }
+                    if (effectiveKind === 'date' && /\bhh\s*[:h]\s*mm\b|\bheure\b/i.test(cellText)) {
+                        effectiveKind = 'time';
+                    }
 
-                    if (kind === 'date') {
+                    if (effectiveKind === 'date') {
                         const placeholderLike = /^(jj|dd)\s*[\/-]\s*(mm)\s*[\/-]\s*(aaaa|yyyy)$/i.test(cellText);
                         const iso = normalizeDateToISO(saved || (placeholderLike ? '' : cellText));
                         const valueAttr = iso ? ` value="${this.escapeHtml(iso)}"` : '';
                         return `<input class="fsop-cell-input fsop-cell-input-date" type="date" data-row="${rowIdx}" data-col="${colIdx}"${valueAttr} />`;
                     }
 
-                    if (kind === 'time') {
+                    if (effectiveKind === 'time') {
                         const placeholderLike = /^(hh)\s*[:h]\s*(mm)$/i.test(cellText);
                         const hhmm = normalizeTime(saved || (placeholderLike ? '' : cellText));
                         const valueAttr = hhmm ? ` value="${this.escapeHtml(hhmm)}"` : '';
@@ -1712,10 +1729,10 @@ class FsopForm {
      */
     getPlaceholderForColumn(column) {
         const headerLower = column.name.toLowerCase();
-        if (headerLower.includes('date')) {
-            return 'JJ/MM/AAAA';
-        } else if (headerLower.includes('heure') || headerLower.includes('time')) {
+        if (headerLower.includes('heure') || headerLower.includes('time')) {
             return 'HH:MM';
+        } else if (headerLower.includes('date')) {
+            return 'JJ/MM/AAAA';
         } else if (headerLower.includes('mm')) {
             return 'mm';
         } else if (headerLower.includes('db')) {
