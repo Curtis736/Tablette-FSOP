@@ -797,6 +797,10 @@ class FsopForm {
                     }
 
                     if (effectiveKind === 'date') {
+                        const hasMeaningfulText = !!cellText && !/^(jj|dd)\s*[\/-]\s*(mm)\s*[\/-]\s*(aaaa|yyyy)$/i.test(cellText);
+                        if (hasMeaningfulText && !saved && !isBlank) {
+                            return renderTextWithInputs(cellText);
+                        }
                         const placeholderLike = /^(jj|dd)\s*[\/-]\s*(mm)\s*[\/-]\s*(aaaa|yyyy)$/i.test(cellText);
                         const iso = normalizeDateToISO(saved || (placeholderLike ? '' : cellText));
                         const valueAttr = iso ? ` value="${this.escapeHtml(iso)}"` : '';
@@ -804,6 +808,10 @@ class FsopForm {
                     }
 
                     if (effectiveKind === 'time') {
+                        const hasMeaningfulText = !!cellText && !/^(hh)\s*[:h]\s*(mm)$/i.test(cellText);
+                        if (hasMeaningfulText && !saved && !isBlank) {
+                            return renderTextWithInputs(cellText);
+                        }
                         const placeholderLike = /^(hh)\s*[:h]\s*(mm)$/i.test(cellText);
                         const hhmm = normalizeTime(saved || (placeholderLike ? '' : cellText));
                         const valueAttr = hhmm ? ` value="${this.escapeHtml(hhmm)}"` : '';
