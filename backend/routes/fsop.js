@@ -452,7 +452,7 @@ router.get('/templates', async (req, res) => {
     }
 });
 
-router.get('/template/:templateCode/structure', async (req, res) => {
+router.get('/template/:templateCode/structure', requireFsopSession, async (req, res) => {
     try {
         const templateCode = normalizeTemplateCode(req.params.templateCode);
         
@@ -494,12 +494,10 @@ router.get('/template/:templateCode/structure', async (req, res) => {
             });
         }
 
-        const templatesXlsxPath = await resolveTemplatesXlsx();
         const templatesSheet = String(process.env.FSOP_TEMPLATES_SHEET || 'Liste des formulaires').trim();
 
         // Parser la structure du document
         console.log(`🔍 Starting structure parsing for template ${templateCode}...`);
-        console.log(`📋 Templates source xlsx: ${templatesXlsxPath || 'N/A'}`);
         console.log(`📄 Templates source sheet: ${templatesSheet}`);
         console.log(`📁 Template path: ${templatePath}`);
         const structure = await parseWordStructure(templatePath);
@@ -507,9 +505,7 @@ router.get('/template/:templateCode/structure', async (req, res) => {
         
         return res.json({
             templateCode: templateCode,
-            templatePath,
             templatesSource: {
-                xlsx: templatesXlsxPath || null,
                 sheet: templatesSheet
             },
             structure: structure

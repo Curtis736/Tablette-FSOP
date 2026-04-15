@@ -4,7 +4,6 @@ export async function loadStructure(templateCode) {
         this.structure = response.structure || response;
         this.structureMeta = {
             templateCode: response.templateCode || templateCode,
-            templatePath: response.templatePath || null,
             templatesSource: response.templatesSource || null
         };
 
