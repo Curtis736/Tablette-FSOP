@@ -23,21 +23,38 @@
 | 2 | Backend (auto 20h ou admin) | UPDATE StatutTraitement = 'O' | `NULL` → `'O'` |
 | 3 | V_REMONTE_TEMPS | Expose les lignes 'O' + ProductiveDuration > 0 | `'O'` |
 | 4 | SEDI_ETDIFF (SVC_SILOG) | Lit V_REMONTE_TEMPS, intègre dans SILOG | `'O'` |
-| 5 | **⚠️ À CONFIRMER** | Qui passe 'T' ? SILOG directement ou le backend ? | `'O'` → `'T'` |
+| 5 | SILOG / fin de job SEDI_ETDIFF | Mise à jour du statut côté base après intégration (voir retour Franck MAILLARD, avril 2026) | `'O'` → `'T'` (ou équivalent métier) |
 
-### Point critique : passage en 'T'
+### Point critique : passage en 'T' (statut après intégration SILOG)
 
-**Question ouverte pour Franck MAILLARD** : après que SEDI_ETDIFF a intégré les temps,
-est-ce que SILOG met à jour `StatutTraitement = 'T'` directement dans
-`SEDI_APP_INDEPENDANTE.dbo.ABTEMPS_OPERATEURS`, ou faut-il que le backend s'en charge ?
+**Retour Franck MAILLARD (avril 2026)** : une requête de mise à jour a été ajoutée **en fin de traitement** du job EDI `SEDI_ETDIFF` pour refléter l’intégration dans la table applicative. Sur `SEDI_APP_INDEPENDANTE.dbo.ABTEMPS_OPERATEURS`, le nom **réel** de la colonne est **`StatutTraitement`** (`varchar`) — vérifié via `sys.columns`. Le terme « TraitementStatut » dans le courriel correspond en pratique à **cette même colonne** (inversion de libellé) ; le script SILOG doit cibler **`StatutTraitement`**, comme le backend FSOP.
 
-Si c'est SILOG qui écrit 'T' :
-- Le backend n'a rien à faire après l'étape 2
-- Le backend surveille les enregistrements 'O' non consommés (watchdog)
+Conséquences pour le backend FSOP :
 
-Si c'est le backend qui doit écrire 'T' :
-- Il faut un mécanisme de callback ou de polling pour savoir que SILOG a bien traité
-- Route existante : `MonitoringService.markBatchAsTransmitted()`
+- Après validation (`NULL` → `'O'`), la bascule vers « traité / transmis » peut être assurée **par SILOG** à la fin du job, sans action obligatoire du backend.
+- Le watchdog `/api/admin/silog-pipeline-status` et les alertes « lignes en `'O'` depuis X h » restent utiles si le planificateur ou SILOG est en retard.
+- La route `MonitoringService.markBatchAsTransmitted()` (transfert manuel côté admin) peut coexister avec SILOG : en cas de doute, aligner la procédure métier (qui est la source de vérité du statut `'T'`).
+
+### Déduplication SILOG : plus de fiabilité sur `TempsID` / `varnumutil2`
+
+Historiquement, l’identifiant `TempsID` de `ABTEMPS_OPERATEURS` était recopié dans une variable libre SILOG (`varnumutil2` sur `ETEMPS`) pour éviter les doubles intégrations. **Ce mécanisme n’est plus considéré comme fiable** (écarts constatés entre SILOG et SEDI_APP, risque d’ignorer des lignes).
+
+**Nouvelle règle côté requête SILOG (Franck)** : le contrôle d’existence / anti-doublon repose sur la combinaison métier :
+
+`DateTravail`, `CodeLancement`, `Phase`, `CodePoste`, `CodeOperateur`
+
+Le backend FSOP continue d’écrire `TempsID` (identité technique SQL) ; **ne pas s’appuyer sur une égalité stricte TempsID ↔ SILOG** pour diagnostiquer les doublons ou les « manquants ».
+
+### Fréquence d’exécution EDI
+
+- Ancienne observation (mars 2026) : exécutions très fréquentes sur `SVC_SILOG`.
+- **Depuis le 01/04/2026** : la tâche EDI ne tourne plus qu’**une fois par jour** (paramétrage planificateur / SILOG — hors code FSOP). Adapter les attentes métier et le seuil `SILOG_STALE_THRESHOLD_HOURS` si besoin.
+
+### Lancements soldés et lignes non validées
+
+- Des enregistrements **validés** (`StatutTraitement = 'O'`) peuvent **ne pas être intégrés** s’ils concernent un **lancement soldé** côté ERP — comportement attendu côté SILOG / LCTE.
+- Exemple cité : **LT2600188** soldé → la ligne associée ne pourra pas être intégrée après validation ; traitement manuel ou correction ERP (désolde / autre procédure) selon la gouvernance SEDI.
+- Les enregistrements encore en **`NULL`** (non validés) ne sortent pas dans `V_REMONTE_TEMPS` tant qu’ils ne passent pas en `'O'`.
 
 ## Infrastructure
 
@@ -46,7 +63,7 @@ Si c'est le backend qui doit écrire 'T' :
 - **Poste** : `SVC_SILOG` (et NON `SERVEURERP`)
 - **Utilisateur SILOG** : `Production8`
 - **Planificateur de tâches** : sur `SVC_SILOG` (accès requis pour vérifier la fréquence)
-- **Fréquence constatée** : ~1 exécution/minute (capture du 30/03/2026)
+- **Fréquence** : en mars 2026, observation ponctuelle ~1 exécution/minute ; **depuis le 01/04/2026**, exécution **quotidienne** selon retour exploitation (à confirmer sur la tâche planifiée réelle).
 
 ### Commande de référence
 
