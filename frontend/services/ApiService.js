@@ -580,25 +580,70 @@ class ApiService {
         return this.get(`/operators/steps/${encodeURIComponent(lancementCode)}`);
     }
 
-    async startOperation(operatorId, lancementCode, { codeOperation } = {}) {
-        if (!this.hasOperatorSession(operatorId)) {
-            const error = new Error('Session opérateur absente, reconnectez-vous avant de démarrer.');
-            error.errorCode = 'SESSION_REQUIRED';
-            error.errorData = { security: 'SESSION_REQUIRED', hint: 'LOGIN_BEFORE_START' };
-            throw error;
+    async ensureOperatorContext(operatorId) {
+        const code = String(operatorId || '').trim();
+        if (!code) {
+            const err = new Error('Code opérateur manquant');
+            err.errorCode = 'OPERATOR_REQUIRED';
+            throw err;
         }
+
+        // Context already valid in memory
+        if (this.currentOperatorContext?.code === code && this.currentOperatorContext?.sessionId) {
+            this.setOperatorSessionActive(code, true);
+            return;
+        }
+
+        // Try restore from localStorage (supports both sessionId and SessionId keys)
+        try {
+            const raw = window?.localStorage?.getItem('currentOperator');
+            const saved = raw ? JSON.parse(raw) : null;
+            const savedCode = String(saved?.code || saved?.id || '').trim();
+            const savedSessionId = String(saved?.sessionId || saved?.SessionId || '').trim();
+            if (savedCode === code && savedSessionId) {
+                this.setOperatorSessionActive(code, true);
+                this.setCurrentOperatorContext(code, savedSessionId);
+                return;
+            }
+        } catch (_) {
+            // ignore parse/storage errors
+        }
+
+        // Last fallback: recreate server session silently
+        const relog = await this.directOperatorLogin(code);
+        const newSessionId = relog?.operator?.sessionId || relog?.operator?.SessionId || null;
+        this.setOperatorSessionActive(code, true);
+        if (newSessionId) this.setCurrentOperatorContext(code, newSessionId);
+        try {
+            const raw = window?.localStorage?.getItem('currentOperator');
+            const saved = raw ? JSON.parse(raw) : {};
+            window.localStorage?.setItem('currentOperator', JSON.stringify({
+                ...saved,
+                ...(relog?.operator || {}),
+                code
+            }));
+        } catch (_) {
+            // ignore
+        }
+    }
+
+    async startOperation(operatorId, lancementCode, { codeOperation } = {}) {
+        await this.ensureOperatorContext(operatorId);
         return this.post('/operators/start', { operatorId, lancementCode, codeOperation });
     }
 
     async pauseOperation(operatorId, lancementCode, { codeOperation } = {}) {
+        await this.ensureOperatorContext(operatorId);
         return this.post('/operators/pause', { operatorId, lancementCode, codeOperation });
     }
 
     async resumeOperation(operatorId, lancementCode, { codeOperation } = {}) {
+        await this.ensureOperatorContext(operatorId);
         return this.post('/operators/resume', { operatorId, lancementCode, codeOperation });
     }
 
     async stopOperation(operatorId, lancementCode, { codeOperation } = {}) {
+        await this.ensureOperatorContext(operatorId);
         return this.post('/operators/stop', { operatorId, lancementCode, codeOperation });
     }
 

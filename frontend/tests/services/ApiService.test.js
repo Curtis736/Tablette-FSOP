@@ -264,11 +264,34 @@ describe('ApiService', () => {
       );
     });
 
-    it('should block start operation without active operator session', async () => {
-      await expect(service.startOperation('OP001', 'LT001')).rejects.toMatchObject({
-        errorCode: 'SESSION_REQUIRED'
-      });
-      expect(mockFetch).not.toHaveBeenCalled();
+    it('should silently recover session before start operation', async () => {
+      mockFetch
+        .mockResolvedValueOnce({
+          ok: true,
+          json: async () => ({
+            operator: { code: 'OP001', sessionId: 'sid-1' }
+          })
+        })
+        .mockResolvedValueOnce({
+          ok: true,
+          json: async () => ({})
+        });
+
+      await service.startOperation('OP001', 'LT001');
+
+      expect(mockFetch).toHaveBeenNthCalledWith(
+        1,
+        expect.stringContaining('/operators/login'),
+        expect.objectContaining({ method: 'POST' })
+      );
+      expect(mockFetch).toHaveBeenNthCalledWith(
+        2,
+        expect.stringContaining('/operators/start'),
+        expect.objectContaining({
+          method: 'POST',
+          body: JSON.stringify({ operatorId: 'OP001', lancementCode: 'LT001' })
+        })
+      );
     });
 
     it('should pause operation', async () => {
