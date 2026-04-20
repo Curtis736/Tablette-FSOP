@@ -170,6 +170,44 @@ class StorageService {
         });
     }
 
+    /**
+     * Purge totale des données liées à une session opérateur (utilisé lors
+     * d'une `SESSION_REQUIRED` / `SESSION_CONTEXT_REQUIRED` / `SESSION_MISMATCH`).
+     *
+     * Préserve uniquement :
+     *  - `sedi_device_id`     (identifiant stable de l'appareil)
+     *  - `userPreferences`    (UI)
+     *  - `appSettings`        (api url, timeout, ...)
+     *
+     * Tout le reste (opérateur courant, sessions, caches, tokens admin, etc.)
+     * est effacé pour qu'un simple `location.reload()` reparte sain.
+     */
+    purgeOperatorData() {
+        try {
+            const preserveLocal = new Set([
+                'sedi_device_id',
+                this.keys.USER_PREFERENCES,
+                this.keys.APP_SETTINGS
+            ]);
+            const keys = Object.keys(localStorage);
+            keys.forEach((key) => {
+                if (!preserveLocal.has(key)) {
+                    localStorage.removeItem(key);
+                }
+            });
+        } catch (error) {
+            console.warn('purgeOperatorData(localStorage) a échoué :', error);
+        }
+
+        try {
+            if (typeof sessionStorage !== 'undefined') {
+                sessionStorage.clear();
+            }
+        } catch (error) {
+            console.warn('purgeOperatorData(sessionStorage) a échoué :', error);
+        }
+    }
+
     // Méthodes utilitaires
     clearAll() {
         localStorage.clear();

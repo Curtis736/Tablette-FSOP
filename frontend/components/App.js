@@ -169,16 +169,29 @@ class App {
         this.lastHealthStatus = true;
         this._healthCheckInterval = setInterval(() => this.runHealthCheck(), 30000);
 
-        // Session expirée côté serveur -> retour login + nettoyage local
+        // Session expirée côté serveur -> purge totale des caches tablette
+        // (localStorage + sessionStorage) puis rechargement propre.
+        // Ainsi l'opérateur n'a rien à nettoyer manuellement (pas besoin de F12).
+        this._sessionExpiredInFlight = false;
         window.addEventListener('sedi:session-expired', () => {
+            if (this._sessionExpiredInFlight) return;
+            this._sessionExpiredInFlight = true;
             try {
                 this.currentOperator = null;
-                this.storageService.clearCurrentOperator();
+                try { this.apiService.clearOperatorSessions(); } catch (_) {}
+                try { this.storageService.purgeOperatorData(); } catch (_) {}
+                try { notificationManager.warning('Session expirée : la tablette se réinitialise…'); } catch (_) {}
                 this.showLoginScreen();
-                this.apiService.clearOperatorSessions();
-                notificationManager.warning('Session expirée: veuillez vous reconnecter');
             } catch (_) {
                 // ignore
+            } finally {
+                setTimeout(() => {
+                    try {
+                        window.location.replace(window.location.pathname + window.location.search);
+                    } catch (_) {
+                        window.location.reload();
+                    }
+                }, 300);
             }
         });
 

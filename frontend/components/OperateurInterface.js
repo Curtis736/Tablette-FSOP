@@ -110,17 +110,28 @@ class OperateurInterface {
 
         setTimeout(() => {
             try {
+                // Purge totale (localStorage + sessionStorage) pour éviter tout
+                // résidu de session côté tablette. Plus besoin de F12/clear manuel.
+                try {
+                    if (this.app?.storageService?.purgeOperatorData) {
+                        this.app.storageService.purgeOperatorData();
+                    }
+                } catch (_) {}
+
                 if (this.app && typeof this.app.handleLogout === 'function') {
                     this.app.handleLogout();
-                } else {
-                    localStorage.removeItem('currentOperator');
-                    window.location.reload();
                 }
             } catch (_) {
-                localStorage.removeItem('currentOperator');
-                window.location.reload();
+                // ignore, fallback ci-dessous
             } finally {
                 this._sessionExpiredHandled = false;
+                try {
+                    // Rechargement dur pour repartir d'un état propre.
+                    window.location.replace(window.location.pathname + window.location.search);
+                } catch (_) {
+                    try { localStorage.removeItem('currentOperator'); } catch (_) {}
+                    window.location.reload();
+                }
             }
         }, 100);
     }
