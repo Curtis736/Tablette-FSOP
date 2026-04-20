@@ -317,18 +317,21 @@ class ApiService {
                         errorData?.security === 'DEVICE_MISMATCH'
                     );
 
-                // Auto-resilience: for operator flows, try a silent re-login once then retry the request.
-                // This avoids "sometimes it logs me out when starting a launch" due to TTL/cache refresh.
+                // Auto-resilience: for operator read flows, try a silent re-login once then retry.
+                // IMPORTANT: never auto-retry mutating requests (start/pause/resume/stop) to avoid
+                // duplicated side effects and "ghost" UI states after a context error.
                 if (!hasRetried && isAuthIssue) {
                     const ep2 = String(endpoint || '');
+                    const method = String(options?.method || 'GET').toUpperCase();
                     const shouldRetry =
                         ep2.startsWith('/operators/') ||
                         ep2.startsWith('/fsop/');
                     const isLoginOrLogout =
                         ep2.startsWith('/operators/login') ||
                         ep2.startsWith('/operators/logout');
+                    const isSafeMethod = method === 'GET' || method === 'HEAD';
 
-                    if (shouldRetry && !isLoginOrLogout) {
+                    if (shouldRetry && !isLoginOrLogout && isSafeMethod) {
                         try {
                             const savedRaw = window?.localStorage?.getItem('currentOperator');
                             const saved = savedRaw ? JSON.parse(savedRaw) : null;

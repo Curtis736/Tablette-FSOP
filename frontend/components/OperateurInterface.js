@@ -88,7 +88,18 @@ class OperateurInterface {
         this._sessionExpiredHandled = true;
         const operatorCode = this.operator?.code || this.operator?.id || this.operator?.coderessource;
         try {
+            // Remettre immédiatement l'UI dans un état neutre pour éviter
+            // l'affichage d'un LT "bloqué" quand la session a expiré.
+            this.resetControls();
+            if (this.lancementInput) {
+                this.lancementInput.disabled = false;
+                this.lancementInput.value = '';
+            }
+            if (this.selectedLancement) this.selectedLancement.textContent = '';
+            if (this.controlsSection) this.controlsSection.style.display = 'none';
+
             if (operatorCode) this.apiService.setOperatorSessionActive(operatorCode, false);
+            this.apiService.setCurrentOperatorContext(null, null);
             this.apiService.clearOperatorSessions();
         } catch (_) {
             // non bloquant

@@ -1,15 +1,15 @@
 // Classe principale de l'application
 // Bump version to bust browser cache when OperateurInterface changes (session isolation, neutral LT state, etc.)
-import OperateurInterface from './OperateurInterface.js?v=20260408-oi-v3';
+import OperateurInterface from './OperateurInterface.js?v=20260420-oi-v4';
 // Bump to bust cache when AdminPage logic changes (auto consolidation, etc.)
 import AdminPage from './AdminPage.js?v=20260408-admin-v2';
-import ApiService from '../services/ApiService.js?v=20260408-tablet-perf-v1';
+import ApiService from '../services/ApiService.js?v=20260420-session-context-v2';
 import StorageService from '../services/StorageService.js?v=20251007-final';
 import notificationManager from '../utils/NotificationManager.js';
 
 // Bump this on deployments that change frontend behavior/state.
 // When it changes, the app will auto-clear local caches to avoid stale UI states.
-const APP_BUILD_ID = '2026-04-08.3';
+const APP_BUILD_ID = '2026-04-20.1';
 
 class App {
     constructor() {
