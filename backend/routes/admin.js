@@ -1212,10 +1212,42 @@ async function getAdminOperations(date, page = 1, limit = 25, dateStart = null, 
             filteredEvents = allEvents.filter(event => String(event.DateCreation || '') === targetDate);
         }
 
-        // Ne plus exclure les opérations déjà transmises vers ABTEMPS_OPERATEURS :
-        // l'ADMIN doit pouvoir voir et vérifier toutes les opérations de la journée,
-        // même après transfert technique (StatutTraitement = 'O' ou 'T').
-        // On garde toutefois le try/catch précédent comme référence historique.
+        // Exclure les opérations déjà transmises (StatutTraitement = 'T') pour
+        // ne pas les afficher dans le tableau admin. L'historique complet reste
+        // accessible via les endpoints de monitoring dédiés (ABTEMPS_OPERATEURS).
+        // Aligné avec les stats (cf. bloc équivalent dans getAdminStats).
+        try {
+            let transmitted = [];
+            if (isRange) {
+                const transmittedRangeQuery = `
+                    SELECT OperatorCode, LancementCode, Phase, CodeRubrique
+                    FROM [SEDI_APP_INDEPENDANTE].[dbo].[ABTEMPS_OPERATEURS] WITH (NOLOCK)
+                    WHERE StatutTraitement = 'T'
+                      AND DateCreation >= @dStart
+                      AND DateCreation <= @dEnd
+                `;
+                transmitted = await executeQuery(transmittedRangeQuery, { dStart, dEnd });
+            } else {
+                const transmittedQuery = `
+                    SELECT OperatorCode, LancementCode, Phase, CodeRubrique
+                    FROM [SEDI_APP_INDEPENDANTE].[dbo].[ABTEMPS_OPERATEURS] WITH (NOLOCK)
+                    WHERE StatutTraitement = 'T'
+                      AND DateCreation = @date
+                `;
+                transmitted = await executeQuery(transmittedQuery, { date: targetDate });
+            }
+            const transmittedSet = new Set(
+                transmitted.map(t => `${t.OperatorCode}_${t.LancementCode}_${String(t.Phase || '').trim()}_${String(t.CodeRubrique || '').trim()}`)
+            );
+            const beforeFilter = filteredEvents.length;
+            filteredEvents = filteredEvents.filter(e => {
+                const k = `${e.OperatorCode}_${e.CodeLanctImprod}_${String(e.Phase || '').trim()}_${String(e.CodeRubrique || '').trim()}`;
+                return !transmittedSet.has(k);
+            });
+            console.log(`🔒 Filtre transmitted (T): ${beforeFilter - filteredEvents.length} événements masqués (${filteredEvents.length} restants)`);
+        } catch (e) {
+            console.warn('⚠️ Impossible de filtrer les opérations transmises:', e.message);
+        }
 
         // Regrouper les événements par lancement mais garder les pauses séparées
         console.log('🔍 Événements avant regroupement:', filteredEvents.length);
