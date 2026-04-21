@@ -597,17 +597,13 @@ class ApiService {
             if (response.status === 401 || response.status === 403) return false;
             // Toute réponse 2xx signifie que le contexte est accepté par le backend.
             if (response.ok) return true;
-            // Pour les autres codes (5xx, etc.), ne pas masquer l'erreur infra.
-            const data = await response.json().catch(() => ({}));
-            const msg = data?.error || `HTTP ${response.status}: ${response.statusText}`;
-            throw new Error(msg);
+            // Pour les autres codes (5xx, etc.), ne pas bloquer l'opérateur:
+            // on considère la validation "inconnue" et on laisse la route métier trancher.
+            return null;
         } catch (error) {
-            // Erreur réseau réelle -> laisser remonter.
-            if (error?.name === 'TypeError' || String(error?.message || '').includes('Failed to fetch')) {
-                throw error;
-            }
-            // Erreur applicative non-auth (déjà construite ci-dessus) -> remonter.
-            throw error;
+            // Erreur réseau/infra sur endpoint de check -> ne pas bloquer l'action opérateur.
+            console.warn('⚠️ Context check indisponible, fallback sur action métier:', error?.message || error);
+            return null;
         }
     }
 
@@ -645,7 +641,8 @@ class ApiService {
             this.setCurrentOperatorContext(code, candidateSessionId);
             this.setOperatorSessionActive(code, true);
             const isValid = await this.directCheckOperatorContext(code, candidateSessionId);
-            if (isValid) return;
+            if (isValid === true) return;
+            if (isValid === null) return;
             // contexte rejeté, on retente via relogin silencieux
         }
 

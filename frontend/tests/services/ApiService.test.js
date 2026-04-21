@@ -346,6 +346,36 @@ describe('ApiService', () => {
       );
     });
 
+    it('should not block start when context check is temporarily unavailable', async () => {
+      service.setCurrentOperatorContext('OP001', 'sid-existing');
+      mockFetch
+        // context check -> infra issue (should fallback, no relogin)
+        .mockResolvedValueOnce({
+          ok: false,
+          status: 503,
+          json: async () => ({ error: 'SERVICE_UNAVAILABLE' })
+        })
+        // start
+        .mockResolvedValueOnce({
+          ok: true,
+          json: async () => ({})
+        });
+
+      await service.startOperation('OP001', 'LT001');
+
+      expect(mockFetch).toHaveBeenNthCalledWith(
+        1,
+        expect.stringContaining('/operators/current/OP001'),
+        expect.objectContaining({ method: 'GET' })
+      );
+      expect(mockFetch).toHaveBeenNthCalledWith(
+        2,
+        expect.stringContaining('/operators/start'),
+        expect.objectContaining({ method: 'POST' })
+      );
+      expect(mockFetch).toHaveBeenCalledTimes(2);
+    });
+
     it('should pause operation', async () => {
       await service.pauseOperation('OP001', 'LT001');
       expect(mockFetch).toHaveBeenCalledWith(
