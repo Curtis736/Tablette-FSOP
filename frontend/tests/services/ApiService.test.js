@@ -253,7 +253,18 @@ describe('ApiService', () => {
     });
 
     it('should start operation', async () => {
+      service.setCurrentOperatorContext('OP001', 'sid-ok');
       service.setOperatorSessionActive('OP001', true);
+      mockFetch
+        .mockResolvedValueOnce({
+          ok: true,
+          status: 200,
+          json: async () => ({})
+        })
+        .mockResolvedValueOnce({
+          ok: true,
+          json: async () => ({})
+        });
       await service.startOperation('OP001', 'LT001');
       expect(mockFetch).toHaveBeenCalledWith(
         expect.stringContaining('/operators/start'),
@@ -291,6 +302,47 @@ describe('ApiService', () => {
           method: 'POST',
           body: JSON.stringify({ operatorId: 'OP001', lancementCode: 'LT001' })
         })
+      );
+    });
+
+    it('should relogin when stored session context is rejected', async () => {
+      service.setCurrentOperatorContext('OP001', 'sid-stale');
+      mockFetch
+        // context check -> rejected
+        .mockResolvedValueOnce({
+          ok: false,
+          status: 401,
+          json: async () => ({ error: 'SESSION_MISMATCH' })
+        })
+        // silent relogin
+        .mockResolvedValueOnce({
+          ok: true,
+          json: async () => ({
+            operator: { code: 'OP001', sessionId: 'sid-fresh' }
+          })
+        })
+        // start
+        .mockResolvedValueOnce({
+          ok: true,
+          json: async () => ({})
+        });
+
+      await service.startOperation('OP001', 'LT001');
+
+      expect(mockFetch).toHaveBeenNthCalledWith(
+        1,
+        expect.stringContaining('/operators/current/OP001'),
+        expect.objectContaining({ method: 'GET' })
+      );
+      expect(mockFetch).toHaveBeenNthCalledWith(
+        2,
+        expect.stringContaining('/operators/login'),
+        expect.objectContaining({ method: 'POST' })
+      );
+      expect(mockFetch).toHaveBeenNthCalledWith(
+        3,
+        expect.stringContaining('/operators/start'),
+        expect.objectContaining({ method: 'POST' })
       );
     });
 

@@ -1695,8 +1695,18 @@ class OperateurInterface {
                 !!(this.currentLancement || this.isRunning || this.isPaused);
             
             const lancementCode = current?.lancementCode || current?.CodeLancement || current?.CodeLanctImprod || null;
-            if (lancementCode) {
-                // Il y a une opération en cours
+            const lastEvent = String(current?.lastEvent || current?.Ident || current?.Statut || '').toUpperCase();
+            const status = String(current?.status || current?.Statut || '').toUpperCase();
+            const isBackendActive = !!lancementCode && (
+                status === 'EN_COURS' ||
+                status === 'EN_PAUSE' ||
+                lastEvent === 'DEBUT' ||
+                lastEvent === 'PAUSE' ||
+                lastEvent === 'REPRISE'
+            );
+
+            if (isBackendActive) {
+                // Il y a une opération réellement active côté backend
                 this.currentLancement = { CodeLancement: lancementCode };
                 this.lancementInput.value = lancementCode;
                 this.selectedLancement.textContent = lancementCode;
@@ -1713,19 +1723,16 @@ class OperateurInterface {
                     // Non bloquant
                 }
                 
-                const lastEvent = current?.lastEvent || current?.Ident || current?.Statut || null;
-                const status = String(current?.status || current?.Statut || '').toUpperCase();
-
-                if (String(lastEvent).toUpperCase() === 'DEBUT' || status === 'EN_COURS') {
+                if (lastEvent === 'DEBUT' || status === 'EN_COURS') {
                     // Opération en cours
                     this.resumeRunningOperation(current);
-                } else if (String(lastEvent).toUpperCase() === 'PAUSE' || status === 'EN_PAUSE') {
+                } else if (lastEvent === 'PAUSE' || status === 'EN_PAUSE') {
                     // Opération en pause
                     this.resumePausedOperation(current);
                 }
             }
-            // Aucun lancement en cours confirmé par le backend -> rester neutre
-            if (!lancementCode) {
+            // Aucun lancement actif confirmé par le backend -> rester neutre
+            if (!isBackendActive) {
                 // Do not wipe a code the operator just typed/scanned while this async check is finishing.
                 if (hasUserInput || hasActiveOperationContext) {
                     return;

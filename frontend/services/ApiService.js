@@ -580,6 +580,37 @@ class ApiService {
         return this.get(`/operators/steps/${encodeURIComponent(lancementCode)}`);
     }
 
+    async directCheckOperatorContext(code, sessionId) {
+        const url = `${this.baseUrl}/operators/current/${encodeURIComponent(code)}`;
+        try {
+            const response = await fetch(url, {
+                method: 'GET',
+                cache: 'no-store',
+                headers: {
+                    ...this.defaultHeaders,
+                    'x-device-id': this.deviceId,
+                    'x-operator-code': code,
+                    'x-operator-session-id': sessionId
+                }
+            });
+            // 401/403 -> contexte invalide (session expirée/mismatch)
+            if (response.status === 401 || response.status === 403) return false;
+            // Toute réponse 2xx signifie que le contexte est accepté par le backend.
+            if (response.ok) return true;
+            // Pour les autres codes (5xx, etc.), ne pas masquer l'erreur infra.
+            const data = await response.json().catch(() => ({}));
+            const msg = data?.error || `HTTP ${response.status}: ${response.statusText}`;
+            throw new Error(msg);
+        } catch (error) {
+            // Erreur réseau réelle -> laisser remonter.
+            if (error?.name === 'TypeError' || String(error?.message || '').includes('Failed to fetch')) {
+                throw error;
+            }
+            // Erreur applicative non-auth (déjà construite ci-dessus) -> remonter.
+            throw error;
+        }
+    }
+
     async ensureOperatorContext(operatorId) {
         const code = String(operatorId || '').trim();
         if (!code) {
@@ -588,25 +619,34 @@ class ApiService {
             throw err;
         }
 
-        // Context already valid in memory
+        // Candidate #1: context in memory
+        let candidateSessionId = '';
         if (this.currentOperatorContext?.code === code && this.currentOperatorContext?.sessionId) {
-            this.setOperatorSessionActive(code, true);
-            return;
+            candidateSessionId = String(this.currentOperatorContext.sessionId || '').trim();
         }
 
-        // Try restore from localStorage (supports both sessionId and SessionId keys)
-        try {
-            const raw = window?.localStorage?.getItem('currentOperator');
-            const saved = raw ? JSON.parse(raw) : null;
-            const savedCode = String(saved?.code || saved?.id || '').trim();
-            const savedSessionId = String(saved?.sessionId || saved?.SessionId || '').trim();
-            if (savedCode === code && savedSessionId) {
-                this.setOperatorSessionActive(code, true);
-                this.setCurrentOperatorContext(code, savedSessionId);
-                return;
+        // Candidate #2: restore from localStorage
+        if (!candidateSessionId) {
+            try {
+                const raw = window?.localStorage?.getItem('currentOperator');
+                const saved = raw ? JSON.parse(raw) : null;
+                const savedCode = String(saved?.code || saved?.id || '').trim();
+                const savedSessionId = String(saved?.sessionId || saved?.SessionId || '').trim();
+                if (savedCode === code && savedSessionId) {
+                    candidateSessionId = savedSessionId;
+                }
+            } catch (_) {
+                // ignore parse/storage errors
             }
-        } catch (_) {
-            // ignore parse/storage errors
+        }
+
+        // Validate candidate against backend before mutating requests.
+        if (candidateSessionId) {
+            this.setCurrentOperatorContext(code, candidateSessionId);
+            this.setOperatorSessionActive(code, true);
+            const isValid = await this.directCheckOperatorContext(code, candidateSessionId);
+            if (isValid) return;
+            // contexte rejeté, on retente via relogin silencieux
         }
 
         // Last fallback: recreate server session silently
