@@ -238,6 +238,13 @@ jobs:
     # Cela évite les jobs "en attente" / "skipped" liés à un runner self-hosted indisponible.
     runs-on: ubuntu-latest
     needs: [docker-build, notify]
+    env:
+      PROD_HOST: ${{ secrets.PROD_HOST }}
+      PROD_USER: ${{ secrets.PROD_USER }}
+      PROD_PORT: ${{ secrets.PROD_PORT }}
+      PROD_SSH_KEY: ${{ secrets.PROD_SSH_KEY }}
+      PROD_SSH_PASSPHRASE: ${{ secrets.PROD_SSH_PASSPHRASE }}
+      PROD_REPO_DIR: ${{ secrets.PROD_REPO_DIR }}
     # Déployer automatiquement sur la branche principale.
     # (Historiquement, le repo utilisait "master", mais il est maintenant sur "main".)
     if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master')
@@ -247,34 +254,24 @@ jobs:
 
       - name: Validate SSH deployment secrets
         shell: bash
-        env:
-          PROD_HOST: ${{ secrets.PROD_HOST }}
-          SSH_HOST: ${{ secrets.SSH_HOST }}
-          PROD_USER: ${{ secrets.PROD_USER }}
-          SSH_USER: ${{ secrets.SSH_USER }}
-          PROD_SSH_KEY: ${{ secrets.PROD_SSH_KEY }}
-          SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
         run: |
           set -euo pipefail
 
           HOST="${PROD_HOST:-}"
-          if [ -z "$HOST" ]; then HOST="${SSH_HOST:-}"; fi
           USERNAME="${PROD_USER:-}"
-          if [ -z "$USERNAME" ]; then USERNAME="${SSH_USER:-}"; fi
           KEY="${PROD_SSH_KEY:-}"
-          if [ -z "$KEY" ]; then KEY="${SSH_PRIVATE_KEY:-}"; fi
 
           missing=0
           if [ -z "$HOST" ]; then
-            echo "::error title=Missing SSH host::Set PROD_HOST (or SSH_HOST) secret."
+            echo "::error title=Missing SSH host::Set PROD_HOST secret."
             missing=1
           fi
           if [ -z "$USERNAME" ]; then
-            echo "::error title=Missing SSH username::Set PROD_USER (or SSH_USER) secret."
+            echo "::error title=Missing SSH username::Set PROD_USER secret."
             missing=1
           fi
           if [ -z "$KEY" ]; then
-            echo "::error title=Missing SSH key::Set PROD_SSH_KEY (or SSH_PRIVATE_KEY) secret."
+            echo "::error title=Missing SSH key::Set PROD_SSH_KEY secret."
             missing=1
           fi
 
@@ -285,17 +282,17 @@ jobs:
       - name: Deploy via SSH
         uses: appleboy/ssh-action@v1.1.0
         with:
-          host: ${{ secrets.PROD_HOST || secrets.SSH_HOST }}
-          username: ${{ secrets.PROD_USER || secrets.SSH_USER }}
-          port: ${{ secrets.PROD_PORT || secrets.SSH_PORT || '22' }}
-          key: ${{ secrets.PROD_SSH_KEY || secrets.SSH_PRIVATE_KEY }}
-          passphrase: ${{ secrets.PROD_SSH_PASSPHRASE }}
+          host: ${{ env.PROD_HOST }}
+          username: ${{ env.PROD_USER }}
+          port: ${{ env.PROD_PORT || '22' }}
+          key: ${{ env.PROD_SSH_KEY }}
+          passphrase: ${{ env.PROD_SSH_PASSPHRASE }}
           script: |
             set -e
             # Dossier de déploiement sur le serveur :
             # - par défaut: nom du repo GitHub (ex: Tablette-FSOP)
             # - override possible via secret PROD_REPO_DIR (ex: /opt/tablette_better)
-            REPO_DIR="${{ secrets.PROD_REPO_DIR }}"
+            REPO_DIR="${{ env.PROD_REPO_DIR }}"
             if [ -z "$REPO_DIR" ]; then
               REPO_DIR="${{ github.event.repository.name }}"
             fi
