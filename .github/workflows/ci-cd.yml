@@ -239,12 +239,12 @@ jobs:
     runs-on: ubuntu-latest
     needs: [docker-build, notify]
     env:
-      PROD_HOST: ${{ secrets.PROD_HOST }}
-      PROD_USER: ${{ secrets.PROD_USER }}
-      PROD_PORT: ${{ secrets.PROD_PORT }}
-      PROD_SSH_KEY: ${{ secrets.PROD_SSH_KEY }}
-      PROD_SSH_PASSPHRASE: ${{ secrets.PROD_SSH_PASSPHRASE }}
-      PROD_REPO_DIR: ${{ secrets.PROD_REPO_DIR }}
+      PROD_HOST: ${{ secrets['PROD_HOST'] }}
+      PROD_USER: ${{ secrets['PROD_USER'] }}
+      PROD_PORT: ${{ secrets['PROD_PORT'] }}
+      PROD_SSH_KEY: ${{ secrets['PROD_SSH_KEY'] }}
+      PROD_SSH_PASSPHRASE: ${{ secrets['PROD_SSH_PASSPHRASE'] }}
+      PROD_REPO_DIR: ${{ secrets['PROD_REPO_DIR'] }}
     # Déployer automatiquement sur la branche principale.
     # (Historiquement, le repo utilisait "master", mais il est maintenant sur "main".)
     if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master')
