@@ -20,6 +20,8 @@ class OperateurInterface {
         this.pendingForceReplace = false; // Flag pour forcer le remplacement après confirmation
         this.cachedOperators = null; // Cache pour la liste des opérateurs
         this.startRequestInFlight = false;
+        this.shiftTargetSeconds = 8 * 60 * 60; // Objectif opérateur: 8h
+        this.dailyWorkedSecondsFromHistory = 0;
 
         // Debouncing pour éviter les clics répétés
         this.lastActionTime = 0;
@@ -39,6 +41,7 @@ class OperateurInterface {
         this.setupEventListeners();
         window.addEventListener('sedi:session-expired', this._onSessionExpired);
         this.initializeLancementInput();
+        this.updateShiftCountdownDisplay();
         // Important: on part toujours d'un écran neutre à la connexion.
         // Évite d'afficher un LT "résiduel" (champ conservé par le DOM / cache) quand aucune opération n'est en cours.
         this.resetControls();
@@ -226,6 +229,8 @@ class OperateurInterface {
         this.timerDisplay = document.getElementById('timerDisplay');
         this.statusDisplay = document.getElementById('statusDisplay');
         this.endTimeDisplay = document.getElementById('endTimeDisplay');
+        this.shiftWorkedDisplay = document.getElementById('shiftWorkedDisplay');
+        this.shiftRemainingDisplay = document.getElementById('shiftRemainingDisplay');
         
         // Éléments pour l'historique
         this.refreshHistoryBtn = document.getElementById('refreshHistoryBtn');
@@ -2060,6 +2065,7 @@ class OperateurInterface {
         this.totalPausedTime = 0;
         this.pauseStartTime = null;
         if (this.timerDisplay) this.timerDisplay.textContent = '00:00:00';
+        this.updateShiftCountdownDisplay();
     }
 
     resetControls() {
@@ -2084,9 +2090,67 @@ class OperateurInterface {
         const now = new Date();
         const elapsed = Math.floor((now - this.startTime - this.totalPausedTime) / 1000);
         this.timerDisplay.textContent = TimeUtils.formatDuration(Math.max(0, elapsed));
+        this.updateShiftCountdownDisplay();
         
         // Mettre à jour l'heure de fin estimée
         this.updateEndTime();
+    }
+
+    parseOperationDurationToSeconds(operation = {}) {
+        const rawDuration = operation?.duration;
+        if (typeof rawDuration === 'number' && Number.isFinite(rawDuration) && rawDuration >= 0) {
+            return Math.floor(rawDuration);
+        }
+
+        if (typeof rawDuration === 'string') {
+            const normalized = rawDuration.trim();
+            // Format attendu côté backend: HH:mm ou HH:mm:ss
+            const secondsFromDuration = TimeUtils.parseDuration(normalized);
+            if (secondsFromDuration > 0) {
+                return secondsFromDuration;
+            }
+        }
+
+        // Fallback: si l'opération est terminée et qu'on a juste HH:mm, calculer une durée simple.
+        const start = String(operation?.startTime || '').trim();
+        const end = String(operation?.endTime || '').trim();
+        const isTime = (value) => /^\d{2}:\d{2}(:\d{2})?$/.test(value);
+        if (!isTime(start) || !isTime(end)) return 0;
+
+        const parseTime = (value) => {
+            const [h, m, s = '0'] = value.split(':');
+            return (Number(h) * 3600) + (Number(m) * 60) + Number(s);
+        };
+
+        const startSeconds = parseTime(start);
+        const endSeconds = parseTime(end);
+        if (!Number.isFinite(startSeconds) || !Number.isFinite(endSeconds) || endSeconds <= startSeconds) {
+            return 0;
+        }
+
+        return endSeconds - startSeconds;
+    }
+
+    getCurrentActiveOperationSeconds() {
+        if (!this.isRunning || !this.startTime) return 0;
+        const now = new Date();
+        const elapsed = Math.floor((now - this.startTime - this.totalPausedTime) / 1000);
+        return Math.max(0, elapsed);
+    }
+
+    updateShiftCountdownDisplay() {
+        const workedSeconds = this.dailyWorkedSecondsFromHistory + this.getCurrentActiveOperationSeconds();
+        const remainingSeconds = Math.max(0, this.shiftTargetSeconds - workedSeconds);
+        const targetReached = remainingSeconds <= 0;
+
+        if (this.shiftWorkedDisplay) {
+            this.shiftWorkedDisplay.textContent = TimeUtils.formatDuration(Math.max(0, workedSeconds));
+        }
+        if (this.shiftRemainingDisplay) {
+            this.shiftRemainingDisplay.textContent = TimeUtils.formatDuration(remainingSeconds);
+            this.shiftRemainingDisplay.classList.toggle('shift-target-reached', targetReached);
+            this.shiftRemainingDisplay.classList.toggle('shift-target-pending', !targetReached);
+        }
     }
 
     updateEndTime() {
@@ -2254,6 +2318,8 @@ class OperateurInterface {
         }
         
         if (!operations || operations.length === 0) {
+            this.dailyWorkedSecondsFromHistory = 0;
+            this.updateShiftCountdownDisplay();
             console.log('⚠️ Aucune opération à afficher');
             const emptyRow = document.createElement('tr');
             emptyRow.className = 'empty-state-row';
@@ -2274,6 +2340,11 @@ class OperateurInterface {
             this.operatorHistoryTableBody.appendChild(emptyRow);
             return;
         }
+
+        this.dailyWorkedSecondsFromHistory = operations.reduce((total, operation) => {
+            return total + this.parseOperationDurationToSeconds(operation);
+        }, 0);
+        this.updateShiftCountdownDisplay();
 
         console.log('🔄 Vidage du tableau et ajout des lignes...');
         this.operatorHistoryTableBody.innerHTML = '';

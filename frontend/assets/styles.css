@@ -631,6 +631,48 @@ body {
     font-weight: 500;
 }
 
+.shift-progress {
+    margin-top: 1rem;
+    display: grid;
+    grid-template-columns: repeat(2, minmax(180px, 1fr));
+    gap: 0.75rem;
+}
+
+.shift-progress-item {
+    background: #ffffff;
+    border: 1px solid #e9ecef;
+    border-radius: 10px;
+    padding: 0.75rem;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+}
+
+.shift-progress-label {
+    font-size: 0.85rem;
+    color: #6c757d;
+    margin-bottom: 0.35rem;
+}
+
+.shift-progress-value {
+    font-size: 1.1rem;
+    color: #495057;
+    font-weight: 700;
+    font-family: 'Courier New', monospace;
+}
+
+.shift-progress-value.shift-remaining {
+    color: #dc3545;
+}
+
+.shift-progress-value.shift-remaining.shift-target-reached {
+    color: #198754;
+}
+
+.shift-progress-value.shift-remaining.shift-target-pending {
+    color: #dc3545;
+}
+
 /* Interface Admin */
 .admin-controls {
     display: flex;
@@ -963,6 +1005,10 @@ tr:hover {
     
     .timer-display {
         font-size: 2rem;
+    }
+
+    .shift-progress {
+        grid-template-columns: 1fr;
     }
 }
 
