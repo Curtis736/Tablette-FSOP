@@ -22,6 +22,7 @@ class OperateurInterface {
         this.startRequestInFlight = false;
         this.shiftTargetSeconds = 8 * 60 * 60; // Objectif opérateur: 8h
         this.dailyWorkedSecondsFromHistory = 0;
+        this.sessionStartTime = null;
 
         // Debouncing pour éviter les clics répétés
         this.lastActionTime = 0;
@@ -29,6 +30,7 @@ class OperateurInterface {
 
         // Intervalles internes (nettoyés par destroy())
         this._syncInterval = null;
+        this._presenceInterval = null;
 
         this.LANCEMENT_PREFIX = 'LT';
         this.MAX_LANCEMENT_DIGITS = 8;
@@ -38,9 +40,12 @@ class OperateurInterface {
         this._onSessionExpired = (event) => this.handleSessionExpired(event?.detail || {});
 
         this.initializeElements();
+        this.sessionStartTime = this.resolveSessionStartTime();
         this.setupEventListeners();
         window.addEventListener('sedi:session-expired', this._onSessionExpired);
         this.initializeLancementInput();
+        this.updatePresenceDisplay();
+        this._presenceInterval = setInterval(() => this.updatePresenceDisplay(), 1000);
         this.updateShiftCountdownDisplay();
         // Important: on part toujours d'un écran neutre à la connexion.
         // Évite d'afficher un LT "résiduel" (champ conservé par le DOM / cache) quand aucune opération n'est en cours.
@@ -73,6 +78,10 @@ class OperateurInterface {
         if (this._syncInterval) {
             clearInterval(this._syncInterval);
             this._syncInterval = null;
+        }
+        if (this._presenceInterval) {
+            clearInterval(this._presenceInterval);
+            this._presenceInterval = null;
         }
         window.removeEventListener('sedi:session-expired', this._onSessionExpired);
         // Réinitialiser tout l'état interne pour éviter les fuites
@@ -229,6 +238,7 @@ class OperateurInterface {
         this.timerDisplay = document.getElementById('timerDisplay');
         this.statusDisplay = document.getElementById('statusDisplay');
         this.endTimeDisplay = document.getElementById('endTimeDisplay');
+        this.sessionPresenceDisplay = document.getElementById('sessionPresenceDisplay');
         this.shiftWorkedDisplay = document.getElementById('shiftWorkedDisplay');
         this.shiftRemainingDisplay = document.getElementById('shiftRemainingDisplay');
         
@@ -2151,6 +2161,38 @@ class OperateurInterface {
             this.shiftRemainingDisplay.classList.toggle('shift-target-reached', targetReached);
             this.shiftRemainingDisplay.classList.toggle('shift-target-pending', !targetReached);
         }
+    }
+
+    resolveSessionStartTime() {
+        const raw = this.operator?.loginTime || this.operator?.LoginTime || null;
+        if (!raw) return new Date();
+
+        const parsed = new Date(raw);
+        if (!Number.isNaN(parsed.getTime())) return parsed;
+
+        const timeOnlyMatch = /^(\d{2}):(\d{2})(?::(\d{2}))?$/.exec(String(raw).trim());
+        if (timeOnlyMatch) {
+            const now = new Date();
+            now.setHours(
+                Number(timeOnlyMatch[1]),
+                Number(timeOnlyMatch[2]),
+                Number(timeOnlyMatch[3] || 0),
+                0
+            );
+            return now;
+        }
+
+        return new Date();
+    }
+
+    getPresenceSeconds() {
+        if (!this.sessionStartTime) return 0;
+        return Math.max(0, Math.floor((Date.now() - this.sessionStartTime.getTime()) / 1000));
+    }
+
+    updatePresenceDisplay() {
+        if (!this.sessionPresenceDisplay) return;
+        this.sessionPresenceDisplay.textContent = `Présence: ${TimeUtils.formatDuration(this.getPresenceSeconds())}`;
     }
 
     updateEndTime() {

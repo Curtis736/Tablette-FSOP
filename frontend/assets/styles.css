@@ -473,6 +473,16 @@ body {
     color: #667eea;
 }
 
+.session-presence {
+    font-size: 0.95rem;
+    font-weight: 600;
+    color: #4a4a4a;
+    background: #f3f5ff;
+    border: 1px solid #dfe5ff;
+    border-radius: 999px;
+    padding: 0.2rem 0.7rem;
+}
+
 /* Contenu principal */
 .main-content {
     flex: 1;
