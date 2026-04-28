@@ -241,6 +241,7 @@ class OperateurInterface {
         this.sessionPresenceDisplay = document.getElementById('sessionPresenceDisplay');
         this.shiftWorkedDisplay = document.getElementById('shiftWorkedDisplay');
         this.shiftRemainingDisplay = document.getElementById('shiftRemainingDisplay');
+        this.shiftGoalStatus = document.getElementById('shiftGoalStatus');
         
         // Éléments pour l'historique
         this.refreshHistoryBtn = document.getElementById('refreshHistoryBtn');
@@ -2160,6 +2161,13 @@ class OperateurInterface {
             this.shiftRemainingDisplay.textContent = TimeUtils.formatDuration(remainingSeconds);
             this.shiftRemainingDisplay.classList.toggle('shift-target-reached', targetReached);
             this.shiftRemainingDisplay.classList.toggle('shift-target-pending', !targetReached);
+        }
+        if (this.shiftGoalStatus) {
+            this.shiftGoalStatus.textContent = targetReached
+                ? 'Objectif 8h atteint'
+                : `Objectif non atteint - reste ${TimeUtils.formatDuration(remainingSeconds)}`;
+            this.shiftGoalStatus.classList.toggle('shift-target-reached', targetReached);
+            this.shiftGoalStatus.classList.toggle('shift-target-pending', !targetReached);
         }
     }
 

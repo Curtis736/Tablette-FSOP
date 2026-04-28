@@ -648,6 +648,10 @@ body {
     gap: 0.75rem;
 }
 
+.shift-counter-section {
+    margin-top: 1rem;
+}
+
 .shift-progress-item {
     background: #ffffff;
     border: 1px solid #e9ecef;
@@ -680,6 +684,21 @@ body {
 }
 
 .shift-progress-value.shift-remaining.shift-target-pending {
+    color: #dc3545;
+}
+
+.shift-goal-status {
+    margin-top: 0.75rem;
+    text-align: center;
+    font-weight: 700;
+    font-size: 0.95rem;
+}
+
+.shift-goal-status.shift-target-reached {
+    color: #198754;
+}
+
+.shift-goal-status.shift-target-pending {
     color: #dc3545;
 }
 
