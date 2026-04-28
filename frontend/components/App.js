@@ -100,7 +100,7 @@ class App {
                 if (validOperator) {
                     // IMPORTANT: le backend exige maintenant x-operator-session-id
                     // sur /operators/* (hors login). Poser le contexte AVANT getCurrentOperation.
-                    const restoredSessionId = savedOperator?.sessionId || null;
+                    const restoredSessionId = savedOperator?.sessionId || savedOperator?.SessionId || null;
                     if (code && restoredSessionId) {
                         this.apiService.setCurrentOperatorContext(code, restoredSessionId);
                     }
@@ -115,7 +115,7 @@ class App {
                     }
                     this.currentOperator = { ...savedOperator, ...validOperator };
                     const restoredCode = this.currentOperator?.code || this.currentOperator?.id;
-                    const mergedSessionId = this.currentOperator?.sessionId || restoredSessionId || null;
+                    const mergedSessionId = this.currentOperator?.sessionId || this.currentOperator?.SessionId || restoredSessionId || null;
                     if (restoredCode) this.apiService.setOperatorSessionActive(restoredCode, true);
                     if (restoredCode && mergedSessionId) this.apiService.setCurrentOperatorContext(restoredCode, mergedSessionId);
                     this.storageService.setCurrentOperator(this.currentOperator);
@@ -240,7 +240,7 @@ class App {
 
             this.currentOperator = operator;
             const code = operator.code || operator.id;
-            const sessionId = operator.sessionId || null;
+            const sessionId = operator.sessionId || operator.SessionId || null;
             if (code) this.apiService.setOperatorSessionActive(code, true);
             if (code && sessionId) this.apiService.setCurrentOperatorContext(code, sessionId);
             this.storageService.setCurrentOperator(operator);

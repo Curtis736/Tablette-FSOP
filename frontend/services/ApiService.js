@@ -221,7 +221,7 @@ class ApiService {
                     const savedRaw = window.localStorage?.getItem('currentOperator');
                     const saved = savedRaw ? JSON.parse(savedRaw) : null;
                     const code = String(saved?.code || saved?.id || '').trim();
-                    const sid = String(saved?.sessionId || '').trim();
+                    const sid = String(saved?.sessionId || saved?.SessionId || '').trim();
                     if (code && sid) {
                         this.setCurrentOperatorContext(code, sid);
                         ctx = this.currentOperatorContext;
@@ -340,7 +340,7 @@ class ApiService {
                                 // Recreate a fresh server session (closes previous ones) and refresh context.
                                 // IMPORTANT: use direct fetch (out of queue) to avoid requestQueue deadlock.
                                 const relog = await this.directOperatorLogin(code);
-                                const newSessionId = relog?.operator?.sessionId || null;
+                                const newSessionId = relog?.operator?.sessionId || relog?.operator?.SessionId || null;
                                 this.setOperatorSessionActive(code, true);
                                 if (newSessionId) this.setCurrentOperatorContext(code, newSessionId);
                                 // Update localStorage with refreshed sessionId
@@ -520,7 +520,7 @@ class ApiService {
     async operatorLogin(code) {
         const result = await this.post('/operators/login', { code });
         const operatorCode = result?.operator?.code || result?.operator?.id || code;
-        const sessionId = result?.operator?.sessionId || null;
+        const sessionId = result?.operator?.sessionId || result?.operator?.SessionId || null;
         this.setOperatorSessionActive(operatorCode, true);
         this.setCurrentOperatorContext(operatorCode, sessionId);
         return result;
