@@ -1600,7 +1600,7 @@ router.get('/:operatorCode/operations',
         // 🔒 FILTRE IMPORTANT : Exclure les lancements transférés (StatutTraitement = 'T')
         // L'opérateur doit voir ses lancements tant qu'ils n'ont pas été transférés par l'admin
         // ⚡ OPTIMISATION : Utiliser LEFT JOIN avec sous-requête dérivée au lieu de sous-requête corrélée
-        // IMPORTANT: Convertir HeureDebut et HeureFin en VARCHAR(5) (HH:mm) directement dans SQL
+        // IMPORTANT: Convertir HeureDebut et HeureFin en VARCHAR(8) (HH:mm:ss) directement dans SQL
         // pour éviter les problèmes de timezone lors de la conversion par Node.js
         const eventsQuery = `
             SELECT 
@@ -1611,8 +1611,8 @@ router.get('/:operatorCode/operations',
                 h.OperatorCode,
                 h.CodeRubrique,
                 h.Statut,
-                CONVERT(VARCHAR(5), h.HeureDebut, 108) AS HeureDebut,
-                CONVERT(VARCHAR(5), h.HeureFin, 108) AS HeureFin,
+                CONVERT(VARCHAR(8), h.HeureDebut, 108) AS HeureDebut,
+                CONVERT(VARCHAR(8), h.HeureFin, 108) AS HeureFin,
                 h.DateCreation,
                 h.CreatedAt,
                 l.DesignationLct1 as Article,
@@ -1647,24 +1647,24 @@ router.get('/:operatorCode/operations',
         const processed = processLancementEventsWithPauses(events);
         const fabricationMap = await getFabricationMapForOperations(processed);
         const allFormattedOperations = processed.map(operation => {
-            // Normaliser les heures pour s'assurer qu'elles sont au format HH:mm uniquement
+            // Normaliser les heures pour s'assurer qu'elles sont au format HH:mm:ss
             let startTime = operation.startTime;
             let endTime = operation.endTime;
             
             // Si startTime contient une date, extraire uniquement l'heure
             if (startTime && typeof startTime === 'string') {
                 // Si format "YYYY-MM-DD HH:mm:ss" ou similaire, extraire l'heure
-                const timeMatch = startTime.match(/(\d{2}:\d{2})(?::\d{2})?/);
+                const timeMatch = startTime.match(/(\d{2}:\d{2}:\d{2}|\d{2}:\d{2})/);
                 if (timeMatch) {
-                    startTime = timeMatch[1]; // Garder uniquement HH:mm
+                    startTime = timeMatch[1].length === 5 ? `${timeMatch[1]}:00` : timeMatch[1];
                 }
             }
             
             // Si endTime contient une date, extraire uniquement l'heure
             if (endTime && typeof endTime === 'string') {
-                const timeMatch = endTime.match(/(\d{2}:\d{2})(?::\d{2})?/);
+                const timeMatch = endTime.match(/(\d{2}:\d{2}:\d{2}|\d{2}:\d{2})/);
                 if (timeMatch) {
-                    endTime = timeMatch[1]; // Garder uniquement HH:mm
+                    endTime = timeMatch[1].length === 5 ? `${timeMatch[1]}:00` : timeMatch[1];
                 }
             }
             
