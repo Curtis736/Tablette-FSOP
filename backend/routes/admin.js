@@ -2020,8 +2020,8 @@ router.delete('/operations/:id', async (req, res) => {
                         OperatorCode = @operatorCode
                         OR (OperatorCode IS NULL AND CodeRubrique = @operatorCode) -- compatibilité si des lignes ont encore OperatorCode NULL
                       )
-                  AND ( (Phase = @phase) OR (@phase IS NULL AND Phase IS NULL) )
-                  AND ( (CodeRubrique = @codeRubrique) OR (@codeRubrique IS NULL AND CodeRubrique IS NULL) )
+                  AND ISNULL(LTRIM(RTRIM(Phase)), '') = ISNULL(LTRIM(RTRIM(@phase)), '')
+                  AND ISNULL(LTRIM(RTRIM(CodeRubrique)), '') = ISNULL(LTRIM(RTRIM(@codeRubrique)), '')
             `;
 
             await executeQuery(deleteStepQuery, {
@@ -2049,8 +2049,8 @@ router.delete('/operations/:id', async (req, res) => {
                         OperatorCode = @operatorCode
                         OR (OperatorCode IS NULL AND CodeRubrique = @operatorCode)
                       )
-                  AND ( (Phase = @phase) OR (@phase IS NULL AND Phase IS NULL) )
-                  AND ( (CodeRubrique = @codeRubrique) OR (@codeRubrique IS NULL AND CodeRubrique IS NULL) )
+                  AND ISNULL(LTRIM(RTRIM(Phase)), '') = ISNULL(LTRIM(RTRIM(@phase)), '')
+                  AND ISNULL(LTRIM(RTRIM(CodeRubrique)), '') = ISNULL(LTRIM(RTRIM(@codeRubrique)), '')
               `;
 
         const remaining = await executeQuery(remainingQuery, {
