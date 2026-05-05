@@ -51,7 +51,7 @@
     "morgan": "^1.10.0",
     "mssql": "^12.2.0",
     "node-fetch": "^2.7.0",
-    "nodemailer": "^7.0.9",
+    "nodemailer": "^8.0.7",
     "prom-client": "^15.1.0",
     "redis": "^4.6.12",
     "yauzl": "^3.2.0",
