@@ -102,6 +102,30 @@ class ApiService {
         this.currentOperatorContext = { code, sessionId: sid };
     }
 
+    /**
+     * Aligne le contexte mémoire sur localStorage (clé currentOperator).
+     * Indispensable avec plusieurs onglets : localStorage est partagé, currentOperatorContext ne l'est pas.
+     */
+    syncOperatorContextWithLocalStorage() {
+        if (typeof window === 'undefined') return;
+        try {
+            const raw = window.localStorage?.getItem('currentOperator');
+            if (!raw) return;
+            const saved = JSON.parse(raw);
+            const code = String(saved?.code || saved?.id || '').trim();
+            const sid = String(saved?.sessionId || saved?.SessionId || '').trim();
+            if (!code || !sid) return;
+            const mem = this.currentOperatorContext;
+            const memSid = mem?.code === code ? String(mem?.sessionId || '').trim() : '';
+            if (!mem || mem.code !== code || memSid !== sid) {
+                this.setCurrentOperatorContext(code, sid);
+                this.setOperatorSessionActive(code, true);
+            }
+        } catch (_) {
+            // ignore parse/storage errors
+        }
+    }
+
     setAdminToken(token) {
         const t = String(token || '').trim();
         this.adminToken = t;
@@ -214,22 +238,8 @@ class ApiService {
             ep.startsWith('/fsop/');
 
         if (needsOperatorContext) {
-            let ctx = this.currentOperatorContext;
-            // Fallback de robustesse après refresh/cache: réhydrater le contexte depuis localStorage.
-            if ((!ctx?.code || !ctx?.sessionId) && typeof window !== 'undefined') {
-                try {
-                    const savedRaw = window.localStorage?.getItem('currentOperator');
-                    const saved = savedRaw ? JSON.parse(savedRaw) : null;
-                    const code = String(saved?.code || saved?.id || '').trim();
-                    const sid = String(saved?.sessionId || saved?.SessionId || '').trim();
-                    if (code && sid) {
-                        this.setCurrentOperatorContext(code, sid);
-                        ctx = this.currentOperatorContext;
-                    }
-                } catch (_) {
-                    // ignore parsing/localStorage errors
-                }
-            }
+            this.syncOperatorContextWithLocalStorage();
+            const ctx = this.currentOperatorContext;
             if (ctx?.code && ctx?.sessionId) {
                 operatorHeaders['x-operator-code'] = ctx.code;
                 operatorHeaders['x-operator-session-id'] = ctx.sessionId;
@@ -614,6 +624,8 @@ class ApiService {
             err.errorCode = 'OPERATOR_REQUIRED';
             throw err;
         }
+
+        this.syncOperatorContextWithLocalStorage();
 
         // Candidate #1: context in memory
         let candidateSessionId = '';

@@ -84,7 +84,29 @@ class OperateurInterface {
     isSessionRequiredResponse(data, statusCode = null) {
         const security = String(data?.security || '').toUpperCase();
         const errorCode = String(data?.error || '').toUpperCase();
-        return Number(statusCode) === 401 || security === 'SESSION_REQUIRED' || errorCode === 'SESSION_REQUIRED';
+        return Number(statusCode) === 401
+            || security === 'SESSION_REQUIRED'
+            || errorCode === 'SESSION_REQUIRED'
+            || security === 'SESSION_CONTEXT_REQUIRED'
+            || errorCode === 'SESSION_CONTEXT_REQUIRED'
+            || security === 'SESSION_MISMATCH'
+            || errorCode === 'SESSION_MISMATCH'
+            || security === 'DEVICE_MISMATCH'
+            || errorCode === 'DEVICE_MISMATCH';
+    }
+
+    getFsopRequestHeaders() {
+        const headers = { 'Content-Type': 'application/json' };
+        try {
+            this.apiService.syncOperatorContextWithLocalStorage?.();
+            const ctx = this.apiService.currentOperatorContext || null;
+            if (ctx?.code) headers['x-operator-code'] = ctx.code;
+            if (ctx?.sessionId) headers['x-operator-session-id'] = ctx.sessionId;
+            if (this.apiService.deviceId) headers['x-device-id'] = this.apiService.deviceId;
+        } catch (_) {
+            // non bloquant
+        }
+        return headers;
     }
 
     handleSessionExpired(detail = {}) {
@@ -930,7 +952,7 @@ class OperateurInterface {
             
             const res = await fetch(endpoint, {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
+                headers: this.getFsopRequestHeaders(),
                 body: JSON.stringify({
                     launchNumber: lt,
                     serialNumber: serialNumber,
@@ -967,7 +989,7 @@ class OperateurInterface {
         try {
             const res = await fetch(endpoint, {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
+                headers: this.getFsopRequestHeaders(),
                 body: JSON.stringify({
                     launchNumber: lt,
                     templateCode,
@@ -1048,7 +1070,7 @@ class OperateurInterface {
             const _opId = this.operator?.code || this.operator?.id || this.operator?.coderessource;
             const res = await fetch(endpoint, {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
+                headers: this.getFsopRequestHeaders(),
                 body: JSON.stringify({
                     launchNumber: lt,
                     serialNumber: serialNumber,
@@ -1108,7 +1130,7 @@ class OperateurInterface {
             
             const res = await fetch(endpoint, {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
+                headers: this.getFsopRequestHeaders(),
                 body: JSON.stringify({
                     launchNumber: lt,
                     serialNumber: serialNumber,

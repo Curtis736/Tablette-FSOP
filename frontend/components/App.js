@@ -3,7 +3,7 @@
 import OperateurInterface from './OperateurInterface.js?v=20260427-oi-v5';
 // Bump to bust cache when AdminPage logic changes (auto consolidation, etc.)
 import AdminPage from './AdminPage.js?v=20260408-admin-v2';
-import ApiService from '../services/ApiService.js?v=20260420-session-context-v2';
+import ApiService from '../services/ApiService.js?v=20260504-cross-tab-operator-context';
 import StorageService from '../services/StorageService.js?v=20251007-final';
 import notificationManager from '../utils/NotificationManager.js';
 
@@ -168,6 +168,56 @@ class App {
         // Vérification de la connexion (seulement si un opérateur est connecté)
         this.lastHealthStatus = true;
         this._healthCheckInterval = setInterval(() => this.runHealthCheck(), 30000);
+
+        // Même origine, autre onglet : localStorage (currentOperator) a changé — aligner ApiService + UI
+        window.addEventListener('storage', (e) => {
+            try {
+                if (e.storageArea !== window.localStorage) return;
+                if (e.key !== 'currentOperator') return;
+
+                if (e.newValue == null || e.newValue === '') {
+                    this.apiService.setCurrentOperatorContext(null, null);
+                    if (this.currentOperator && !this.storageService.getCurrentOperator()) {
+                        try {
+                            notificationManager.warning('Déconnexion détectée depuis un autre onglet.');
+                        } catch (_) {}
+                        this.showLoginScreen();
+                    }
+                    return;
+                }
+
+                let saved;
+                try {
+                    saved = JSON.parse(e.newValue);
+                } catch (_) {
+                    return;
+                }
+                const savedCode = String(saved?.code || saved?.id || '').trim();
+                const savedSid = String(saved?.sessionId || saved?.SessionId || '').trim();
+                if (!savedCode || !savedSid) return;
+
+                this.apiService.syncOperatorContextWithLocalStorage();
+
+                if (!this.currentOperator) return;
+
+                const myCode = String(this.currentOperator.code || this.currentOperator.id || '').trim();
+                if (myCode !== savedCode) {
+                    try {
+                        notificationManager.warning('Un autre code opérateur est actif dans un autre onglet.');
+                    } catch (_) {}
+                    this.showLoginScreen();
+                    return;
+                }
+
+                this.currentOperator = { ...this.currentOperator, ...saved };
+                this.storageService.setCurrentOperator(this.currentOperator);
+                if (this.operateurInterface) {
+                    this.operateurInterface.operator = this.currentOperator;
+                }
+            } catch (err) {
+                console.debug('Sync opérateur inter-onglets:', err);
+            }
+        });
 
         // Session expirée côté serveur -> purge totale des caches tablette
         // (localStorage + sessionStorage) puis rechargement propre.

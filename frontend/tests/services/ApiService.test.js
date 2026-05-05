@@ -243,6 +243,30 @@ describe('ApiService', () => {
     });
   });
 
+  describe('syncOperatorContextWithLocalStorage', () => {
+    beforeEach(() => {
+      service = new ApiService();
+    });
+
+    it('aligns in-memory session from localStorage when same code but different sessionId', async () => {
+      service.setCurrentOperatorContext('OP001', 'sid-stale');
+      global.localStorage.getItem = vi.fn((key) => {
+        if (key === 'currentOperator') {
+          return JSON.stringify({ code: 'OP001', sessionId: 'sid-from-storage' });
+        }
+        return null;
+      });
+      mockFetch
+        .mockResolvedValueOnce({ ok: true, json: async () => ({}) })
+        .mockResolvedValueOnce({ ok: true, json: async () => ({}) });
+
+      await service.startOperation('OP001', 'LT001');
+
+      const firstHeaders = mockFetch.mock.calls[0][1].headers;
+      expect(firstHeaders['x-operator-session-id']).toBe('sid-from-storage');
+    });
+  });
+
   describe('operation methods', () => {
     beforeEach(() => {
       service = new ApiService();
