@@ -483,6 +483,46 @@ function scheduleDailyAutoValidateTemps() {
     scheduleNextRun();
 }
 
+/**
+ * À minuit (configurable) : marquer transmis (T) les temps terminés des **jours passés**
+ * encore en NULL / A / autre (puis O), pour vider le dashboard admin sans toucher au jour en cours.
+ */
+function scheduleMidnightTransmitDashboard() {
+    const enabled = String(process.env.ENABLE_MIDNIGHT_TRANSMIT_DASHBOARD || 'true').toLowerCase() === 'true';
+    if (!enabled) {
+        console.log('🌙 Clôture minuit dashboard désactivée (ENABLE_MIDNIGHT_TRANSMIT_DASHBOARD!=true)');
+        return;
+    }
+
+    const hour = Math.min(Math.max(parseInt(process.env.MIDNIGHT_TRANSMIT_HOUR || '0', 10) || 0, 0), 23);
+    const minute = Math.min(Math.max(parseInt(process.env.MIDNIGHT_TRANSMIT_MINUTE || '5', 10) || 5, 0), 59);
+
+    const scheduleNextRun = () => {
+        const now = new Date();
+        const next = new Date(now);
+        next.setHours(hour, minute, 0, 0);
+        if (next <= now) {
+            next.setDate(next.getDate() + 1);
+        }
+        const delay = next.getTime() - now.getTime();
+        console.log(`🌙 Prochaine clôture StatutTraitement (jours < aujourd'hui) à ${next.toISOString()} (dans ${Math.round(delay / 1000)}s).`);
+
+        setTimeout(async () => {
+            try {
+                const MonitoringService = require('./services/MonitoringService');
+                const r = await MonitoringService.runMidnightDashboardTransmit();
+                console.log('🌙 Clôture minuit dashboard:', r);
+            } catch (error) {
+                console.error('❌ Erreur clôture minuit dashboard:', error);
+            } finally {
+                scheduleNextRun();
+            }
+        }, delay);
+    };
+
+    scheduleNextRun();
+}
+
 // Contrôle Factorial toutes les 30 min à partir de 17h (heure serveur)
 function scheduleFactorialDepointedChecks() {
     const enabled = String(process.env.ENABLE_FACTORIAL_AUTOCLOSE || 'true').toLowerCase() === 'true';
@@ -563,6 +603,9 @@ if (shouldStartServer()) {
 
                 // Validation automatique des temps terminés (pour V_REMONTE_TEMPS → SILOG)
                 scheduleDailyAutoValidateTemps();
+
+                // Marquer transmis (T) les temps terminés des jours passés (dashboard admin vide au minuit)
+                scheduleMidnightTransmitDashboard();
 
                 // Vérifier les dépointages Factorial à partir de 17h toutes les 30 minutes
                 scheduleFactorialDepointedChecks();

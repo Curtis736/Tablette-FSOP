@@ -279,12 +279,20 @@
                                 Période :
                             </label>
                             <select id="periodFilter" class="filter-select">
+                                <option value="month" selected>Ce mois</option>
                                 <option value="today">Aujourd'hui</option>
                                 <option value="yesterday">Hier</option>
                                 <option value="week">Cette semaine</option>
-                                <option value="month">Ce mois</option>
-                                <option value="custom">Personnalisé</option>
+                                <option value="custom">Un jour (calendrier)</option>
                             </select>
+                        </div>
+
+                        <div class="filter-group" id="adminDatePickerGroup" style="display: none;">
+                            <label for="adminDatePicker">
+                                <i class="fas fa-calendar-day"></i>
+                                Jour ciblé :
+                            </label>
+                            <input type="date" id="adminDatePicker" class="filter-input" title="Lancements et temps pour ce jour (fuseau navigateur)">
                         </div>
                         
                         <div class="filter-group">

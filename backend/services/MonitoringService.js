@@ -1014,6 +1014,48 @@ class MonitoringService {
             return { success: false, error: error.message };
         }
     }
+
+    /**
+     * Clôture « dashboard » : pour les journées **strictement avant aujourd'hui**, valider puis marquer transmis
+     * les temps terminés encore en NULL / A / O, afin de vider l’admin au passage de minuit (tâche planifiée serveur).
+     * Les lignes du jour courant ne sont pas modifiées.
+     */
+    static async runMidnightDashboardTransmit() {
+        const { executeNonQuery } = require('../config/database');
+        try {
+            const validatePending = `
+                UPDATE [SEDI_APP_INDEPENDANTE].[dbo].[ABTEMPS_OPERATEURS]
+                SET StatutTraitement = 'O'
+                WHERE CAST(DateCreation AS DATE) < CAST(GETDATE() AS DATE)
+                  AND EndTime IS NOT NULL
+                  AND ProductiveDuration > 0
+                  AND (
+                      StatutTraitement IS NULL
+                      OR StatutTraitement = 'A'
+                      OR (StatutTraitement IS NOT NULL AND StatutTraitement <> 'O' AND StatutTraitement <> 'T')
+                  )
+            `;
+            const r1 = await executeNonQuery(validatePending);
+
+            const markT = `
+                UPDATE [SEDI_APP_INDEPENDANTE].[dbo].[ABTEMPS_OPERATEURS]
+                SET StatutTraitement = 'T'
+                WHERE CAST(DateCreation AS DATE) < CAST(GETDATE() AS DATE)
+                  AND EndTime IS NOT NULL
+                  AND ProductiveDuration > 0
+                  AND StatutTraitement = 'O'
+            `;
+            const r2 = await executeNonQuery(markT);
+
+            const n1 = r1?.rowsAffected || 0;
+            const n2 = r2?.rowsAffected || 0;
+            console.log(`🌙 Midnight transmit: validés (→O)=${n1}, passés en T=${n2}`);
+            return { success: true, validatedRows: n1, transmittedRows: n2 };
+        } catch (error) {
+            console.error('❌ Erreur runMidnightDashboardTransmit:', error);
+            return { success: false, error: error.message };
+        }
+    }
 }
 
 module.exports = MonitoringService;

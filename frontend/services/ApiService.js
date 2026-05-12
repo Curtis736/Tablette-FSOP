@@ -818,8 +818,13 @@ class ApiService {
         return this.post('/admin/monitoring/consolidate-batch', { operations });
     }
 
-    async validateAndTransmitMonitoringBatch(tempsIds, { triggerEdiJob = true, codeTache = null } = {}) {
-        return this.post('/admin/monitoring/validate-and-transmit-batch', { tempsIds, triggerEdiJob, codeTache });
+    async validateAndTransmitMonitoringBatch(tempsIds, { triggerEdiJob = true, codeTache = null, adminMarkTransmitted = false } = {}) {
+        return this.post('/admin/monitoring/validate-and-transmit-batch', {
+            tempsIds,
+            triggerEdiJob,
+            codeTache,
+            adminMarkTransmitted
+        });
     }
 
     // ===== FSOP =====

@@ -9,6 +9,16 @@ import { debounce } from '../utils/debounce.js';
 import { createElement, createTableCell, createButton, createBadge, clearElement } from '../utils/DOMHelper.js';
 import { ADMIN_CONFIG, STATUS_CODES, STATUS_LABELS } from '../utils/Constants.js';
 
+/** Date locale YYYY-MM-DD (alignée avec loadData / SQL jour civil). */
+function toLocalDateOnlyString(d) {
+    const x = new Date(d);
+    if (Number.isNaN(x.getTime())) return null;
+    const y = x.getFullYear();
+    const m = String(x.getMonth() + 1).padStart(2, '0');
+    const day = String(x.getDate()).padStart(2, '0');
+    return `${y}-${m}-${day}`;
+}
+
 /**
  * Colonnes « étape » du tableau admin : dans ABHISTORIQUE, Phase et CodeRubrique ne sont pas toujours
  * remplis au même sens (souvent Phase = 010 et CodeRubrique = ConnectS, parfois l’inverse type PRODUCTION / 912).
@@ -78,6 +88,35 @@ class AdminPage {
         this.initializeElements();
         this.setupEventListeners();
         this.startAutoSave();
+    }
+
+    /**
+     * DateCreation d’une ligne (ABTEMPS ou fusion) → YYYY-MM-DD fuseau navigateur.
+     */
+    _parseOpDateCreationLocalYmd(raw) {
+        if (raw == null || raw === '') return null;
+        if (typeof raw === 'string') {
+            const m = String(raw).trim().match(/^(\d{4}-\d{2}-\d{2})/);
+            if (m) return m[1];
+        }
+        if (raw instanceof Date) return toLocalDateOnlyString(raw);
+        return null;
+    }
+
+    /**
+     * Lignes transmises (T) : visibles admin tant que DateCreation n’est pas plus vieille que TRANSMITTED_VISIBLE_DAYS.
+     */
+    shouldShowAdminDashboardRow(op) {
+        const st = String(op?.StatutTraitement ?? '').toUpperCase().trim();
+        if (st !== 'T') return true;
+        const created = this._parseOpDateCreationLocalYmd(op?.DateCreation);
+        if (!created) return true;
+        const today = toLocalDateOnlyString(new Date());
+        const c = new Date(`${created}T12:00:00`);
+        const t = new Date(`${today}T12:00:00`);
+        if (Number.isNaN(c.getTime()) || Number.isNaN(t.getTime())) return true;
+        const ageDays = Math.floor((t - c) / 86400000);
+        return ageDays <= ADMIN_CONFIG.TRANSMITTED_VISIBLE_DAYS;
     }
 
     initializeElements() {
@@ -187,7 +226,17 @@ class AdminPage {
                 const periodFilter = this.domCache.get('periodFilter');
                 if (periodFilter) {
                     periodFilter.addEventListener('change', () => {
+                        this.syncAdminDatePickerUI();
                         this.loadData();
+                    });
+                }
+
+                const adminDatePicker = this.domCache.get('adminDatePicker');
+                if (adminDatePicker) {
+                    adminDatePicker.addEventListener('change', () => {
+                        if ((this.domCache.get('periodFilter')?.value || '') === 'custom') {
+                            this.loadData();
+                        }
                     });
                 }
                 
@@ -209,6 +258,10 @@ class AdminPage {
                         this.selectedOperatorCode = '';
                         if (statusFilter) statusFilter.value = '';
                         if (periodFilter) periodFilter.value = 'today';
+                        const pg = this.domCache.get('adminDatePickerGroup');
+                        const adp = this.domCache.get('adminDatePicker');
+                        if (adp) adp.value = '';
+                        if (pg) pg.style.display = 'none';
                         if (searchFilter) searchFilter.value = '';
                         this.loadData();
                     });
@@ -315,6 +368,29 @@ class AdminPage {
 
     }
 
+    /**
+     * Affiche le sélecteur de date lorsque la période « Un jour » est choisie.
+     */
+    syncAdminDatePickerUI() {
+        const periodFilter = this.domCache.get('periodFilter');
+        const group = this.domCache.get('adminDatePickerGroup');
+        const picker = this.domCache.get('adminDatePicker');
+        if (!group || !picker) return;
+        const period = periodFilter?.value || 'today';
+        if (period === 'custom') {
+            group.style.display = '';
+            if (!picker.value) {
+                const n = new Date();
+                const y = n.getFullYear();
+                const m = String(n.getMonth() + 1).padStart(2, '0');
+                const d = String(n.getDate()).padStart(2, '0');
+                picker.value = `${y}-${m}-${d}`;
+            }
+        } else {
+            group.style.display = 'none';
+        }
+    }
+
     async loadData(enableAutoConsolidate = true) {
         if (this.isLoading) {
             this.logger.log('Chargement déjà en cours, ignorer...');
@@ -356,6 +432,7 @@ class AdminPage {
             const today = toLocalDateOnly(now);
             const periodFilter = this.domCache.get('periodFilter');
             const period = periodFilter?.value || 'today';
+            this.syncAdminDatePickerUI();
 
             const toDateOnly = toLocalDateOnly;
             const startOfWeekMonday = (d) => {
@@ -386,7 +463,12 @@ class AdminPage {
                     const start = startOfMonth(now);
                     return { dateStart: toDateOnly(start), dateEnd: today };
                 }
-                // today / custom (non implémenté): fallback sur aujourd'hui
+                if (period === 'custom') {
+                    const pick = this.domCache.get('adminDatePicker')?.value?.trim();
+                    if (pick) return { date: pick };
+                    return { date: today };
+                }
+                // today: une seule journée
                 return { date: today };
             })();
             
@@ -1436,11 +1518,8 @@ class AdminPage {
             this.logger.log(`📊 Après filtrage recherche: ${filteredOperations.length} opérations`);
         }
 
-        // Masquer automatiquement les opérations déjà transférées (StatutTraitement = 'T')
-        filteredOperations = filteredOperations.filter(op => {
-            const st = String(op?.StatutTraitement ?? '').toUpperCase().trim();
-            return st !== 'T';
-        });
+        // Transmis (T) : masqués au-delà de TRANSMITTED_VISIBLE_DAYS après DateCreation ; restent visibles ~1 mois pour l’audit admin uniquement.
+        filteredOperations = filteredOperations.filter(op => this.shouldShowAdminDashboardRow(op));
 
         // Mémoriser pour stats cohérentes avec le tableau
         this._lastFilteredOperationsForStats = filteredOperations;
@@ -1950,7 +2029,10 @@ class AdminPage {
                 }
                 
                 const triggerEdiJob = confirm('Déclencher EDI_JOB après transfert ?');
-                const result = await this.apiService.validateAndTransmitMonitoringBatch(ids, { triggerEdiJob });
+                const result = await this.apiService.validateAndTransmitMonitoringBatch(ids, {
+                    triggerEdiJob,
+                    adminMarkTransmitted: true
+                });
                 if (result?.success) {
                     this.notificationManager.success(`Transfert terminé: ${result.count || ids.length} opération(s) transférée(s)`);
                     // Recharger les données pour mettre à jour l'affichage
@@ -2086,7 +2168,10 @@ class AdminPage {
         
         try {
         const triggerEdiJob = confirm('Déclencher EDI_JOB après transfert ?');
-        const result = await this.apiService.validateAndTransmitMonitoringBatch(ids, { triggerEdiJob });
+        const result = await this.apiService.validateAndTransmitMonitoringBatch(ids, {
+            triggerEdiJob,
+            adminMarkTransmitted: true
+        });
         if (result?.success) {
                 this.notificationManager.success(`Transfert terminé: ${result.count || ids.length} opération(s) transférée(s)`);
             this.hideTransferModal();

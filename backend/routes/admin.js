@@ -4543,7 +4543,8 @@ router.post('/monitoring/consolidate-batch', async (req, res) => {
 // POST /api/admin/monitoring/validate-and-transmit-batch - Valider et transmettre un lot
 router.post('/monitoring/validate-and-transmit-batch', async (req, res) => {
     try {
-        const { tempsIds, triggerEdiJob = true, codeTache = null } = req.body;
+        const { tempsIds, triggerEdiJob = true, codeTache = null, adminMarkTransmitted = false } = req.body;
+        const adminMarkT = adminMarkTransmitted === true || String(adminMarkTransmitted).toLowerCase() === 'true';
         
         if (!Array.isArray(tempsIds) || tempsIds.length === 0) {
             return res.status(400).json({
@@ -4594,22 +4595,39 @@ router.post('/monitoring/validate-and-transmit-batch', async (req, res) => {
             };
         }
 
-        // Marquer comme transmis uniquement si l'EDI_JOB est OK
+        // Marquer comme transmis (T) pour retirer les lignes du dashboard admin :
+        // - mode direct : comme avant, seulement si EDI OK ou si EDI non demandé
+        // - mode planifié (SILOG tâche Windows) : sans marquage T par défaut, sauf action admin explicite (adminMarkTransmitted)
         let markResult = null;
-        // ⚠️ En mode scheduled/disabled, ne PAS marquer en 'T' (SILOG doit consommer les lignes 'O').
-        if (!isScheduledMode && (!triggerEdiJob || (ediJobResult && ediJobResult.success && !ediJobResult.skipped))) {
-            const idsToMark = result.validatedIds || tempsIds;
+        const idsToMark = result.validatedIds || tempsIds;
+        const shouldMarkFromAdmin = adminMarkT && isScheduledMode && Array.isArray(idsToMark) && idsToMark.length > 0;
+        const shouldMarkFromDirect = !isScheduledMode && (!triggerEdiJob || (ediJobResult && ediJobResult.success && !ediJobResult.skipped));
+
+        if (shouldMarkFromAdmin || shouldMarkFromDirect) {
             markResult = await MonitoringService.markBatchAsTransmitted(idsToMark);
+            if (shouldMarkFromAdmin && markResult && markResult.success === false) {
+                return res.status(500).json({
+                    success: false,
+                    error: markResult.error || 'Impossible de marquer les enregistrements comme transmis (T)',
+                    validated: result.count
+                });
+            }
         }
 
+        const successCore = !triggerEdiJob || (ediJobResult && ediJobResult.success);
+        const success = shouldMarkFromAdmin
+            ? !!(result.success && markResult && markResult.success !== false)
+            : (isScheduledMode || successCore);
+
         return res.json({
-            success: isScheduledMode || !triggerEdiJob || (ediJobResult && ediJobResult.success),
-            message: isScheduledMode
+            success,
+            message: isScheduledMode && !adminMarkT
                 ? `${result.message} (planifié: tâche SILOG sur SVC_SILOG/runner Windows)`
                 : result.message,
             count: result.count,
             ediJob: ediJobResult,
-            marked: markResult
+            marked: markResult,
+            adminMarkedTransmitted: shouldMarkFromAdmin
         });
         
     } catch (error) {
