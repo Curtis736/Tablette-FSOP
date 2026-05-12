@@ -3,9 +3,12 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <!-- Complément aux en-têtes Nginx : certains navigateurs / proxys respectent encore ces balises -->
+    <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+    <meta http-equiv="Pragma" content="no-cache">
     <title>SEDI - Interface Tablette</title>
     <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📱</text></svg>">
-    <link rel="stylesheet" href="assets/styles.css?v=20260203-ind-operator-fix">
+    <link rel="stylesheet" href="assets/styles.css?v=20260512.1">
     <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
     <!-- ZXing pour le scan de code-barres -->
     <!-- IMPORTANT: ne pas utiliser "@zxing/library@latest" (entrée CommonJS => `exports is not defined` en navigateur) -->
@@ -324,12 +327,12 @@
                     <div class="stat-card">
                         <i class="fas fa-play-circle"></i>
                         <h3 id="activeLancements">0</h3>
-                        <p>Lancements en cours</p>
+                        <p>Opérations en cours</p>
                     </div>
                     <div class="stat-card">
                         <i class="fas fa-pause-circle"></i>
                         <h3 id="pausedLancements">0</h3>
-                        <p>Lancements en pause</p>
+                        <p>Opérations en pause</p>
                     </div>
                     <div class="stat-card">
                         <i class="fas fa-check-circle"></i>
@@ -347,8 +350,8 @@
                                 <th>Opérateur</th>
                                 <th>Code Lancement</th>
                                 <th>Designation</th>
-                                <th>Phase</th>
-                                <th>CodeRubrique</th>
+                                <th>Code étape</th>
+                                <th>Libellé étape</th>
                                 <th>Heure Début</th>
                                 <th>Heure Fin</th>
                                 <th>Statut</th>
@@ -511,6 +514,6 @@
         </div>
     </div>
 
-    <script type="module" src="index.js?v=20260309-cache-bust"></script>
+    <script type="module" src="index.js?v=20260512.1"></script>
 </body>
 </html>

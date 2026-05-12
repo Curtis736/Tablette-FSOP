@@ -194,7 +194,10 @@ class MonitoringService {
      */
     static async getTempsRecords(filters = {}) {
         try {
-            const { statutTraitement, operatorCode, lancementCode, date, dateStart, dateEnd } = filters;
+            const { statutTraitement, operatorCode, lancementCode, date, dateStart, dateEnd, includeAllStatuses } = filters;
+            const includeAll = includeAllStatuses === true
+                || String(includeAllStatuses || '').toLowerCase() === 'true'
+                || String(includeAllStatuses || '') === '1';
             
             let whereConditions = [];
             const params = {};
@@ -204,7 +207,7 @@ class MonitoringService {
             // If the caller explicitly requests statutTraitement, we respect it.
             const remoteMode = String(process.env.SILOG_REMOTE_MODE || '').trim().toLowerCase();
             const isScheduledMode = ['scheduled', 'disable', 'disabled', 'none'].includes(remoteMode);
-            if (isScheduledMode && statutTraitement === undefined) {
+            if (isScheduledMode && statutTraitement === undefined && !includeAll) {
                 // Default view: show only actionable records (NULL or 'A' = on hold)
                 whereConditions.push("(t.StatutTraitement IS NULL OR t.StatutTraitement = 'A')");
             }

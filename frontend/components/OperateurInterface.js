@@ -1,8 +1,8 @@
 // Interface simplifiée pour les opérateurs - v20260309-no-cache-issues
 import TimeUtils from '../utils/TimeUtils.js';
-import ScannerManager from '../utils/ScannerManager.js?v=20260309-cache-bust';
-import FsopForm from './FsopForm.js?v=20260407-fsop-blanks-v4';
-import Logger from '../utils/Logger.js?v=20260318-loglevel1';
+import ScannerManager from '../utils/ScannerManager.js?v=20260512.1';
+import FsopForm from './FsopForm.js?v=20260512.1';
+import Logger from '../utils/Logger.js?v=20260512.1';
 
 class OperateurInterface {
     constructor(operator, app) {
@@ -952,6 +952,7 @@ class OperateurInterface {
             
             const res = await fetch(endpoint, {
                 method: 'POST',
+                cache: 'no-store',
                 headers: this.getFsopRequestHeaders(),
                 body: JSON.stringify({
                     launchNumber: lt,
@@ -989,6 +990,7 @@ class OperateurInterface {
         try {
             const res = await fetch(endpoint, {
                 method: 'POST',
+                cache: 'no-store',
                 headers: this.getFsopRequestHeaders(),
                 body: JSON.stringify({
                     launchNumber: lt,
@@ -1070,6 +1072,7 @@ class OperateurInterface {
             const _opId = this.operator?.code || this.operator?.id || this.operator?.coderessource;
             const res = await fetch(endpoint, {
                 method: 'POST',
+                cache: 'no-store',
                 headers: this.getFsopRequestHeaders(),
                 body: JSON.stringify({
                     launchNumber: lt,
@@ -1130,6 +1133,7 @@ class OperateurInterface {
             
             const res = await fetch(endpoint, {
                 method: 'POST',
+                cache: 'no-store',
                 headers: this.getFsopRequestHeaders(),
                 body: JSON.stringify({
                     launchNumber: lt,

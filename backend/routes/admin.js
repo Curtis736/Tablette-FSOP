@@ -12,6 +12,12 @@ const FactorialOperatorMappingService = require('../services/FactorialOperatorMa
 // IMPORTANT: toutes les routes /api/admin doivent être protégées
 router.use(authenticateAdmin);
 
+// Bundle GET /api/admin : éviter la troncature historique (ex. 25 lignes) alors que le front fusionne avec le monitoring.
+const ADMIN_DASHBOARD_OPERATIONS_CAP = Math.min(
+    Math.max(parseInt(process.env.ADMIN_DASHBOARD_OPERATIONS_LIMIT || '10000', 10) || 10000, 500),
+    20000
+);
+
 // ===== Mapping opérateurs Tablette <-> Factorial =====
 router.get('/factorial/mappings', async (req, res) => {
     try {
@@ -869,8 +875,8 @@ router.get('/', async (req, res) => {
         // Récupérer les statistiques (toujours sur la date du jour pour les stats live)
         const stats = await getAdminStats(targetDate);
         
-        // Récupérer les opérations (première page seulement pour la vue d'ensemble)
-        const operationsResult = await getAdminOperations(targetDate, 1, 25, dateStart, dateEnd);
+        // Récupérer les opérations pour le tableau (cap élevé : le front pagine côté UI après fusion monitoring)
+        const operationsResult = await getAdminOperations(targetDate, 1, ADMIN_DASHBOARD_OPERATIONS_CAP, dateStart, dateEnd);
         
         res.json({
             stats,
@@ -963,8 +969,9 @@ router.get('/export/:format', async (req, res) => {
             });
         }
         
-        const operations = await getAdminOperations(targetDate);
-        
+        const opsResult = await getAdminOperations(targetDate, 1, ADMIN_DASHBOARD_OPERATIONS_CAP);
+        const operations = Array.isArray(opsResult) ? opsResult : (opsResult?.operations || []);
+
         // Générer CSV
         const csvHeader = 'ID,Opérateur,Code Lancement,Article,Date,Statut\n';
         const csvData = operations.map(op => 
@@ -986,11 +993,9 @@ router.get('/export/:format', async (req, res) => {
 // Fonction pour récupérer les statistiques avec les vraies tables
 async function getAdminStats(date) {
     try {
-        const activeTtlMinutes = Math.max(1, Math.min(parseInt(process.env.ACTIVE_SESSION_TTL_MINUTES || '120', 10) || 120, 24 * 60));
-        // Compter les opérateurs actifs (connectés OU avec lancement en cours)
-        // IMPORTANT:
-        // Ne pas compter "actif" si un ancien DEBUT (Statut=EN_COURS) existe mais qu'un FIN est arrivé après.
-        // On se base uniquement sur le DERNIER événement de la journée par opérateur.
+        const ttlHours = Math.max(1, Math.min(parseInt(process.env.OPERATOR_SESSION_TTL_HOURS || '12', 10) || 12, 72));
+        // Opérateurs "en ligne" = dernier événement du jour = travail EN_COURS/EN_PAUSE
+        // OU session tablette encore ACTIVE (ABSESSIONS) même entre deux lancements / après veille.
         const operatorsQuery = `
             WITH last_per_operator AS (
                 SELECT
@@ -1002,19 +1007,34 @@ async function getAdminStats(date) {
                         ORDER BY h.DateCreation DESC, h.NoEnreg DESC
                     ) AS rn
                 FROM [SEDI_APP_INDEPENDANTE].[dbo].[ABHISTORIQUE_OPERATEURS] h WITH (NOLOCK)
-                -- ⚡ SARGABLE date filter (avoid CAST(DateCreation AS DATE) which can force scans)
                 WHERE h.DateCreation >= CONVERT(date, GETDATE())
                   AND h.DateCreation <  DATEADD(day, 1, CONVERT(date, GETDATE()))
                   AND h.OperatorCode IS NOT NULL
                   AND LTRIM(RTRIM(h.OperatorCode)) <> ''
                   AND h.OperatorCode <> '0'
+            ),
+            histo_online AS (
+                SELECT l.OperatorCode
+                FROM last_per_operator l
+                WHERE l.rn = 1
+                  AND UPPER(LTRIM(RTRIM(COALESCE(l.Ident, '')))) <> 'FIN'
+                  AND UPPER(LTRIM(RTRIM(COALESCE(l.Statut, '')))) IN ('EN_COURS', 'EN_PAUSE')
+            ),
+            session_active AS (
+                SELECT DISTINCT s.OperatorCode
+                FROM [SEDI_APP_INDEPENDANTE].[dbo].[ABSESSIONS_OPERATEURS] s WITH (NOLOCK)
+                WHERE s.SessionStatus = 'ACTIVE'
+                  AND COALESCE(s.LastActivityTime, s.LoginTime, s.DateCreation) >= DATEADD(HOUR, -@ttlHours, GETDATE())
+                  AND s.OperatorCode IS NOT NULL
+                  AND LTRIM(RTRIM(s.OperatorCode)) <> ''
+                  AND s.OperatorCode <> '0'
+            ),
+            merged AS (
+                SELECT OperatorCode FROM histo_online
+                UNION
+                SELECT OperatorCode FROM session_active
             )
-            -- ✅ Nouveau besoin: "en ligne" = uniquement sur un lancement (EN_COURS/EN_PAUSE)
-            SELECT COUNT(DISTINCT l.OperatorCode) AS totalOperators
-            FROM last_per_operator l
-            WHERE l.rn = 1
-              AND UPPER(LTRIM(RTRIM(COALESCE(l.Ident, '')))) <> 'FIN'
-              AND UPPER(LTRIM(RTRIM(COALESCE(l.Statut, '')))) IN ('EN_COURS', 'EN_PAUSE')
+            SELECT COUNT(*) AS totalOperators FROM merged
         `;
         
         // Récupérer les événements depuis ABHISTORIQUE_OPERATEURS pour la date spécifiée
@@ -1027,7 +1047,7 @@ async function getAdminStats(date) {
         
         // Exécuter la requête des opérateurs en parallèle
         const [operatorStats] = await Promise.all([
-            executeQuery(operatorsQuery, { activeTtlMinutes })
+            executeQuery(operatorsQuery, { ttlHours })
         ]);
         
         if (!validationResult.valid) {
@@ -1345,7 +1365,7 @@ async function getAdminOperations(date, page = 1, limit = 25, dateStart = null, 
 
     } catch (error) {
         console.error('❌ Erreur lors de la récupération des opérations:', error);
-        return [];
+        return { operations: [], pagination: null };
     }
 }
 
@@ -2078,20 +2098,19 @@ router.delete('/operations/:id', async (req, res) => {
     }
 });
 
-// Route pour récupérer les opérateurs connectés depuis ABSESSIONS_OPERATEURS
+// Route pour récupérer les opérateurs en ligne (historique du jour + sessions ABSESSIONS actives)
 router.get('/operators', async (req, res) => {
     try {
-        const activeTtlMinutes = Math.max(1, Math.min(parseInt(process.env.ACTIVE_SESSION_TTL_MINUTES || '120', 10) || 120, 24 * 60));
+        const ttlHours = Math.max(1, Math.min(parseInt(process.env.OPERATOR_SESSION_TTL_HOURS || '12', 10) || 12, 72));
         // Éviter le cache (sinon le navigateur peut recevoir 304 sans body JSON)
         res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
         res.setHeader('Pragma', 'no-cache');
         res.setHeader('Expires', '0');
 
-        console.log('🔍 Récupération des opérateurs connectés depuis ABSESSIONS_OPERATEURS...');
+        console.log('🔍 Récupération des opérateurs en ligne (historique + sessions actives)...');
 
-        // IMPORTANT (nouveau besoin):
-        // On considère "en ligne" UNIQUEMENT si l'opérateur est sur un lancement:
-        // dernier événement du jour = EN_COURS / EN_PAUSE et Ident != FIN.
+        // "En ligne" = dernier événement du jour = travail EN_COURS/EN_PAUSE
+        // OU session ABSESSIONS encore ACTIVE (tablette déverrouillée, entre deux LT, etc.).
         const operatorsQuery = `
             ;WITH last_per_operator AS (
                 SELECT
@@ -2115,26 +2134,50 @@ router.get('/operators', async (req, res) => {
                 SELECT OperatorCode, Ident, Statut, DateCreation, NoEnreg
                 FROM last_per_operator
                 WHERE rn = 1
+            ),
+            histo_online AS (
+                SELECT le.OperatorCode, le.DateCreation AS LastActivityTime, CAST(1 AS BIT) AS enProduction
+                FROM last_event le
+                WHERE UPPER(LTRIM(RTRIM(COALESCE(le.Ident, '')))) <> 'FIN'
+                  AND UPPER(LTRIM(RTRIM(COALESCE(le.Statut, '')))) IN ('EN_COURS', 'EN_PAUSE')
+            ),
+            session_active AS (
+                SELECT
+                    s.OperatorCode,
+                    COALESCE(s.LastActivityTime, s.LoginTime, s.DateCreation) AS LastActivityTime,
+                    CAST(0 AS BIT) AS enProduction
+                FROM [SEDI_APP_INDEPENDANTE].[dbo].[ABSESSIONS_OPERATEURS] s WITH (NOLOCK)
+                WHERE s.SessionStatus = 'ACTIVE'
+                  AND COALESCE(s.LastActivityTime, s.LoginTime, s.DateCreation) >= DATEADD(HOUR, -@ttlHours, GETDATE())
+                  AND s.OperatorCode IS NOT NULL
+                  AND LTRIM(RTRIM(s.OperatorCode)) <> ''
+                  AND s.OperatorCode <> '0'
+            ),
+            merged AS (
+                SELECT ho.OperatorCode, ho.LastActivityTime, ho.enProduction
+                FROM histo_online ho
+                UNION ALL
+                SELECT sa.OperatorCode, sa.LastActivityTime, sa.enProduction
+                FROM session_active sa
+                WHERE NOT EXISTS (SELECT 1 FROM histo_online ho2 WHERE ho2.OperatorCode = sa.OperatorCode)
             )
             SELECT
-                le.OperatorCode AS OperatorCode,
-                COALESCE(r.Designation1, 'Opérateur ' + CAST(le.OperatorCode AS VARCHAR)) AS NomOperateur,
+                m.OperatorCode AS OperatorCode,
+                COALESCE(r.Designation1, 'Opérateur ' + CAST(m.OperatorCode AS VARCHAR)) AS NomOperateur,
                 CAST(NULL AS DATETIME2) AS LoginTime,
                 CAST('ACTIVE' AS VARCHAR(20)) AS SessionStatus,
-                CAST('EN_OPERATION' AS VARCHAR(20)) AS ActivityStatus,
-                le.DateCreation AS LastActivityTime,
+                CAST(CASE WHEN m.enProduction = 1 THEN 'EN_OPERATION' ELSE 'CONNECTE' END AS VARCHAR(30)) AS ActivityStatus,
+                m.LastActivityTime AS LastActivityTime,
                 r.Coderessource AS RessourceCode,
                 CAST(NULL AS VARCHAR(255)) AS DeviceInfo,
-                CAST('EN_OPERATION' AS VARCHAR(20)) AS CurrentStatus
-            FROM last_event le
+                CAST(CASE WHEN m.enProduction = 1 THEN 'EN_OPERATION' ELSE 'CONNECTE' END AS VARCHAR(30)) AS CurrentStatus
+            FROM merged m
             LEFT JOIN [SEDI_ERP].[dbo].[RESSOURC] r WITH (NOLOCK)
-              ON le.OperatorCode = r.Coderessource
-            WHERE UPPER(LTRIM(RTRIM(COALESCE(le.Ident, '')))) <> 'FIN'
-              AND UPPER(LTRIM(RTRIM(COALESCE(le.Statut, '')))) IN ('EN_COURS', 'EN_PAUSE')
-            ORDER BY le.OperatorCode
+              ON m.OperatorCode = r.Coderessource
+            ORDER BY m.OperatorCode
         `;
 
-        const operators = await executeQuery(operatorsQuery, { activeTtlMinutes });
+        const operators = await executeQuery(operatorsQuery, { ttlHours });
         
         console.log(`✅ ${operators.length} opérateurs connectés récupérés`);
 
@@ -2152,7 +2195,7 @@ router.get('/operators', async (req, res) => {
                 deviceInfo: op.DeviceInfo,
                 // Validation de l'association
                 isProperlyLinked: op.RessourceCode === op.OperatorCode,
-                isActive: op.CurrentStatus === 'EN_OPERATION'
+                isActive: op.CurrentStatus === 'EN_OPERATION' || op.CurrentStatus === 'CONNECTE'
             }))
         });
 
@@ -2176,6 +2219,8 @@ router.get('/operators/all', async (req, res) => {
 
         console.log('🔍 Récupération de tous les opérateurs depuis RESSOURC...');
 
+        const ttlHours = Math.max(1, Math.min(parseInt(process.env.OPERATOR_SESSION_TTL_HOURS || '12', 10) || 12, 72));
+
         const allOperatorsQuery = `
             WITH last_per_operator AS (
                 SELECT
@@ -2197,6 +2242,15 @@ router.get('/operators/all', async (req, res) => {
                 SELECT OperatorCode, Ident, Statut
                 FROM last_per_operator
                 WHERE rn = 1
+            ),
+            session_active AS (
+                SELECT DISTINCT s.OperatorCode
+                FROM [SEDI_APP_INDEPENDANTE].[dbo].[ABSESSIONS_OPERATEURS] s WITH (NOLOCK)
+                WHERE s.SessionStatus = 'ACTIVE'
+                  AND COALESCE(s.LastActivityTime, s.LoginTime, s.DateCreation) >= DATEADD(HOUR, -@ttlHours, GETDATE())
+                  AND s.OperatorCode IS NOT NULL
+                  AND LTRIM(RTRIM(s.OperatorCode)) <> ''
+                  AND s.OperatorCode <> '0'
             )
             SELECT TOP 500
                 r.Coderessource as OperatorCode,
@@ -2207,6 +2261,7 @@ router.get('/operators/all', async (req, res) => {
                      AND UPPER(LTRIM(RTRIM(COALESCE(le.Ident, '')))) <> 'FIN'
                      AND UPPER(LTRIM(RTRIM(COALESCE(le.Statut, '')))) IN ('EN_COURS', 'EN_PAUSE')
                     THEN 'CONNECTE'
+                    WHEN sess.OperatorCode IS NOT NULL THEN 'CONNECTE'
                     ELSE 'INACTIVE'
                 END as ConnectionStatus,
                 CAST(NULL AS DATETIME2) AS LoginTime,
@@ -2214,11 +2269,13 @@ router.get('/operators/all', async (req, res) => {
             FROM [SEDI_ERP].[dbo].[RESSOURC] r
             LEFT JOIN last_event le
               ON r.Coderessource = le.OperatorCode
+            LEFT JOIN session_active sess
+              ON r.Coderessource = sess.OperatorCode
             WHERE r.Typeressource IN ('OP', 'OPERATEUR', 'O')
             ORDER BY r.Coderessource
         `;
 
-        const allOperators = await executeQuery(allOperatorsQuery);
+        const allOperators = await executeQuery(allOperatorsQuery, { ttlHours });
         
         console.log(`✅ ${allOperators.length} opérateurs globaux récupérés`);
 
@@ -4108,8 +4165,8 @@ router.get('/monitoring', async (req, res) => {
         res.setHeader('Pragma', 'no-cache');
         res.setHeader('Expires', '0');
 
-        const { statutTraitement, operatorCode, lancementCode, date, dateStart, dateEnd } = req.query;
-        
+        const { statutTraitement, operatorCode, lancementCode, date, dateStart, dateEnd, includeAllStatuses } = req.query;
+
         const filters = {};
         if (statutTraitement !== undefined) filters.statutTraitement = statutTraitement;
         if (operatorCode) filters.operatorCode = operatorCode;
@@ -4117,6 +4174,9 @@ router.get('/monitoring', async (req, res) => {
         if (date) filters.date = date;
         if (dateStart) filters.dateStart = dateStart;
         if (dateEnd) filters.dateEnd = dateEnd;
+        if (includeAllStatuses === '1' || String(includeAllStatuses || '').toLowerCase() === 'true') {
+            filters.includeAllStatuses = true;
+        }
         
         const result = await MonitoringService.getTempsRecords(filters);
         

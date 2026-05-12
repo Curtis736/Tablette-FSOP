@@ -1774,6 +1774,9 @@ router.get('/current/:operatorCode', authenticateOperator, async (req, res) => {
         if (!activeSession) {
             return res.json({ success: true, data: null });
         }
+
+        // Chaque lecture "opération en cours" prolonge la session (réveil tablette, polling UI).
+        await SessionService.updateLastActivity(operatorCode, activeSession.SessionId);
         
         // Chercher le DERNIER événement de l'opérateur, puis déduire l'état.
         // ⚠️ Important: on ne doit pas filtrer sur Statut IN ('EN_COURS','EN_PAUSE'),

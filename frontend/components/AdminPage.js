@@ -9,6 +9,23 @@ import { debounce } from '../utils/debounce.js';
 import { createElement, createTableCell, createButton, createBadge, clearElement } from '../utils/DOMHelper.js';
 import { ADMIN_CONFIG, STATUS_CODES, STATUS_LABELS } from '../utils/Constants.js';
 
+/**
+ * Colonnes « étape » du tableau admin : dans ABHISTORIQUE, Phase et CodeRubrique ne sont pas toujours
+ * remplis au même sens (souvent Phase = 010 et CodeRubrique = ConnectS, parfois l’inverse type PRODUCTION / 912).
+ * On affiche toujours d’abord un code court puis un libellé lisible quand c’est détectable.
+ */
+function getAdminStepColumnDisplay(operation) {
+    const ph = String(operation?.Phase ?? operation?.phase ?? '').trim();
+    const rub = String(operation?.CodeRubrique ?? operation?.codeRubrique ?? '').trim();
+    if (!ph && !rub) return { stepCode: '-', stepLabel: '-' };
+    const phIsNumeric = /^\d+$/.test(ph);
+    const rubIsNumeric = /^\d+$/.test(rub);
+    if (phIsNumeric && rub && !rubIsNumeric) return { stepCode: ph, stepLabel: rub };
+    if (rubIsNumeric && ph && !phIsNumeric) return { stepCode: rub, stepLabel: ph };
+    if (ph && rub) return { stepCode: ph, stepLabel: rub };
+    return { stepCode: ph || rub || '-', stepLabel: rub || ph || '-' };
+}
+
 class AdminPage {
     constructor(app) {
         this.app = app;
@@ -417,7 +434,7 @@ class AdminPage {
             const operatorCode = this.selectedOperatorCode || operatorFilter?.value || undefined;
             const lancementCode = searchFilter?.value?.trim() || undefined;
 
-            const filters = { ...periodRange };
+            const filters = { ...periodRange, includeAllStatuses: true };
             if (operatorCode) filters.operatorCode = operatorCode;
             if (lancementCode) filters.lancementCode = lancementCode;
 
@@ -478,17 +495,28 @@ class AdminPage {
                 );
             }
             
-            // Fusionner les opérations SANS doublons:
-            // - Une seule ligne par (OperatorCode, LancementCode)
-            // - On garde automatiquement la "meilleure" version (heures non 00:00, consolidée, etc.)
+            // Fusionner les opérations SANS doublons logiques:
+            // - Chaque ligne ABTEMPS (TempsId) reste distincte même si même LT / phase / rubrique
+            // - Les événements non consolidés sont distingués par EventId / id
+            // - Sinon on dédoublonne par (opérateur, lancement, phase, rubrique, heure début) pour l'overlay historique
             const mergedMap = new Map();
 
             const normalizeKey = (op) => {
+                const tid = op?.TempsId ?? op?.tempsId;
+                if (tid != null && String(tid).trim() !== '') {
+                    return `T:${String(tid).trim()}`;
+                }
+                const eid = op?.EventId ?? (op?._isUnconsolidated ? op?.id : null);
+                if (eid != null && String(eid).trim() !== '') {
+                    return `E:${String(eid).trim()}`;
+                }
                 const operator = (op?.OperatorCode ?? op?.operatorId ?? op?.OperatorId ?? '').toString().trim();
-                const lancement = (op?.LancementCode ?? op?.lancementCode ?? op?.lancementCode ?? '').toString().trim().toUpperCase();
+                const lancement = (op?.LancementCode ?? op?.lancementCode ?? '').toString().trim().toUpperCase();
                 const phase = (op?.Phase ?? op?.phase ?? '').toString().trim().toUpperCase();
                 const rubrique = (op?.CodeRubrique ?? op?.codeRubrique ?? '').toString().trim().toUpperCase();
-                return `${operator}_${lancement}_${phase}_${rubrique}`;
+                const startRaw = op?.StartTime ?? op?.startTime ?? '';
+                const startKey = (typeof startRaw === 'string' ? startRaw : (startRaw && startRaw.toISOString ? startRaw.toISOString() : String(startRaw))).trim();
+                return `${operator}_${lancement}_${phase}_${rubrique}_S:${startKey}`;
             };
 
             const toHHmm = (dt) => {
@@ -625,7 +653,8 @@ class AdminPage {
             // Mettre à jour l'affichage des opérateurs connectés (toujours, même si vide)
             this.updateActiveOperatorsDisplay(connectedOps);
             
-            this.updateStats();
+            // updateStats() est appelé depuis updateOperationsTable() avec les mêmes filtres que le tableau
+            // (évite un KPI calculé sur l’ancien _lastFilteredOperationsForStats ou des données incohérentes)
             this.updateOperationsTable();
             this.updatePaginationInfo();
         } catch (error) {
@@ -761,7 +790,7 @@ class AdminPage {
             const operatorCode = document.getElementById('operatorFilter')?.value || undefined;
             const lancementCode = document.getElementById('searchFilter')?.value?.trim() || undefined;
 
-            const filters = { date };
+            const filters = { date, includeAllStatuses: true };
             if (operatorCode) filters.operatorCode = operatorCode;
             if (lancementCode) filters.lancementCode = lancementCode;
 
@@ -778,18 +807,41 @@ class AdminPage {
         }
     }
 
+    /**
+     * Heure de fin « réelle » : exclut minuit / 00:00 souvent renvoyé par SQL comme placeholder pour une opération encore ouverte.
+     */
+    hasMeaningfulEndTime(op) {
+        const raw = op?.EndTime ?? op?.endTime;
+        if (raw == null) return false;
+        if (typeof raw === 'string') {
+            const s = raw.trim();
+            if (!s || s === '-' || s.toUpperCase() === 'N/A') return false;
+        }
+        const formatted = this.formatDateTime(raw);
+        if (!formatted || formatted === '-' || formatted === 'N/A') return false;
+        if (formatted === '00:00' || formatted.startsWith('00:00')) return false;
+        return true;
+    }
+
+    /**
+     * Statut métier pour filtres / KPI : le statut explicite l’emporte sur une heure de fin parasite (ex. 00:00).
+     */
+    normalizeOperationStatus(op) {
+        const status = (op?.StatusCode || op?.statusCode || '').toString().toUpperCase();
+        const statusLabel = (op?.Status || op?.status || '').toString().toUpperCase();
+        if (status.includes('EN_COURS') || statusLabel.includes('EN COURS') || statusLabel.includes('ENCOURS')) return 'EN_COURS';
+        if (status.includes('PAUSE') || status.includes('EN_PAUSE') || statusLabel.includes('PAUSE') || statusLabel.includes('EN PAUSE')) {
+            return 'EN_PAUSE';
+        }
+        if (status.includes('TERMINE') || statusLabel.includes('TERMIN')) return 'TERMINE';
+        if (this.hasMeaningfulEndTime(op)) return 'TERMINE';
+        return 'EN_COURS';
+    }
+
     updateStats(opsOverride = null) {
         // Calculer les statistiques depuis les opérations affichées dans le tableau
         // Cela garantit la cohérence entre le tableau et les statistiques
         const allOps = Array.isArray(opsOverride) ? opsOverride : (this._lastFilteredOperationsForStats || this.operations || []);
-        const normalizeStatus = (op) => {
-            const status = (op?.StatusCode || op?.statusCode || '').toString().toUpperCase();
-            const statusLabel = (op?.Status || op?.status || '').toString().toUpperCase();
-            const hasEndTime = !!(op?.EndTime && op.EndTime !== '-' && op.EndTime !== 'N/A' && String(op.EndTime).trim() !== '');
-            if (status.includes('TERMINE') || statusLabel.includes('TERMIN') || hasEndTime) return 'TERMINE';
-            if (status.includes('PAUSE') || statusLabel.includes('PAUSE')) return 'EN_PAUSE';
-            return 'EN_COURS';
-        };
 
         const getOperatorCode = (op) => {
             // Best-effort selon les différentes sources (admin ops vs monitoring)
@@ -809,22 +861,18 @@ class AdminPage {
         };
         
         // Compter les opérations par statut depuis les données réelles
-        const activeOps = allOps.filter(op => {
-            return normalizeStatus(op) === 'EN_COURS';
-        });
-        
-        const pausedOps = allOps.filter(op => {
-            return normalizeStatus(op) === 'EN_PAUSE';
-        });
-        
-        const completedOps = allOps.filter(op => {
-            return normalizeStatus(op) === 'TERMINE';
-        });
+        const activeOps = allOps.filter(op => this.normalizeOperationStatus(op) === 'EN_COURS');
 
-        // Compter les "lancements" par LT unique (sinon ça double quand plusieurs opérateurs travaillent sur le même LT)
-        const activeLt = new Set(activeOps.map(getLancementCode).filter(Boolean));
-        const pausedLt = new Set(pausedOps.map(getLancementCode).filter(Boolean));
+        const pausedOps = allOps.filter(op => this.normalizeOperationStatus(op) === 'EN_PAUSE');
+
+        const completedOps = allOps.filter(op => this.normalizeOperationStatus(op) === 'TERMINE');
+
         const completedLt = new Set(completedOps.map(getLancementCode).filter(Boolean));
+
+        // KPI « en cours / pause » : nombre de LIGNES d’opération (plusieurs opérateurs sur le même LT
+        // comptent chacun une fois). L’ancien comptage par Set(LT) sous-estimait ce cas (ex. 8 opérateurs → 5 LT).
+        const activeLancementsCount = activeOps.length;
+        const pausedLancementsCount = pausedOps.length;
 
         // Opérateurs "actifs" = ont au moins une opération EN_COURS / EN_PAUSE affichée
         const activeOperatorCodes = new Set(
@@ -833,12 +881,12 @@ class AdminPage {
                 .filter(Boolean)
         );
         
-        // totalOperators: utiliser le max(back, local) pour éviter les incohérences
-        // (ex: backend pas à jour mais tableau affiche déjà plusieurs opérateurs en cours)
+        // Opérateurs « actifs » = alignés sur les lignes du tableau (évite ex. 10 au bandeau et 9 dans la liste)
         const stats = {
-            totalOperators: Math.max((this.stats?.totalOperators || 0), activeOperatorCodes.size),
-            activeLancements: activeLt.size,
-            pausedLancements: pausedLt.size,
+            totalOperators: activeOperatorCodes.size,
+            activeLancements: activeLancementsCount,
+            pausedLancements: pausedLancementsCount,
+            // Terminés : rester sur des LT distincts (évite de gonfler l’affichage avec toutes les lignes historiques)
             completedLancements: completedLt.size
         };
         
@@ -1349,14 +1397,6 @@ class AdminPage {
         
         // Appliquer les filtres
         let filteredOperations = [...this.operations];
-        const normalizeStatus = (op) => {
-            const status = (op?.StatusCode || op?.statusCode || '').toString().toUpperCase();
-            const statusLabel = (op?.Status || op?.status || '').toString().toUpperCase();
-            const hasEndTime = !!(op?.EndTime && op.EndTime !== '-' && op.EndTime !== 'N/A' && String(op.EndTime).trim() !== '');
-            if (status.includes('TERMINE') || statusLabel.includes('TERMIN') || hasEndTime) return 'TERMINE';
-            if (status.includes('PAUSE') || statusLabel.includes('PAUSE')) return 'EN_PAUSE';
-            return 'EN_COURS';
-        };
         
         // Filtre statut opération (EN_COURS / EN_PAUSE / TERMINE)
         const statusFilter = document.getElementById('statusFilter');
@@ -1364,7 +1404,7 @@ class AdminPage {
 
         if (selectedOpStatus && selectedOpStatus !== '') {
             filteredOperations = filteredOperations.filter(op => {
-                const normalized = normalizeStatus(op);
+                const normalized = this.normalizeOperationStatus(op);
                 if (selectedOpStatus === 'EN_COURS') return normalized === 'EN_COURS';
                 if (selectedOpStatus === 'EN_PAUSE') return normalized === 'EN_PAUSE';
                 if (selectedOpStatus === 'TERMINE') return normalized === 'TERMINE';
@@ -1500,18 +1540,6 @@ class AdminPage {
             const n = v ? Number(v) : 0;
             return Number.isFinite(n) ? n : 0;
         };
-        const getStatusCode = (op) => {
-            const sc = (op?.StatusCode || op?.statusCode || '').toString().trim().toUpperCase();
-            if (sc) return sc;
-            const statusLabel = (op?.Status || op?.status || '').toString().trim().toUpperCase();
-            if (statusLabel.includes('EN COURS')) return 'EN_COURS';
-            if (statusLabel.includes('PAUSE')) return 'EN_PAUSE';
-            if (statusLabel.includes('TERMIN')) return 'TERMINE';
-            // fallback: si EndTime existe, considérer terminé
-            const end = this.formatDateTime(op?.EndTime ?? op?.endTime);
-            if (end && end !== '-' && String(end).trim() !== '' && end !== 'N/A') return 'TERMINE';
-            return '';
-        };
         // Trier les opérations pour un affichage stable (opérateur, lancement, heure de début), puis paginer
         const sorted = [...filteredOperations].sort((a, b) => {
             const opA = getOperatorCode(a);
@@ -1601,16 +1629,20 @@ class AdminPage {
             // 2. Sinon, utiliser le statut de traitement/consolidation (StatutTraitement) - indique si l'opération est consolidée/transférée
             let statutCode, statutLabel;
             
-            // Vérifier d'abord le statut de l'opération (Status/StatusCode)
-            if (operation.StatusCode && operation.Status) {
-                statutCode = operation.StatusCode.toUpperCase().replace(/[^A-Z0-9_]/g, '_');
-                statutLabel = operation.Status;
-            } 
-            // Si pas de statut explicite mais une heure de fin valide, l'opération est terminée
-            else if (formattedEndTime && formattedEndTime !== '-' && formattedEndTime.trim() !== '' && formattedEndTime !== 'N/A') {
+            // Vérifier d'abord le statut de l'opération (Status/StatusCode — l’un ou l’autre peut manquer selon la source)
+            if (operation.StatusCode || operation.statusCode || operation.Status || operation.status) {
+                const rawCode = (operation.StatusCode || operation.statusCode || '').toString().trim();
+                statutCode = rawCode
+                    ? rawCode.toUpperCase().replace(/[^A-Z0-9_]/g, '_')
+                    : this.normalizeOperationStatus(operation);
+                statutLabel = (operation.Status || operation.status || '').toString().trim()
+                    || (statutCode === 'TERMINE' ? 'Terminé' : statutCode === 'EN_PAUSE' ? 'En pause' : 'En cours');
+            }
+            // Si pas de statut explicite mais une heure de fin réelle, l'opération est terminée
+            else if (this.hasMeaningfulEndTime(operation)) {
                 statutCode = 'TERMINE';
                 statutLabel = 'Terminé';
-            } 
+            }
             // Sinon, utiliser le statut de traitement/consolidation
             else {
                 statutCode = (operation.StatutTraitement === null || operation.StatutTraitement === undefined)
@@ -1644,12 +1676,11 @@ class AdminPage {
             const cell3 = createTableCell(operation.LancementName || '-');
             row.appendChild(cell3);
             
-            // Cellule 4: Phase
-            const cell4 = createTableCell(operation.Phase || operation.phase || '-');
+            const { stepCode, stepLabel } = getAdminStepColumnDisplay(operation);
+            const cell4 = createTableCell(stepCode);
             row.appendChild(cell4);
-            
-            // Cellule 5: CodeRubrique
-            const cell5 = createTableCell(operation.CodeRubrique || operation.codeRubrique || '-');
+
+            const cell5 = createTableCell(stepLabel);
             row.appendChild(cell5);
             
             // Cellule 6: Heure début
@@ -1716,21 +1747,7 @@ class AdminPage {
 
     // ===== Helper: déterminer si une opération est Terminé (même logique que dans updateOperationsTable) =====
     isOperationTerminated(operation) {
-        // Si StatusCode/Status existe et indique "Terminé"
-        if (operation.StatusCode && operation.Status) {
-            const statusUpper = String(operation.Status).toUpperCase();
-            if (statusUpper.includes('TERMIN') || statusUpper === 'TERMINE') {
-                return true;
-            }
-        }
-        
-        // Sinon, vérifier EndTime formaté (même logique que dans updateOperationsTable)
-        const formattedEndTime = this.formatDateTime(operation.EndTime);
-        if (formattedEndTime && formattedEndTime !== '-' && formattedEndTime.trim() !== '' && formattedEndTime !== 'N/A') {
-            return true;
-        }
-        
-        return false;
+        return this.normalizeOperationStatus(operation) === 'TERMINE';
     }
 
     // ===== Transfert: une seule consolidation puis transfert, sans boucle =====
@@ -3712,4 +3729,5 @@ class AdminPage {
     }
 }
 
+export { getAdminStepColumnDisplay };
 export default AdminPage;

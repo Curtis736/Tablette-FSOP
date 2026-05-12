@@ -218,7 +218,7 @@ class ApiService {
     async executeRequest(endpoint, options = {}) {
         // One-shot retry guard (prevents infinite loops)
         const hasRetried = options && options.__retried === true;
-        const { __retried, ...fetchOptions } = options || {};
+        const { __retried, headers: optionHeaders, cache: cacheOverride, ...restFetchOptions } = options || {};
         const url = `${this.baseUrl}${endpoint}`;
 
         // Admin auth token (si présent) - envoyé uniquement sur /auth et /admin
@@ -247,17 +247,15 @@ class ApiService {
         }
 
         const config = {
-            // Avoid browser/proxy caching for API calls (prevents stale "steps started"/state glitches).
-            // Allow caller override (rare).
-            cache: fetchOptions.cache || 'no-store',
+            ...restFetchOptions,
             headers: {
                 ...this.defaultHeaders,
                 ...authHeaders,
                 'x-device-id': this.deviceId,
                 ...operatorHeaders,
-                ...fetchOptions.headers
+                ...(optionHeaders || {})
             },
-            ...fetchOptions
+            cache: cacheOverride ?? 'no-store'
         };
 
         try {
@@ -877,9 +875,10 @@ class ApiService {
             
             const response = await fetch(`${this.baseUrl}/admin/validate-lancement/${encodeURIComponent(code)}`, {
                 method: 'GET',
+                cache: 'no-store',
                 headers: {
-                    'Content-Type': 'application/json',
-                    ...this.defaultHeaders
+                    ...this.defaultHeaders,
+                    ...(this.adminToken ? { Authorization: `Bearer ${this.adminToken}` } : {})
                 }
             });
             

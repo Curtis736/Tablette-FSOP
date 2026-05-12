@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest';
-import AdminPage from '../../components/AdminPage.js';
+import AdminPage, { getAdminStepColumnDisplay } from '../../components/AdminPage.js';
 
 // Mock des dépendances
 vi.mock('../../utils/TimeUtils.js', () => ({
@@ -20,6 +20,22 @@ vi.mock('../../utils/TimeUtils.js', () => ({
     })
   }
 }));
+
+describe('getAdminStepColumnDisplay', () => {
+  it('places numeric value in stepCode when Phase is numeric and CodeRubrique is text', () => {
+    expect(getAdminStepColumnDisplay({ Phase: '010', CodeRubrique: 'ConnectS' })).toEqual({
+      stepCode: '010',
+      stepLabel: 'ConnectS'
+    });
+  });
+
+  it('places numeric value in stepCode when CodeRubrique is numeric and Phase is text', () => {
+    expect(getAdminStepColumnDisplay({ Phase: 'PRODUCTION', CodeRubrique: '912' })).toEqual({
+      stepCode: '912',
+      stepLabel: 'PRODUCTION'
+    });
+  });
+});
 
 describe('AdminPage', () => {
   let adminPage;
@@ -157,7 +173,7 @@ describe('AdminPage', () => {
     it('should load data successfully', async () => {
       const today = new Date().toISOString().split('T')[0];
       mockApiService.getAdminData.mockResolvedValue({
-        operations: [{ id: 1, lancementCode: 'LT001' }],
+        operations: [{ id: 1, lancementCode: 'LT001', operatorId: 'OP001' }],
         stats: { totalOperators: 5, activeLancements: 2 },
         pagination: { currentPage: 1, totalPages: 1 }
       });
@@ -178,7 +194,7 @@ describe('AdminPage', () => {
       await adminPage.loadData();
 
       expect(adminPage.operations.length).toBe(1);
-      expect(adminPage.stats.totalOperators).toBe(5);
+      expect(adminPage.stats.totalOperators).toBe(1);
     });
 
     it('should handle loading state', async () => {
@@ -248,9 +264,24 @@ describe('AdminPage', () => {
         operatorCode: `OP${String(i + 1).padStart(3, '0')}`,
         LancementCode: `LT${String(i + 1).padStart(7, '0')}`
       }));
+      // totalOperators = opérateurs distincts avec au moins une ligne en cours / pause (aligné tableau)
       adminPage.updateStats();
-      expect(adminPage.totalOperators.textContent).toBe('10');
+      expect(adminPage.totalOperators.textContent).toBe('5');
       expect(adminPage.activeLancements.textContent).toBe('5');
+    });
+
+    it('should count each operation row for active (same LT, several operators)', () => {
+      adminPage.stats = { totalOperators: 0, activeLancements: 0, pausedLancements: 0, completedLancements: 0 };
+      const sharedLt = 'LT2600999';
+      adminPage.operations = Array.from({ length: 8 }).map((_, i) => ({
+        id: i + 1,
+        statusCode: 'EN_COURS',
+        StatusCode: 'EN_COURS',
+        operatorCode: `OP${String(i + 1).padStart(3, '0')}`,
+        LancementCode: sharedLt
+      }));
+      adminPage.updateStats();
+      expect(adminPage.activeLancements.textContent).toBe('8');
     });
   });
 

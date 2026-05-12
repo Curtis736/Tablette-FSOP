@@ -1,15 +1,15 @@
 // Classe principale de l'application
-// Bump version to bust browser cache when OperateurInterface changes (session isolation, neutral LT state, etc.)
-import OperateurInterface from './OperateurInterface.js?v=20260427-oi-v5';
-// Bump to bust cache when AdminPage logic changes (auto consolidation, etc.)
-import AdminPage from './AdminPage.js?v=20260408-admin-v2';
-import ApiService from '../services/ApiService.js?v=20260504-cross-tab-operator-context';
-import StorageService from '../services/StorageService.js?v=20251007-final';
-import notificationManager from '../utils/NotificationManager.js';
+import { FRONTEND_RELEASE } from '../version.js';
+// ?v= aligné sur FRONTEND_RELEASE (frontend/version.js) pour invalidation navigateur
+import OperateurInterface from './OperateurInterface.js?v=20260512.1';
+import AdminPage from './AdminPage.js?v=20260512.1';
+import ApiService from '../services/ApiService.js?v=20260512.1';
+import StorageService from '../services/StorageService.js?v=20260512.1';
+import notificationManager from '../utils/NotificationManager.js?v=20260512.1';
+import { ADMIN_CONFIG } from '../utils/Constants.js';
 
-// Bump this on deployments that change frontend behavior/state.
-// When it changes, the app will auto-clear local caches to avoid stale UI states.
-const APP_BUILD_ID = '2026-04-27.1';
+// Quand FRONTEND_RELEASE change, purge des caches locaux (voir initializeApp)
+const APP_BUILD_ID = FRONTEND_RELEASE;
 
 class App {
     constructor() {
@@ -18,6 +18,8 @@ class App {
         this.isAdmin = false;
         this.operateurInterface = null;
         this.adminPage = null;
+        /** Horodatage du dernier passage en arrière-plan (veille tablette) */
+        this._lastVisibilityHiddenAt = 0;
         this.apiService = new ApiService();
         this.storageService = new StorageService();
         this.notificationManager = notificationManager;
@@ -169,6 +171,9 @@ class App {
         this.lastHealthStatus = true;
         this._healthCheckInterval = setInterval(() => this.runHealthCheck(), 30000);
 
+        // Veille / déverrouillage tablette : prolonger la session côté serveur + réaligner le contexte
+        document.addEventListener('visibilitychange', () => this._onDocumentVisibilityChange());
+
         // Même origine, autre onglet : localStorage (currentOperator) a changé — aligner ApiService + UI
         window.addEventListener('storage', (e) => {
             try {
@@ -266,6 +271,33 @@ class App {
                 this.lastHealthStatus = false;
             }
         }
+    }
+
+    /**
+     * Après déverrouillage tablette : prolonger la session (GET /operators/current met à jour LastActivityTime)
+     * et réaligner le contexte opérateur pour éviter SESSION_MISMATCH côté API.
+     */
+    _onDocumentVisibilityChange() {
+        if (document.visibilityState === 'hidden' || document.hidden) {
+            this._lastVisibilityHiddenAt = Date.now();
+            return;
+        }
+        const minHidden = ADMIN_CONFIG.SLEEP_WAKE_MIN_HIDDEN_MS ?? 2000;
+        const delay = ADMIN_CONFIG.SLEEP_WAKE_REFRESH_DELAY_MS ?? 400;
+        const hiddenMs = this._lastVisibilityHiddenAt ? Date.now() - this._lastVisibilityHiddenAt : 0;
+        if (hiddenMs < minHidden) return;
+        if (this.currentScreen !== 'operator' || !this.currentOperator) return;
+        const code = String(this.currentOperator.code || this.currentOperator.id || '').trim();
+        if (!code) return;
+
+        setTimeout(async () => {
+            try {
+                this.apiService.syncOperatorContextWithLocalStorage();
+                await this.apiService.getCurrentOperation(code);
+            } catch (e) {
+                console.warn('Réveil tablette: impossible de rafraîchir la session', e?.message || e);
+            }
+        }, delay);
     }
 
     async handleLogin(e) {

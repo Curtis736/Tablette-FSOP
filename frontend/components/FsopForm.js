@@ -1,7 +1,7 @@
 /**
  * Composant pour afficher et remplir un formulaire FSOP de manière interactive
  */
-import { loadStructure } from './fsopForm/loadStructure.js?v=20260318-fsopform-split1';
+import { loadStructure } from './fsopForm/loadStructure.js?v=20260512.1';
 
 class FsopForm {
     constructor(apiService, notificationManager) {

@@ -52,7 +52,10 @@ class App {
         
         try {
             this.showLoading(true);
-            const response = await fetch(`${this.getApiBaseUrl()}/operators/${operatorCode}`);
+            const response = await fetch(`${this.getApiBaseUrl()}/operators/${operatorCode}`, {
+                cache: 'no-store',
+                headers: { Accept: 'application/json' }
+            });
             
             if (response.ok) {
                 const operator = await response.json();
