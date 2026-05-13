@@ -119,6 +119,51 @@ class AdminPage {
         return ageDays <= ADMIN_CONFIG.TRANSMITTED_VISIBLE_DAYS;
     }
 
+    /**
+     * Clé alignée entre ligne ABTEMPS (consolidée) et agrégat ABHISTORIQUE (non consolidé),
+     * pour retirer l’overlay doublon quand les deux représentent la même opération.
+     */
+    _getAdminMergeDedupSlotKey(op) {
+        const opC = (op?.OperatorCode ?? op?.operatorId ?? '').toString().trim();
+        const lc = (op?.LancementCode ?? op?.lancementCode ?? '').toString().trim().toUpperCase();
+        const { stepCode, stepLabel } = getAdminStepColumnDisplay(op);
+        const step = `${String(stepCode).toUpperCase()}|${String(stepLabel).toUpperCase()}`;
+        const st = this.formatDateTime(op?.StartTime ?? op?.startTime);
+        const et = this.formatDateTime(op?.EndTime ?? op?.endTime);
+        const startNorm = st === '-' ? '' : st;
+        const endNorm = et === '-' ? '' : et;
+        return `${opC}|${lc}|${step}|${startNorm}|${endNorm}`;
+    }
+
+    /**
+     * Après fusion Map, ABHISTORIQUE peut encore apparaître en parallèle d’ABTEMPS (clés T: vs E:).
+     * On garde la ligne consolidée et on supprime l’overlay non consolidé si le créneau métier coïncide.
+     */
+    _dedupeAdminConsolidatedOverlay(ops) {
+        if (!ops?.length) return ops;
+        const consolidatedCountBySlot = new Map();
+        for (const op of ops) {
+            const tid = op?.TempsId ?? op?.tempsId;
+            if (tid == null || String(tid).trim() === '') continue;
+            const slot = this._getAdminMergeDedupSlotKey(op);
+            consolidatedCountBySlot.set(slot, (consolidatedCountBySlot.get(slot) || 0) + 1);
+        }
+        const out = [];
+        for (const op of ops) {
+            if (op?._isUnconsolidated) {
+                const tid = op?.TempsId ?? op?.tempsId;
+                if (tid == null || String(tid).trim() === '') {
+                    const slot = this._getAdminMergeDedupSlotKey(op);
+                    if ((consolidatedCountBySlot.get(slot) || 0) > 0) {
+                        continue;
+                    }
+                }
+            }
+            out.push(op);
+        }
+        return out;
+    }
+
     initializeElements() {
         // Initialiser le cache DOM
         this.domCache.initialize();
@@ -652,7 +697,7 @@ class AdminPage {
                 mergedMap.set(key, existing ? chooseBest(existing, op) : op);
             });
             
-            this.operations = Array.from(mergedMap.values());
+            this.operations = this._dedupeAdminConsolidatedOverlay(Array.from(mergedMap.values()));
             
             // Consolidation automatique des opérations terminées sans TempsId (éviter les "lancement non consolidé")
             if (enableAutoConsolidate && !this._isConsolidating) {
