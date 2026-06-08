@@ -1,6 +1,7 @@
 const express = require('express');
 const path = require('path');
 const fs = require('fs/promises');
+const fsNative = require('fs');
 const fsp = fs; // Alias for consistency with other parts of the codebase
 const AdmZip = require('adm-zip');
 
@@ -215,6 +216,18 @@ async function ensureFsopDirectory(rootLt, res) {
         return { ok: false, response: res.status(422).json({ error: 'FSOP_DIR_CREATE_FAILED', fsopDir, rootLt, message: `Impossible de créer le répertoire FSOP dans ${rootLt}`, details: process.env.NODE_ENV === 'development' ? err.message : undefined }) };
     }
     return { ok: true, fsopDir };
+}
+
+function buildFsErrorDiagnostics(err, extra = {}) {
+    return {
+        code: err?.code || null,
+        errno: typeof err?.errno === 'number' ? err.errno : null,
+        syscall: err?.syscall || null,
+        sourcePath: err?.path || null,
+        destinationPath: err?.dest || null,
+        message: err?.message || 'Erreur système de fichier',
+        ...extra
+    };
 }
 
 function normalizeTemplateCode(value) {
@@ -624,6 +637,7 @@ router.post('/open', requireFsopSession, async (req, res) => {
         console.log(`📝 Copie vers: ${destPath}`);
 
         try {
+            await fsp.access(fsopDir, fsNative.constants.W_OK);
             if (existing) {
                 console.log(`📋 Copie depuis document existant: ${existing}`);
                 await fs.copyFile(existing, destPath);
@@ -643,7 +657,13 @@ router.post('/open', requireFsopSession, async (req, res) => {
             return res.status(500).json({
                 error: 'TEMPLATE_COPY_FAILED',
                 message: `Impossible de copier le fichier vers ${destPath}`,
-                details: process.env.NODE_ENV === 'development' ? err.message : undefined
+                diagnostics: buildFsErrorDiagnostics(err, {
+                    fsopDir,
+                    templatePath: existing || templatePath,
+                    destPath,
+                    mountHint: 'Vérifiez que le partage /mnt/services est monté et accessible en écriture depuis le conteneur/backend.'
+                }),
+                details: process.env.NODE_ENV === 'development' ? err.stack : undefined
             });
         }
 
@@ -929,6 +949,7 @@ router.post('/save', requireFsopSession, async (req, res) => {
         // Copy template to destination — protégé par verrou pour éviter les corruptions simultanées
         try {
             await withSaveLock(lockKey, async () => {
+            await fsp.access(fsopDir, fsNative.constants.W_OK);
             // Écriture atomique : copie vers un fichier temporaire, puis renommage
             const tmpPath = destPath + '.tmp.' + Date.now();
             await fs.copyFile(templatePath, tmpPath);
@@ -939,8 +960,6 @@ router.post('/save', requireFsopSession, async (req, res) => {
                 await fs.copyFile(tmpPath, destPath);
                 await fsp.unlink(tmpPath).catch(() => {});
             }
-            
-            await fs.copyFile(templatePath, destPath);
             console.log(`✅ Template copié: ${templatePath} -> ${destPath}`);
             
             // Verify the copied file exists and has content
@@ -968,7 +987,13 @@ router.post('/save', requireFsopSession, async (req, res) => {
             return res.status(500).json({
                 error: 'TEMPLATE_COPY_FAILED',
                 message: `Impossible de copier le template vers ${destPath}`,
-                details: process.env.NODE_ENV === 'development' ? copyError.message : undefined
+                diagnostics: buildFsErrorDiagnostics(copyError, {
+                    fsopDir,
+                    templatePath,
+                    destPath,
+                    mountHint: 'Vérifiez que le partage /mnt/services est monté et accessible en écriture depuis le conteneur/backend.'
+                }),
+                details: process.env.NODE_ENV === 'development' ? copyError.stack : undefined
             });
         }
 

@@ -31,6 +31,26 @@ Puis recreer le backend:
 cd /home/Tablette-FSOP && docker compose --env-file docker/.env -f docker/docker-compose.production.yml up -d --force-recreate backend
 ```
 
+### Si les montages CIFS ont disparu (backend peut aussi quitter)
+Vérifie si les partages sont toujours montés sur la VM :
+
+```bash
+mountpoint -q /mnt/partage_fsop && echo "OK: /mnt/partage_fsop" || sudo mount -a
+mountpoint -q /mnt/templates && echo "OK: /mnt/templates" || sudo mount -a
+```
+
+Si tu déploies le timer systemd `sedi-cifs-ensure.timer`, il relance automatiquement `mount -a` quand les montages manquent.
+
+Pour activer le timer (sur la VM) :
+```bash
+sudo chmod +x /home/Tablette-FSOP/docker/scripts/ensure-cifs-mounts.sh
+sudo cp /home/Tablette-FSOP/docker/systemd/sedi-cifs-ensure.service /etc/systemd/system/
+sudo cp /home/Tablette-FSOP/docker/systemd/sedi-cifs-ensure.timer /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now sedi-cifs-ensure.timer
+sudo systemctl status sedi-cifs-ensure.timer
+```
+
 ## 3) Incident DB timeout
 
 ```bash

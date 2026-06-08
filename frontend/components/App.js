@@ -3,7 +3,7 @@ import { FRONTEND_RELEASE } from '../version.js';
 // ?v= aligné sur FRONTEND_RELEASE (frontend/version.js) pour invalidation navigateur
 import OperateurInterface from './OperateurInterface.js?v=20260512.1';
 import AdminPage from './AdminPage.js?v=20260512.1';
-import ApiService from '../services/ApiService.js?v=20260512.1';
+import ApiService from '../services/ApiService.js?v=20260608.1';
 import StorageService from '../services/StorageService.js?v=20260512.1';
 import notificationManager from '../utils/NotificationManager.js?v=20260512.1';
 import { ADMIN_CONFIG } from '../utils/Constants.js';
@@ -110,6 +110,19 @@ class App {
                     try {
                         await this.apiService.getCurrentOperation(code);
                     } catch (_) {
+                        if (!this.apiService.isBackendAvailable()) {
+                            this.currentOperator = savedOperator;
+                            if (code) this.apiService.setOperatorSessionActive(code, true);
+                            if (code && restoredSessionId) {
+                                this.apiService.setCurrentOperatorContext(code, restoredSessionId);
+                            }
+                            this.showOperatorScreen();
+                            this._updateDegradedBanner(false);
+                            notificationManager.warning(
+                                'Mode dégradé : API indisponible. Les dernières données connues restent affichées.'
+                            );
+                            return;
+                        }
                         this.apiService.setCurrentOperatorContext(null, null);
                         this.storageService.clearCurrentOperator();
                         this.showLoginScreen();
@@ -129,6 +142,21 @@ class App {
                 }
             } catch (error) {
                 console.error('❌ Erreur restauration opérateur:', error);
+                if (!this.apiService.isBackendAvailable() && savedOperator) {
+                    const code = savedOperator.code || savedOperator.id;
+                    const restoredSessionId = savedOperator?.sessionId || savedOperator?.SessionId || null;
+                    this.currentOperator = savedOperator;
+                    if (code) this.apiService.setOperatorSessionActive(code, true);
+                    if (code && restoredSessionId) {
+                        this.apiService.setCurrentOperatorContext(code, restoredSessionId);
+                    }
+                    this.showOperatorScreen();
+                    this._updateDegradedBanner(false);
+                    notificationManager.warning(
+                        'Mode dégradé : API indisponible. Les dernières données connues restent affichées.'
+                    );
+                    return;
+                }
                 this.storageService.clearCurrentOperator();
                 this.showLoginScreen();
             }
@@ -170,6 +198,10 @@ class App {
         // Vérification de la connexion (seulement si un opérateur est connecté)
         this.lastHealthStatus = true;
         this._healthCheckInterval = setInterval(() => this.runHealthCheck(), 30000);
+
+        this._ensureDegradedBanner();
+        window.addEventListener('sedi:backend-unavailable', () => this._updateDegradedBanner(false));
+        window.addEventListener('sedi:backend-available', () => this._updateDegradedBanner(true));
 
         // Veille / déverrouillage tablette : prolonger la session côté serveur + réaligner le contexte
         document.addEventListener('visibilitychange', () => this._onDocumentVisibilityChange());
@@ -252,24 +284,60 @@ class App {
 
     }
 
+    _ensureDegradedBanner() {
+        if (this._degradedBannerEl) return;
+        const el = document.createElement('div');
+        el.id = 'backendDegradedBanner';
+        el.setAttribute('role', 'status');
+        el.style.cssText = [
+            'display:none',
+            'position:fixed',
+            'top:0',
+            'left:0',
+            'right:0',
+            'z-index:9999',
+            'padding:10px 14px',
+            'background:#b45309',
+            'color:#fff',
+            'font-weight:600',
+            'text-align:center',
+            'box-shadow:0 2px 8px rgba(0,0,0,.2)'
+        ].join(';');
+        el.textContent = 'Mode dégradé : API indisponible — affichage des dernières données. Les sauvegardes sont suspendues.';
+        document.body.prepend(el);
+        this._degradedBannerEl = el;
+    }
+
+    _updateDegradedBanner(isAvailable) {
+        this._ensureDegradedBanner();
+        if (!this._degradedBannerEl) return;
+        this._degradedBannerEl.style.display = isAvailable ? 'none' : 'block';
+    }
+
     async runHealthCheck() {
-        if (!this.currentOperator) return;
         try {
             const health = await this.apiService.healthCheck();
             const isAccessible = health.accessible !== false && health.status !== 'error';
             if (this.lastHealthStatus && !isAccessible) {
-                notificationManager.warning('Connexion au serveur perdue. Vérifiez votre connexion réseau.');
+                notificationManager.warning(
+                    'Connexion API perdue. Mode dégradé actif (lecture des dernières données).'
+                );
             } else if (!this.lastHealthStatus && isAccessible) {
-                notificationManager.success('Connexion au serveur rétablie');
+                notificationManager.success('Connexion API rétablie');
             }
             this.lastHealthStatus = isAccessible;
+            this._updateDegradedBanner(isAccessible);
         } catch (error) {
             if (error.message !== 'SERVER_NOT_ACCESSIBLE') {
                 console.debug('Health check échoué:', error);
             }
             if (this.lastHealthStatus) {
-                this.lastHealthStatus = false;
+                notificationManager.warning(
+                    'Connexion API perdue. Mode dégradé actif (lecture des dernières données).'
+                );
             }
+            this.lastHealthStatus = false;
+            this._updateDegradedBanner(false);
         }
     }
 

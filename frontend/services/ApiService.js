@@ -1,4 +1,7 @@
 // Service pour gérer les appels API - v20251014-fixed-v3
+import { getLocalDevApiBase, resolveLocalDevBackendPort } from '../utils/DevBackendUrl.js';
+import { buildOfflineCacheKey, readOfflineCache, writeOfflineCache } from '../utils/OfflineApiCache.js';
+
 class ApiService {
     constructor() {
         // Détection automatique de l'environnement
@@ -19,10 +22,10 @@ class ApiService {
         const isLocalDev = forceLocalBackend || (isLocalHost && (isClassicDevPort || currentPort === '8080'));
         
         if (isLocalDev) {
-            // Environnement de développement local - connexion directe au backend
-            // Essayer d'abord le port de dev (3033), sinon le port standard (3001)
-            this.baseUrl = `http://localhost:3033/api`;
-            console.log('🔧 Mode développement local détecté - connexion directe au backend sur port 3033');
+            // Environnement de développement local - connexion directe au backend (défaut 3001, cf. server.js)
+            const devPort = resolveLocalDevBackendPort();
+            this.baseUrl = getLocalDevApiBase();
+            console.log(`🔧 Mode développement local détecté - connexion directe au backend sur port ${devPort}`);
             if (forceLocalBackend && !isClassicDevPort) {
                 console.log('⚠️ Force local backend activé via paramètre/stockage');
             }
@@ -53,8 +56,35 @@ class ApiService {
             || window.localStorage?.getItem('sedi_admin_token')
             || '';
         
+        this._backendAvailable = true;
+
         console.log(`🔗 ApiService configuré pour: ${this.baseUrl}`);
         console.log(`🔍 Host détecté: ${currentHost}:${currentPort}`);
+    }
+
+    isBackendAvailable() {
+        return this._backendAvailable !== false;
+    }
+
+    _setBackendAvailable(available) {
+        const next = available !== false;
+        if (this._backendAvailable === next) return;
+        this._backendAvailable = next;
+        try {
+            const name = next ? 'sedi:backend-available' : 'sedi:backend-unavailable';
+            window.dispatchEvent(new CustomEvent(name));
+        } catch (_) {
+            // ignore
+        }
+    }
+
+    _tryOfflineFallback(endpoint, options) {
+        const method = String(options?.method || 'GET').toUpperCase();
+        if (method !== 'GET' && method !== 'HEAD') return null;
+        const key = buildOfflineCacheKey(endpoint, options);
+        const cached = readOfflineCache(key);
+        if (cached == null) return null;
+        return { ...cached, _fromOfflineCache: true, _offlineMode: true };
     }
 
     getOrCreateDeviceId() {
@@ -258,8 +288,20 @@ class ApiService {
             cache: cacheOverride ?? 'no-store'
         };
 
+        const method = String(options?.method || 'GET').toUpperCase();
+        const isSafeRead = method === 'GET' || method === 'HEAD';
+
         try {
             const response = await fetch(url, config);
+
+            if ([502, 503, 504].includes(response.status)) {
+                this._setBackendAvailable(false);
+                const offline = isSafeRead ? this._tryOfflineFallback(endpoint, options) : null;
+                if (offline) return offline;
+                const err = new Error('Service API temporairement indisponible (backend arrêté ou en redémarrage).');
+                err.errorCode = 'BACKEND_UNAVAILABLE';
+                throw err;
+            }
             
             if (!response.ok) {
                 // Gestion spéciale pour l'erreur 429
@@ -420,12 +462,27 @@ class ApiService {
             }
 
             const data = await response.json();
+            this._setBackendAvailable(true);
+            if (isSafeRead) {
+                writeOfflineCache(buildOfflineCacheKey(endpoint, options), data);
+            }
             // Invalider les caches mémoire qui deviennent faux après mutation
-            if ((options.method || 'GET').toUpperCase() !== 'GET') {
+            if (method !== 'GET' && method !== 'HEAD') {
                 this.invalidateAfterMutation(endpoint);
             }
             return data;
         } catch (error) {
+            const isNetworkError =
+                error?.name === 'TypeError' ||
+                String(error?.message || '').includes('Failed to fetch') ||
+                String(error?.message || '').includes('NetworkError');
+
+            if (isNetworkError) {
+                this._setBackendAvailable(false);
+                const offline = isSafeRead ? this._tryOfflineFallback(endpoint, options) : null;
+                if (offline) return offline;
+            }
+
             // Ne pas logger les erreurs de réseau pour les health checks (évite le spam)
             if (endpoint === '/health' && (error.name === 'TypeError' || error.message.includes('Failed to fetch'))) {
                 // Erreur silencieuse pour le health check - c'est normal si le serveur n'est pas accessible

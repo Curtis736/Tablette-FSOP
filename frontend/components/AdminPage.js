@@ -164,6 +164,45 @@ class AdminPage {
         return out;
     }
 
+    /**
+     * Quand plusieurs lignes partagent exactement le même créneau (souvent deux TempsId pour la même plage),
+     * on n’en garde qu’une pour éviter les doublons visuels identiques.
+     */
+    _pickBestAdminSlotDuplicate(a, b) {
+        const hasTid = (x) => x?.TempsId != null && String(x.TempsId).trim() !== '';
+        const tidA = hasTid(a);
+        const tidB = hasTid(b);
+        if (tidA !== tidB) return tidA ? a : b;
+        if (tidA && tidB) {
+            const na = parseInt(String(a.TempsId).replace(/\D/g, ''), 10) || 0;
+            const nb = parseInt(String(b.TempsId).replace(/\D/g, ''), 10) || 0;
+            if (na !== nb) return na > nb ? a : b;
+        }
+        if (Boolean(a?._isUnconsolidated) !== Boolean(b?._isUnconsolidated)) {
+            return a?._isUnconsolidated ? b : a;
+        }
+        return a;
+    }
+
+    _dedupeAdminIdenticalSlotRows(ops) {
+        if (!ops?.length) return ops;
+        const winnerBySlot = new Map();
+        for (const op of ops) {
+            const slot = this._getAdminMergeDedupSlotKey(op);
+            const prev = winnerBySlot.get(slot);
+            winnerBySlot.set(slot, prev ? this._pickBestAdminSlotDuplicate(prev, op) : op);
+        }
+        const out = [];
+        const seen = new Set();
+        for (const op of ops) {
+            const slot = this._getAdminMergeDedupSlotKey(op);
+            if (seen.has(slot)) continue;
+            seen.add(slot);
+            out.push(winnerBySlot.get(slot));
+        }
+        return out;
+    }
+
     initializeElements() {
         // Initialiser le cache DOM
         this.domCache.initialize();
@@ -697,7 +736,9 @@ class AdminPage {
                 mergedMap.set(key, existing ? chooseBest(existing, op) : op);
             });
             
-            this.operations = this._dedupeAdminConsolidatedOverlay(Array.from(mergedMap.values()));
+            this.operations = this._dedupeAdminIdenticalSlotRows(
+                this._dedupeAdminConsolidatedOverlay(Array.from(mergedMap.values()))
+            );
             
             // Consolidation automatique des opérations terminées sans TempsId (éviter les "lancement non consolidé")
             if (enableAutoConsolidate && !this._isConsolidating) {

@@ -131,8 +131,7 @@ services:
       - TZ=Europe/Paris
     volumes:
       - /etc/letsencrypt:/etc/letsencrypt:ro
-    depends_on:
-      - backend
+    # Pas de depends_on backend : le front doit démarrer même si l'API est arrêtée (mode dégradé Nginx + UI).
     networks:
       - sedi-network
     restart: always
