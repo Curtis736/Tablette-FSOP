@@ -36,7 +36,9 @@ Vérifie si les partages sont toujours montés sur la VM :
 
 ```bash
 mountpoint -q /mnt/partage_fsop && echo "OK: /mnt/partage_fsop" || sudo mount -a
-mountpoint -q /mnt/templates && echo "OK: /mnt/templates" || sudo mount -a
+mountpoint -q /mnt/partage_services && echo "OK: /mnt/partage_services" || sudo mount -a
+# Templates : souvent un sous-dossier (pas un point de montage), ex. /mnt/partage_services/Services
+test -d "/mnt/partage_services/Services" && echo "OK: templates path" || ls -la /mnt/partage_services/
 ```
 
 Si tu déploies le timer systemd `sedi-cifs-ensure.timer`, il relance automatiquement `mount -a` quand les montages manquent.

@@ -2,78 +2,97 @@
 set -euo pipefail
 
 # Ensure critical CIFS mounts are present on the host.
-# If the SMB mounts are lost (common after network hiccups), Docker bind-mounts
-# may fail and the backend container can exit. This script remounts using fstab.
+# Mount roots come from fstab; template paths may be subdirectories (not mount points).
 
-TARGETS_DEFAULT=(
-  "/mnt/partage_fsop"                 # services/tracabilite -> /mnt/services/Tracabilite
-  "/mnt/templates"                    # templates root mapped to /mnt/templates (common)
-  "/mnt/partage_services/Services"  # alternative templates mapping (see env.vm.example)
-)
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
+ENV_FILE="${ENV_FILE:-$REPO_ROOT/docker/.env}"
 
 SERVICES_HOST_PATH="${SERVICES_HOST_PATH:-/mnt/partage_fsop}"
-TEMPLATES_HOST_PATH="${TEMPLATES_HOST_PATH:-/mnt/templates}"
+TEMPLATES_HOST_PATH="${TEMPLATES_HOST_PATH:-}"
 
-TARGETS=(
-  "$SERVICES_HOST_PATH"
-  "$TEMPLATES_HOST_PATH"
-  "/mnt/partage_services/Services"
+# CIFS roots declared in /etc/fstab on serveurproduction (not subdirs like .../Services).
+FSTAB_MOUNT_POINTS=(
+  "/mnt/partage_fsop"
+  "/mnt/partage_services"
 )
 
 log() {
   echo "[ensure-cifs-mounts] $(date -Is) $*"
 }
 
+load_docker_env() {
+  [[ -f "$ENV_FILE" ]] || return 0
+  local key val
+  while IFS= read -r line; do
+    line="${line%%#*}"
+    line="${line//$'\r'/}"
+    [[ "$line" =~ ^(SERVICES_HOST_PATH|TEMPLATES_HOST_PATH)= ]] || continue
+    key="${line%%=*}"
+    val="${line#*=}"
+    val="${val%\"}"
+    val="${val#\"}"
+    export "$key=$val"
+  done < "$ENV_FILE"
+}
+
 is_mounted() {
   local p="$1"
-  # mountpoint(1) returns 0 when mounted
   command -v mountpoint >/dev/null 2>&1 && mountpoint -q "$p" && return 0
-  # Fallback: check /proc/mounts
   grep -qsE "[[:space:]]$p[[:space:]]" /proc/mounts
 }
 
+is_accessible() {
+  local p="$1"
+  [[ -n "$p" ]] && [[ -d "$p" ]] && [[ -r "$p" ]]
+}
+
 main() {
-  local missing=0
-  for p in "${TARGETS[@]}"; do
-    if [[ -z "${p}" ]]; then
-      continue
-    fi
-    # If directory doesn't exist, create it so mount can succeed.
-    mkdir -p "$p" || true
-    if ! is_mounted "$p"; then
-      log "Mount missing: $p"
-      missing=1
+  load_docker_env
+
+  local need_remount=0 mp
+  for mp in "${FSTAB_MOUNT_POINTS[@]}"; do
+    if ! is_mounted "$mp"; then
+      log "Mount point missing: $mp"
+      need_remount=1
     fi
   done
 
-  if [[ "$missing" -eq 0 ]]; then
-    log "All CIFS targets look mounted."
-    exit 0
+  if [[ "$need_remount" -eq 1 ]]; then
+    log "Attempting to remount using fstab (mount -a)..."
+    mount -a || true
   fi
 
-  log "Attempting to remount using fstab (mount -a)..."
-  # mount -a relies on /etc/fstab entries. Run as root via systemd.
-  mount -a || true
-
-  missing=0
-  for p in "${TARGETS[@]}"; do
-    if [[ -z "${p}" ]]; then
-      continue
-    fi
-    if ! is_mounted "$p"; then
-      log "Still missing after mount -a: $p"
-      missing=1
+  local failed=0
+  for mp in "${FSTAB_MOUNT_POINTS[@]}"; do
+    if ! is_mounted "$mp"; then
+      log "Still not mounted: $mp"
+      failed=1
     fi
   done
 
-  if [[ "$missing" -eq 0 ]]; then
-    log "CIFS mounts restored."
+  local access_paths=("$SERVICES_HOST_PATH")
+  if [[ -n "$TEMPLATES_HOST_PATH" ]]; then
+    access_paths+=("$TEMPLATES_HOST_PATH")
+  fi
+
+  local ap
+  for ap in "${access_paths[@]}"; do
+    if is_accessible "$ap"; then
+      log "Path accessible: $ap"
+    else
+      log "Path not accessible: $ap"
+      failed=1
+    fi
+  done
+
+  if [[ "$failed" -eq 0 ]]; then
+    log "CIFS OK (mount points + docker bind sources)."
     exit 0
   fi
 
-  log "CIFS mounts NOT restored yet."
+  log "CIFS check FAILED."
   exit 1
 }
 
 main "$@"
-
