@@ -32,7 +32,7 @@ async function withSaveLock(key, fn) {
         resolve();
     }
 }
-const { executeQuery } = require('../config/database');
+const db = require('../config/database');
 const { requireDebugMode } = require('../middleware/auth');
 
 const router = express.Router();
@@ -56,7 +56,7 @@ async function requireFsopSession(req, res, next) {
         const ttlHoursRaw = parseInt(process.env.OPERATOR_SESSION_TTL_HOURS || '12', 10);
         const ttlHours = Number.isFinite(ttlHoursRaw) && ttlHoursRaw > 0 ? Math.min(ttlHoursRaw, 72) : 12;
 
-        const sessions = await executeQuery(
+        const sessions = await db.executeQuery(
             `SELECT TOP 1 SessionId FROM [SEDI_APP_INDEPENDANTE].[dbo].[ABSESSIONS_OPERATEURS]
              WHERE OperatorCode = @operatorId
                AND SessionStatus = 'ACTIVE'
@@ -270,7 +270,7 @@ router.get('/lots/:launchNumber', async (req, res) => {
             return res.status(400).json({ success: false, error: 'INVALID_LAUNCH_NUMBER' });
         }
 
-        const rows = await executeQuery(`
+        const rows = await db.executeQuery(`
             SELECT
                 CodeOperation,
                 CodeRubrique,

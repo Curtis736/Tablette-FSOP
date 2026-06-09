@@ -54,7 +54,12 @@ export function writeOfflineCache(key, data, ttlMs = DEFAULT_TTL_MS) {
 export function clearOfflineApiCache() {
     const storage = safeStorage();
     if (!storage) return;
-    for (const k of [...Object.keys(storage)]) {
+    const keys = [];
+    for (let i = 0; i < storage.length; i++) {
+        const k = storage.key(i);
+        if (k) keys.push(k);
+    }
+    for (const k of keys) {
         if (k.startsWith(PREFIX)) storage.removeItem(k);
     }
 }
