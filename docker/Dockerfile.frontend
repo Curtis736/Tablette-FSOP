@@ -1,8 +1,17 @@
 # Dockerfile optimisé pour le frontend SEDI Tablette
 FROM nginx:1.27-alpine
 
-# Installer curl, dumb-init et tzdata pour les health checks, la gestion des signaux et le timezone
-RUN apk add --no-cache curl dumb-init tzdata
+# Installer curl, dumb-init, tzdata et openssl (certificat auto-signé pour redirection HTTPS->HTTP)
+RUN apk add --no-cache curl dumb-init tzdata openssl
+
+# Certificat auto-signé (redirection 443 -> 80 uniquement)
+RUN mkdir -p /etc/nginx/ssl && \
+    openssl req -x509 -nodes -days 3650 -newkey rsa:2048 \
+      -keyout /etc/nginx/ssl/privkey.pem \
+      -out /etc/nginx/ssl/fullchain.pem \
+      -subj "/CN=fsop.sedi-ati.com" && \
+    chmod 644 /etc/nginx/ssl/fullchain.pem && \
+    chmod 600 /etc/nginx/ssl/privkey.pem
 
 # Créer un utilisateur nginx non-root
 RUN addgroup -g 1001 -S nginx-app && \
@@ -34,7 +43,7 @@ ENV NGINX_WORKER_PROCESSES=auto \
 
 # Health check optimisé
 HEALTHCHECK --interval=30s --timeout=10s --start-period=20s --retries=3 \
-    CMD curl -fk https://localhost/health || curl -f http://localhost/health || exit 1
+    CMD curl -f http://localhost/health || exit 1
 
 # Labels pour la traçabilité
 LABEL maintainer="SEDI Team" \
