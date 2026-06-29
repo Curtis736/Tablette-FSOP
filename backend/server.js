@@ -46,6 +46,7 @@ const allowedOrigins = [
     'https://localhost',
     'https://192.168.1.26:8443',
     'https://localhost:8443',
+    'http://fsop.sedi-ati.com',
     'https://fsop.sedi-ati.com',
     process.env.FRONTEND_URL
 ].filter(Boolean);
@@ -82,7 +83,7 @@ app.use(helmet({
             connectSrc: ["'self'"],
             fontSrc: ["'self'", 'data:'],
             objectSrc: ["'none'"],
-            upgradeInsecureRequests: [],
+            ...(process.env.FORCE_HTTPS === 'true' ? { upgradeInsecureRequests: [] } : {}),
         },
     },
 }));

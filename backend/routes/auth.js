@@ -18,7 +18,7 @@ function timingSafeEqual(a, b) {
 // POST /api/auth/login - Connexion admin
 router.post('/login', async (req, res) => {
     try {
-        const { username, password } = req.body;
+        const { username, password } = req.body || {};
 
         const creds = getAdminCredentials();
         if (!creds.enabled) {
