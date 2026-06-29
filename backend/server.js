@@ -72,6 +72,7 @@ app.use(cors({
 }));
 
 app.use(helmet({
+    strictTransportSecurity: false,
     crossOriginResourcePolicy: { policy: 'cross-origin' },
     crossOriginEmbedderPolicy: false,
     contentSecurityPolicy: {
