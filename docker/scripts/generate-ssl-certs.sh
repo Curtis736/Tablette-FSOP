@@ -24,10 +24,16 @@ openssl req -x509 -new -nodes -key "$SSL_DIR/ca.key" -sha256 -days "$DAYS_CA" \
     -out "$SSL_DIR/ca.crt" \
     -subj "/C=FR/O=SEDI-ATI/CN=SEDI-ATI Local CA"
 
+EXTRA_IP="$(echo "$EXTRA_IP" | tr -d '[:space:]')"
+
 # Config OpenSSL avec noms alternatifs (local + domaine)
 SAN="DNS:${CN},DNS:localhost,DNS:*.local,IP:127.0.0.1"
 if [ -n "$EXTRA_IP" ]; then
-    SAN="${SAN},IP:${EXTRA_IP}"
+    if echo "$EXTRA_IP" | grep -Eq '^([0-9]{1,3}\.){3}[0-9]{1,3}$'; then
+        SAN="${SAN},IP:${EXTRA_IP}"
+    else
+        echo "WARN: SSL_EXTRA_IP ignoré (adresse IPv4 invalide): ${EXTRA_IP}" >&2
+    fi
 fi
 
 cat > "$SSL_DIR/server-openssl.cnf" <<EOF
