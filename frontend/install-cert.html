@@ -309,7 +309,7 @@ global.QR=QR;
 })(window);
 // ── End QR ──────────────────────────────────────────────────────────────────
 
-var certUrl = 'http://' + window.location.hostname + ':8080/ssl/SEDI-ATI-CA.crt';
+var certUrl = window.location.protocol + '//' + window.location.host + '/ssl/SEDI-ATI-CA.crt';
 document.getElementById('cert-url-display').textContent = certUrl;
 document.getElementById('btn-dl').href = certUrl;
 QR.draw(certUrl, document.getElementById('qr'), 220);

@@ -56,7 +56,19 @@ docker build --no-cache -t docker-sedi-backend:latest -f docker/Dockerfile.backe
 # 7. Reconstruire l'image frontend (sans cache pour éviter les superpositions)
 echo ""
 echo "🔨 Reconstruction de l'image frontend (sans cache)..."
-docker build --no-cache -t docker-sedi-frontend:latest -f docker/Dockerfile.frontend .
+SSL_BUILD_ARG=""
+if [ -f "docker/.env" ]; then
+    # shellcheck disable=SC1091
+    set -a
+    # shellcheck source=/dev/null
+    . "docker/.env"
+    set +a
+fi
+if [ -n "${SSL_EXTRA_IP:-}" ]; then
+    SSL_BUILD_ARG="--build-arg SSL_EXTRA_IP=${SSL_EXTRA_IP}"
+    echo "   Certificat avec IP locale : ${SSL_EXTRA_IP}"
+fi
+docker build --no-cache ${SSL_BUILD_ARG} -t docker-sedi-frontend:latest -f docker/Dockerfile.frontend .
 
 echo ""
 echo "✅ Images reconstruites avec succès!"

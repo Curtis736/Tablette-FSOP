@@ -117,6 +117,8 @@ services:
     build:
       context: ..
       dockerfile: docker/Dockerfile.frontend
+      args:
+        SSL_EXTRA_IP: ${SSL_EXTRA_IP:-}
     container_name: sedi-tablette-frontend
     # Ne pas exécuter en root - le Dockerfile gère les permissions
     # user: "0:0"

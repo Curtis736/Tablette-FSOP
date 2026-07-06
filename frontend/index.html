@@ -10,9 +10,8 @@
     <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📱</text></svg>">
     <link rel="stylesheet" href="assets/styles.css?v=20260512.1">
     <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
-    <!-- ZXing pour le scan de code-barres -->
-    <!-- IMPORTANT: ne pas utiliser "@zxing/library@latest" (entrée CommonJS => `exports is not defined` en navigateur) -->
-    <script defer src="https://cdn.jsdelivr.net/npm/@zxing/library@0.20.0/umd/index.min.js"></script>
+    <!-- ZXing pour le scan de code-barres (local, pas de dépendance Internet) -->
+    <script defer src="assets/vendor/zxing.min.js?v=20260706.1"></script>
 </head>
 <body>
     <div id="app">
@@ -92,26 +91,26 @@
                     <div class="input-group with-scanner with-fsop">
                         <i class="fas fa-barcode"></i>
                         <input
-                            type="tel"
+                            type="text"
                             id="lancementSearch"
-                            placeholder="Saisir le code de lancement..."
+                            placeholder="Saisir ou scanner le code..."
                             autocomplete="off"
                             value="LT"
                             inputmode="numeric"
                             pattern="[0-9]*"
                             maxlength="10"
-                            aria-label="Saisir les chiffres du code de lancement"
+                            aria-label="Saisir les chiffres du code de lancement ou scanner avec une douchette"
                         >
                         <button id="fsopBtn" class="btn-fsop" title="FSOP" aria-label="FSOP">
                             FSOP
                         </button>
-                        <button id="scanBarcodeBtn" class="btn-scan" title="Scanner un code-barres" aria-label="Scanner un code-barres">
+                        <button id="scanBarcodeBtn" class="btn-scan" title="Scanner avec la caméra (HTTPS requis)" aria-label="Scanner avec la caméra">
                             <i class="fas fa-camera"></i>
                         </button>
                     </div>
                     <div id="lancementList" class="lancement-list" style="display: none;"></div>
                     <div class="help-text">
-                        <small><i class="fas fa-info-circle"></i> "LT" est pré-rempli, saisissez seulement les chiffres (ex: LT2501145)</small>
+                        <small id="lancementHelpText"><i class="fas fa-info-circle"></i> "LT" est pré-rempli — saisissez les chiffres ou scannez avec une douchette Bluetooth/USB (ex: LT2501145)</small>
                     </div>
                 </div>
 

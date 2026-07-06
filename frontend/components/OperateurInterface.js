@@ -1,6 +1,6 @@
 // Interface simplifiée pour les opérateurs - v20260309-no-cache-issues
 import TimeUtils from '../utils/TimeUtils.js';
-import ScannerManager from '../utils/ScannerManager.js?v=20260512.1';
+import ScannerManager from '../utils/ScannerManager.js?v=20260706.1';
 import FsopForm from './FsopForm.js?v=20260512.1';
 import Logger from '../utils/Logger.js?v=20260512.1';
 
@@ -33,6 +33,12 @@ class OperateurInterface {
 
         this.LANCEMENT_PREFIX = 'LT';
         this.MAX_LANCEMENT_DIGITS = 8;
+        this.WEDGE_SCAN_GAP_MS = 120;
+        this.WEDGE_SCAN_MAX_MS = 400;
+        this.WEDGE_MIN_CHARS = 3;
+        this._wedgeBuffer = '';
+        this._wedgeFirstKeyTime = 0;
+        this._wedgeLastKeyTime = 0;
 
         this.log = Logger.child('OperateurInterface');
         this._sessionExpiredHandled = false;
@@ -266,7 +272,8 @@ class OperateurInterface {
         this.commentCharCount = document.getElementById('commentCharCount');
         this.commentsList = document.getElementById('commentsList');
         
-        // Éléments pour le scanner
+        // Éléments pour le scanner / douchette
+        this.lancementHelpText = document.getElementById('lancementHelpText');
         this.scanBarcodeBtn = document.getElementById('scanBarcodeBtn');
         this.scannerModal = document.getElementById('barcodeScannerModal');
         this.closeScannerBtn = document.getElementById('closeScannerBtn');
@@ -313,14 +320,34 @@ class OperateurInterface {
         console.log('operatorHistoryTableBody trouvé:', !!this.operatorHistoryTableBody);
         console.log('endTimeDisplay trouvé:', !!this.endTimeDisplay);
         
-        // Modifier le placeholder pour indiquer la saisie manuelle
-        if (this.lancementInput) {
-            this.lancementInput.placeholder = "Saisir le code de lancement...";
-        }
+        this.configureLancementScannerUI();
         
         // Cacher la liste des lancements
         if (this.lancementList) {
             this.lancementList.style.display = 'none';
+        }
+    }
+
+    /**
+     * Adapte l'UI : douchette toujours active, caméra uniquement en HTTPS.
+     */
+    configureLancementScannerUI() {
+        const inputGroup = this.lancementInput?.closest('.input-group');
+        const cameraAvailable = window.isSecureContext === true;
+
+        if (!cameraAvailable && this.scanBarcodeBtn) {
+            this.scanBarcodeBtn.style.display = 'none';
+            inputGroup?.classList.add('no-camera-btn');
+        }
+
+        if (this.lancementHelpText) {
+            const manualHint = '"LT" est pré-rempli — saisissez les chiffres au clavier';
+            const wedgeHint = 'ou scannez avec une douchette Bluetooth/USB (ex: LT2501145)';
+            const cameraHint = cameraAvailable
+                ? ' — la caméra est aussi disponible via le bouton à droite'
+                : '';
+            this.lancementHelpText.innerHTML =
+                `<i class="fas fa-info-circle"></i> ${manualHint} ${wedgeHint}${cameraHint}`;
         }
     }
 
@@ -1508,24 +1535,118 @@ class OperateurInterface {
         }
     }
 
+    isCompleteLancementCode(code) {
+        return /^LT\d{7,8}$/.test(code || '');
+    }
+
+    resetWedgeBuffer() {
+        this._wedgeBuffer = '';
+        this._wedgeFirstKeyTime = 0;
+        this._wedgeLastKeyTime = 0;
+    }
+
+    isWedgeScanInProgress() {
+        if (!this._wedgeBuffer || this._wedgeBuffer.length < this.WEDGE_MIN_CHARS) {
+            return false;
+        }
+        const duration = (this._wedgeLastKeyTime || 0) - (this._wedgeFirstKeyTime || 0);
+        return duration <= this.WEDGE_SCAN_MAX_MS;
+    }
+
+    trackWedgeKey(key, event) {
+        const now = Date.now();
+        const gap = this._wedgeLastKeyTime ? now - this._wedgeLastKeyTime : Infinity;
+
+        if (gap > this.WEDGE_SCAN_GAP_MS) {
+            this._wedgeBuffer = key;
+            this._wedgeFirstKeyTime = now;
+        } else {
+            this._wedgeBuffer += key;
+        }
+        this._wedgeLastKeyTime = now;
+
+        if (this.isWedgeScanInProgress()) {
+            event.preventDefault();
+            return true;
+        }
+
+        return false;
+    }
+
+    tryFlushWedgeScan(event) {
+        if (!this.isWedgeScanInProgress()) {
+            this.resetWedgeBuffer();
+            return false;
+        }
+
+        event.preventDefault();
+        this.applyWedgeBarcode(this._wedgeBuffer);
+        this.resetWedgeBuffer();
+        return true;
+    }
+
+    applyWedgeBarcode(raw) {
+        const digits = this.getSanitizedDigitsFromValue(raw);
+        if (!digits) {
+            return;
+        }
+
+        this.lancementInput.value = `${this.LANCEMENT_PREFIX}${digits}`;
+        const code = this.enforceNumericLancementInput();
+        this.handleLancementInput();
+
+        if (this.isCompleteLancementCode(code)) {
+            this.notificationManager.success(`Code scanné: ${code}`);
+            this.validateAndSelectLancement();
+        } else {
+            this.notificationManager.success(`Code scanné: ${code}`);
+        }
+
+        this.focusLancementInputForScan();
+    }
+
+    focusLancementInputForScan() {
+        if (!this.lancementInput || this.lancementInput.disabled) {
+            return;
+        }
+        requestAnimationFrame(() => {
+            this.lancementInput.focus();
+            this.setLancementCaretAfterPrefix();
+        });
+    }
+
     handleLancementKeydown(event) {
         if (!this.lancementInput) {
             return;
         }
-        
-        if (event.key === 'Enter') {
-            event.preventDefault();
-            this.validateAndSelectLancement();
-            return;
+
+        if (event.key === 'Enter' || event.key === 'Tab') {
+            if (this.tryFlushWedgeScan(event)) {
+                return;
+            }
+            if (event.key === 'Enter') {
+                event.preventDefault();
+                this.validateAndSelectLancement();
+                return;
+            }
+            if (event.key === 'Tab') {
+                const code = this.enforceNumericLancementInput(false);
+                if (this.isCompleteLancementCode(code)) {
+                    event.preventDefault();
+                    this.validateAndSelectLancement();
+                }
+                return;
+            }
         }
-        
+
         // Autoriser les raccourcis clavier (copier/coller, etc.)
         if (event.ctrlKey || event.metaKey || event.altKey) {
             return;
         }
-        
-        const navigationKeys = ['Tab', 'Backspace', 'Delete', 'ArrowLeft', 'ArrowRight', 'Home', 'End'];
+
+        const navigationKeys = ['Backspace', 'Delete', 'ArrowLeft', 'ArrowRight', 'Home', 'End'];
         if (navigationKeys.includes(event.key)) {
+            this.resetWedgeBuffer();
             if ((event.key === 'Backspace' || event.key === 'ArrowLeft' || event.key === 'Home') &&
                 this.lancementInput.selectionStart <= this.LANCEMENT_PREFIX.length) {
                 event.preventDefault();
@@ -1533,13 +1654,17 @@ class OperateurInterface {
             }
             return;
         }
-        
-        // Bloquer tout caractère non numérique
+
+        if (event.key.length === 1 && this.trackWedgeKey(event.key, event)) {
+            return;
+        }
+
+        // Bloquer tout caractère non numérique (saisie manuelle)
         if (!/^\d$/.test(event.key)) {
             event.preventDefault();
             return;
         }
-        
+
         const digitsLength = this.getSanitizedDigitsFromValue(this.lancementInput.value).length;
         if (digitsLength >= this.MAX_LANCEMENT_DIGITS) {
             event.preventDefault();
@@ -2628,6 +2753,13 @@ class OperateurInterface {
             return;
         }
 
+        if (!window.isSecureContext) {
+            this.notificationManager.error(
+                'Le scan caméra nécessite https://. Ouvrez le site en HTTPS et installez le certificat SEDI si demandé (page install-cert.html).'
+            );
+            return;
+        }
+
         // Vérifier si le scanner est supporté (mais on essaie quand même)
         const isSupported = ScannerManager.isSupported();
         console.log('📱 Support scanner:', isSupported);
@@ -2721,6 +2853,8 @@ class OperateurInterface {
             
             // Notification de succès
             this.notificationManager.success(`Code scanné: ${normalizedCode}`);
+            
+            this.closeScanner();
             
             // Valider automatiquement le lancement après un court délai
             setTimeout(() => {
