@@ -104,6 +104,13 @@ Thumbs.db
 
 # Docker
 docker-compose.override.yml
+docker/ssl-runtime/nginx-ssl/
+docker/ssl-runtime/tablet/
+docker/ssl-runtime/export-admin/
+docker/*.pem
+docker/*.crt
+docker/*.cer
+docker/*.key
 
 # Test files
 test-results/

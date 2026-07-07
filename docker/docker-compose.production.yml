@@ -122,6 +122,10 @@ services:
     container_name: sedi-tablette-frontend
     # Ne pas exécuter en root - le Dockerfile gère les permissions
     # user: "0:0"
+    volumes:
+      # Certificats persistants (régénérer via docker/scripts/regenerate-fsop-ssl.sh)
+      - ./ssl-runtime/nginx-ssl:/etc/nginx/ssl:ro
+      - ./ssl-runtime/tablet:/usr/share/nginx/html/ssl:ro
     ports:
       # Keep both bindings for compatibility:
       # - 80 for domain access (http://fsop.sedi-ati.com)
