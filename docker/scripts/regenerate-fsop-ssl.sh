@@ -16,12 +16,14 @@ TABLET_SSL="$SSL_RUNTIME/tablet"
 
 cd "$DOCKER_DIR"
 
-if [ -f ".env" ]; then
-    set -a
-    # shellcheck disable=SC1091
-    . "./.env"
-    set +a
-fi
+# Lire uniquement SSL_EXTRA_IP (ne pas sourcer tout le .env : chemins avec espaces, etc.)
+read_env_ssl_ip() {
+    if [ -f ".env" ]; then
+        grep -E '^SSL_EXTRA_IP=' .env 2>/dev/null | tail -n 1 | cut -d= -f2- | tr -d '[:space:]"'"'"
+    fi
+}
+
+SSL_EXTRA_IP="$(read_env_ssl_ip)"
 
 IP="${1:-${SSL_EXTRA_IP:-}}"
 if [ -z "$IP" ]; then
