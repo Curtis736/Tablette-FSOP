@@ -1406,6 +1406,17 @@ tr:hover {
     min-height: 36px;
 }
 
+/* Ligne déjà transmise à SILOG : indicateur verrouillé (pas d'action possible) */
+.actions-cell .transmitted-lock {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    color: #6c757d;
+    font-size: 12px;
+    font-style: italic;
+    white-space: nowrap;
+}
+
 /* Améliorations spécifiques tablettes */
 @media (max-width: 1024px) {
     /* Désactiver les effets hover sur tablette (pas de souris) */

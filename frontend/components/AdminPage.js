@@ -2015,7 +2015,19 @@ class AdminPage {
             
             // Cellule 10: Actions
             const cell9 = createTableCell('', { className: 'actions-cell' });
-            if (!isPauseRow) {
+            // Un enregistrement déjà transmis à SILOG (StatutTraitement='T') ne peut être ni corrigé
+            // ni supprimé côté backend : on masque les boutons pour éviter une erreur trompeuse.
+            const isTransmitted = String(operation.StatutTraitement || '').toUpperCase() === 'T';
+            if (!isPauseRow && isTransmitted) {
+                const lockedInfo = createElement('span', {
+                    className: 'transmitted-lock',
+                    title: 'Transmis à SILOG — non modifiable'
+                });
+                lockedInfo.appendChild(createElement('i', { className: 'fas fa-lock' }));
+                lockedInfo.appendChild(document.createTextNode(' Transmis'));
+                cell9.appendChild(lockedInfo);
+            }
+            if (!isPauseRow && !isTransmitted) {
             const editBtn = createButton({
                 icon: 'fas fa-edit',
                 className: 'btn-edit',
@@ -2560,7 +2572,13 @@ class AdminPage {
                 }
             }
         } catch (error) {
-            this.errorHandler.handle(error, 'deleteMonitoringRecord', 'Erreur lors de la suppression');
+            const msg = String(error?.message || '');
+            if (msg.includes('déjà transmis')) {
+                this.notificationManager.warning('Cet enregistrement a déjà été transmis à SILOG : il ne peut plus être supprimé. Actualisation...');
+                await this.loadData();
+            } else {
+                this.errorHandler.handle(error, 'deleteMonitoringRecord', 'Erreur lors de la suppression');
+            }
         } finally {
             this.loadingIndicator.hide('deleteMonitoring');
         }
