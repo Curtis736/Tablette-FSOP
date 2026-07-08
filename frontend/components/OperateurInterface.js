@@ -1965,6 +1965,7 @@ class OperateurInterface {
         }
         
         this.startBtn.disabled = true;
+        if (this.pauseBtn) this.pauseBtn.disabled = false;
         this.stopBtn.disabled = false;
         this.statusDisplay.textContent = 'En cours';
         
@@ -1990,6 +1991,7 @@ class OperateurInterface {
         
         this.startBtn.disabled = false;
         this.startBtn.innerHTML = '<i class="fas fa-play"></i> Reprendre';
+        if (this.pauseBtn) this.pauseBtn.disabled = true;
         this.stopBtn.disabled = false;
         this.statusDisplay.textContent = 'En pause';
 

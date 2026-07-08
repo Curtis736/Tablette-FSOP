@@ -508,6 +508,45 @@ describe('OperateurInterface', () => {
         });
     });
 
+    describe('restauration après reconnexion', () => {
+        beforeEach(() => {
+            operInterface = new OperateurInterface(mockOperator, mockApp);
+            // Simuler l'état grisé laissé par un reset/reconnexion
+            mockElements.pauseBtn.disabled = true;
+            mockElements.startBtn.disabled = true;
+            mockElements.stopBtn.disabled = true;
+        });
+
+        it('resumeRunningOperation devrait réactiver le bouton Pause (bug reconnexion)', () => {
+            operInterface.resumeRunningOperation({
+                lancementCode: 'LT1234567',
+                startedAt: new Date().toISOString()
+            });
+
+            expect(operInterface.isRunning).toBe(true);
+            expect(operInterface.isPaused).toBe(false);
+            expect(mockElements.pauseBtn.disabled).toBe(false);
+            expect(mockElements.startBtn.disabled).toBe(true);
+            expect(mockElements.stopBtn.disabled).toBe(false);
+            expect(mockElements.statusDisplay.textContent).toBe('En cours');
+        });
+
+        it('resumePausedOperation devrait garder le bouton Pause grisé et proposer Reprendre', () => {
+            operInterface.resumePausedOperation({
+                lancementCode: 'LT1234567',
+                startedAt: new Date().toISOString()
+            });
+
+            expect(operInterface.isRunning).toBe(false);
+            expect(operInterface.isPaused).toBe(true);
+            expect(mockElements.pauseBtn.disabled).toBe(true);
+            expect(mockElements.startBtn.disabled).toBe(false);
+            expect(mockElements.startBtn.innerHTML).toContain('Reprendre');
+            expect(mockElements.stopBtn.disabled).toBe(false);
+            expect(mockElements.statusDisplay.textContent).toBe('En pause');
+        });
+    });
+
     describe('Timer methods', () => {
         beforeEach(() => {
             operInterface = new OperateurInterface(mockOperator, mockApp);
