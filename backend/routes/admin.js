@@ -516,7 +516,9 @@ function pairPauseRepriseEvents(pauseEvents, repriseEvents) {
 
 function createWorkSegmentItem(startEvent, endTime, statusCode, statusLabel, referenceEvent, segmentIndex) {
     return {
-        id: `SEG-${startEvent.NoEnreg}-${segmentIndex}`,
+        // Utiliser le vrai NoEnreg de l'événement de départ (DEBUT ou REPRISE) pour que
+        // l'édition/suppression retrouve l'enregistrement en base (ABHISTORIQUE_OPERATEURS).
+        id: startEvent.NoEnreg,
         operatorId: referenceEvent.OperatorCode,
         operatorName: referenceEvent.operatorName || 'Non assigné',
         lancementCode: referenceEvent.CodeLanctImprod,
