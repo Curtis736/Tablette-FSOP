@@ -732,6 +732,9 @@ class AdminPage {
             if (monitoringResult && monitoringResult.success) {
                 consolidatedOps = monitoringResult.data || [];
             }
+            // Conservé pour le transfert : les lignes consolidées peuvent être masquées à l'affichage
+            // quand des segments SILOG existent pour le même opérateur/LT/jour.
+            this._consolidatedOpsRaw = consolidatedOps;
 
             if (seq !== this._loadSeq) return;
             
@@ -877,6 +880,7 @@ class AdminPage {
             if (enableAutoConsolidate && !this._isConsolidating) {
                 const terminatedWithoutTempsId = this.operations.filter(op =>
                     !op._isPauseRow &&
+                    !op._isWorkSegment &&
                     this.isOperationTerminated(op) && !op.TempsId && (op._isUnconsolidated === true || op.OperatorCode)
                 );
                 if (terminatedWithoutTempsId.length > 0) {
@@ -2063,6 +2067,158 @@ class AdminPage {
         return this.normalizeOperationStatus(operation) === 'TERMINE';
     }
 
+    _getAdminMonitoringFilters() {
+        const now = new Date();
+        const today = toLocalDateOnlyString(now);
+        const periodFilter = this.domCache.get('periodFilter');
+        const period = periodFilter?.value || 'today';
+        const toDateOnly = toLocalDateOnlyString;
+        const startOfWeekMonday = (d) => {
+            const x = new Date(d);
+            x.setHours(0, 0, 0, 0);
+            const day = x.getDay();
+            const diff = (day === 0 ? -6 : 1) - day;
+            x.setDate(x.getDate() + diff);
+            return x;
+        };
+        const startOfMonth = (d) => {
+            const x = new Date(d.getFullYear(), d.getMonth(), 1);
+            x.setHours(0, 0, 0, 0);
+            return x;
+        };
+        const periodRange = (() => {
+            if (period === 'yesterday') {
+                const y = new Date(now);
+                y.setDate(y.getDate() - 1);
+                return { date: toDateOnly(y) };
+            }
+            if (period === 'week') {
+                const start = startOfWeekMonday(now);
+                return { dateStart: toDateOnly(start), dateEnd: today };
+            }
+            if (period === 'month') {
+                const start = startOfMonth(now);
+                return { dateStart: toDateOnly(start), dateEnd: today };
+            }
+            if (period === 'custom') {
+                const pick = this.domCache.get('adminDatePicker')?.value?.trim();
+                if (pick) return { date: pick };
+                return { date: today };
+            }
+            return { date: today };
+        })();
+        const filters = { ...periodRange, includeAllStatuses: true };
+        const operatorCode = this.selectedOperatorCode || this.domCache.get('operatorFilter')?.value || undefined;
+        const lancementCode = this.domCache.get('searchFilter')?.value?.trim() || undefined;
+        if (operatorCode) filters.operatorCode = operatorCode;
+        if (lancementCode) filters.lancementCode = lancementCode;
+        return filters;
+    }
+
+    _getLancementKey(op) {
+        const oc = String(op?.OperatorCode || op?.operatorCode || op?.operatorId || '').trim();
+        const lc = String(op?.LancementCode || op?.lancementCode || '').trim().toUpperCase();
+        return `${oc}|${lc}`;
+    }
+
+    _isLancementStillActiveInDisplay(operatorCode, lancementCode) {
+        const rows = (this.operations || []).filter((op) =>
+            !op._isPauseRow &&
+            String(op.OperatorCode || '') === String(operatorCode) &&
+            String(op.LancementCode || '') === String(lancementCode)
+        );
+        return rows.some((op) => {
+            const st = this.normalizeOperationStatus(op);
+            return st === 'EN_COURS' || st === 'EN_PAUSE';
+        });
+    }
+
+    _upsertTransferEligibleByKey(eligibleByKey, op) {
+        if (!op?.TempsId) return;
+        if (!this.isOperationTerminated(op)) return;
+        if (op.StatutTraitement === 'T') return;
+        eligibleByKey.set(this._getLancementKey(op), op);
+    }
+
+    /**
+     * Résout les opérations transférables en s'appuyant sur ABTEMPS (TempsId),
+     * indépendamment de l'affichage SILOG qui masque parfois les lignes consolidées.
+     */
+    async _resolveTransferEligibleOperations() {
+        const filters = this._getAdminMonitoringFilters();
+        const monitoringResult = await this.apiService.getMonitoringTemps(filters);
+        const consolidatedOps = (monitoringResult?.success ? monitoringResult.data : this._consolidatedOpsRaw) || [];
+        this._consolidatedOpsRaw = consolidatedOps;
+
+        const eligibleByKey = new Map();
+        consolidatedOps.forEach((op) => this._upsertTransferEligibleByKey(eligibleByKey, op));
+
+        const seenLancements = new Set();
+        const toConsolidate = [];
+        for (const op of (this.operations || [])) {
+            if (op._isPauseRow || op.StatutTraitement === 'T') continue;
+            const key = this._getLancementKey(op);
+            if (!key || key === '|' || seenLancements.has(key)) continue;
+            seenLancements.add(key);
+            if (eligibleByKey.has(key)) continue;
+            const [operatorCode, lancementCode] = key.split('|');
+            if (this._isLancementStillActiveInDisplay(operatorCode, lancementCode)) continue;
+            if (!this.isOperationTerminated(op) &&
+                !consolidatedOps.some((c) => this._getLancementKey(c) === key && this.isOperationTerminated(c))) {
+                continue;
+            }
+            toConsolidate.push({ OperatorCode: operatorCode, LancementCode: lancementCode });
+        }
+
+        let skipped = [];
+        let errors = [];
+        if (toConsolidate.length > 0) {
+            const consolidateResult = await this.apiService.consolidateMonitoringBatch(toConsolidate);
+            skipped = consolidateResult?.results?.skipped || [];
+            errors = consolidateResult?.results?.errors || [];
+
+            for (const item of consolidateResult?.results?.success || []) {
+                if (!item?.TempsId) continue;
+                this._upsertTransferEligibleByKey(eligibleByKey, {
+                    OperatorCode: item.OperatorCode,
+                    LancementCode: item.LancementCode,
+                    TempsId: item.TempsId,
+                    StatutTraitement: null,
+                    StatusCode: 'TERMINE',
+                    Status: 'Terminé'
+                });
+            }
+            for (const item of skipped) {
+                if (!item?.TempsId) continue;
+                this._upsertTransferEligibleByKey(eligibleByKey, {
+                    OperatorCode: item.OperatorCode,
+                    LancementCode: item.LancementCode,
+                    TempsId: item.TempsId,
+                    StatutTraitement: null,
+                    StatusCode: 'TERMINE',
+                    Status: 'Terminé'
+                });
+            }
+
+            const missingAfterBatch = toConsolidate.filter(
+                (op) => !eligibleByKey.has(`${op.OperatorCode}|${String(op.LancementCode || '').trim().toUpperCase()}`)
+            );
+            if (missingAfterBatch.length > 0) {
+                const refresh = await this.apiService.getMonitoringTemps(filters);
+                const refreshed = (refresh?.success ? refresh.data : []) || [];
+                refreshed.forEach((op) => this._upsertTransferEligibleByKey(eligibleByKey, op));
+                this._consolidatedOpsRaw = refreshed;
+            }
+        }
+
+        return {
+            eligible: Array.from(eligibleByKey.values()),
+            skipped,
+            errors,
+            attemptedConsolidation: toConsolidate.length
+        };
+    }
+
     // ===== Transfert: une seule consolidation puis transfert, sans boucle =====
     async handleTransfer() {
         // Empêcher les appels simultanés
@@ -2083,99 +2239,43 @@ class AdminPage {
             const allRecordsData = this.operations || [];
             this.logger.log(`📊 Total opérations dans le tableau: ${allRecordsData.length}`);
 
-            // 1) Prendre uniquement les opérations TERMINÉES non déjà transférées
-            let terminatedOps = allRecordsData.filter(
-                op => !op._isPauseRow && this.isOperationTerminated(op) && op.StatutTraitement !== 'T'
+            const {
+                eligible: terminatedWithTempsId,
+                skipped: lastConsolidationSkipped,
+                errors: lastConsolidationErrors,
+                attemptedConsolidation
+            } = await this._resolveTransferEligibleOperations();
+
+            const terminatedOps = terminatedWithTempsId;
+            this.logger.log(
+                `📊 Opérations TERMINÉES éligibles (TempsId): ${terminatedWithTempsId.length}` +
+                (attemptedConsolidation > 0 ? ` (consolidation tentée: ${attemptedConsolidation})` : '')
             );
 
-            this.logger.log(`📊 Opérations TERMINÉES non transférées: ${terminatedOps.length}`);
-
-            if (terminatedOps.length === 0) {
-                const alreadyTransferred = allRecordsData.filter(op => op.StatutTraitement === 'T').length;
-                const terminated = allRecordsData.filter(op => this.isOperationTerminated(op)).length;
-                this.notificationManager.warning(
-                    `Aucune opération TERMINÉE à transférer (${terminated} terminées, ${alreadyTransferred} déjà transférées)`
-                );
-                return; // le finally s'exécutera et retirera le loader
-            }
-
-            // 2) Un seul batch de consolidation pour celles sans TempsId
-            const opsWithoutTempsId = terminatedOps.filter(op => !op.TempsId);
-            // Garder une trace des éléments ignorés/erreurs du batch de consolidation
-            // pour expliquer correctement l'absence de TempsId après reload.
-            let lastConsolidationSkipped = [];
-            let lastConsolidationErrors = [];
-            if (opsWithoutTempsId.length > 0) {
-                this.logger.log(`🔄 Consolidation de ${opsWithoutTempsId.length} opération(s) terminée(s) sans TempsId avant transfert...`);
-                const operationsToConsolidate = opsWithoutTempsId.map(op => ({
-                    OperatorCode: op.OperatorCode,
-                    LancementCode: op.LancementCode
-                }));
-                
-                // Marquer la consolidation en cours pour éviter les appels récursifs
-                this._isConsolidating = true;
-                try {
-                    const consolidateResult = await this.apiService.consolidateMonitoringBatch(operationsToConsolidate);
-                    const ok = consolidateResult?.results?.success || [];
-                    const errors = consolidateResult?.results?.errors || [];
-                    const skipped = consolidateResult?.results?.skipped || [];
-                    lastConsolidationSkipped = skipped;
-                    lastConsolidationErrors = errors;
-
-                    this.logger.log(
-                        `✅ Consolidation pré-transfert: ${ok.length} réussie(s), ` +
-                        `${skipped.length} ignorée(s), ` +
-                        `${errors.length} erreur(s)`
-                    );
-
-                    if (errors.length > 0) {
-                        // Construire un message détaillé avec les erreurs
-                        const errorDetails = errors.map(err => {
-                            const op = err.operation || {};
-                            return `• ${op.OperatorCode || '?'}/${op.LancementCode || '?'}: ${err.error || 'Erreur inconnue'}`;
-                        }).join('\n');
-                        
-                        const errorMessage = 
-                            `${errors.length} opération(s) n'ont pas pu être consolidée(s):\n\n${errorDetails}\n\n` +
-                            `Vérifiez que les opérations ont bien des événements DEBUT et FIN dans ABHISTORIQUE_OPERATEURS.`;
-                        
-                        this.logger.error('❌ Erreurs de consolidation:', errors);
-                        
-                        // Utiliser alert() pour afficher le message complet
-                        alert(errorMessage);
-                        
-                        // Aussi afficher une notification courte
-                        this.notificationManager.warning(
-                            `${errors.length} opération(s) n'ont pas pu être consolidée(s). Voir l'alerte pour les détails.`,
-                            8000
-                        );
-                    }
-
-                    // Recharger une seule fois les données pour récupérer les nouveaux TempsId
-                    // Désactiver la consolidation automatique pendant le rechargement
-                    await this.loadData(false); // Passer false pour désactiver autoConsolidate
-                    terminatedOps = (this.operations || []).filter(
-                        op => this.isOperationTerminated(op) && op.StatutTraitement !== 'T'
-                    );
-                } finally {
-                    this._isConsolidating = false;
-                }
-            }
-
-            // 3) Ne garder pour le transfert que les opérations qui ont maintenant un TempsId
-            const terminatedWithTempsId = terminatedOps.filter(op => op.TempsId);
-
             if (terminatedWithTempsId.length === 0) {
-                // Afficher les détails des opérations qui ont échoué
-                const failedOps = terminatedOps.filter(op => !op.TempsId);
-
-                // Si la consolidation a "ignoré" toutes les opérations (cas normal: lancement soldé/composant/absent de V_LCTC),
-                // ne pas afficher un message d'erreur DEBUT/FIN trompeur.
-                const skippedKeySet = new Set(
-                    (lastConsolidationSkipped || []).map(s => `${s.OperatorCode}/${s.LancementCode}`)
+                const displayTerminated = allRecordsData.filter(
+                    (op) => !op._isPauseRow && this.isOperationTerminated(op) && op.StatutTraitement !== 'T'
                 );
-                const failedNotSkipped = failedOps.filter(op => !skippedKeySet.has(`${op.OperatorCode}/${op.LancementCode}`));
-                const onlySkipped = failedOps.length > 0 && failedNotSkipped.length === 0 && (lastConsolidationErrors || []).length === 0;
+                const alreadyTransferred = allRecordsData.filter((op) => op.StatutTraitement === 'T').length;
+
+                if (displayTerminated.length === 0) {
+                    const terminated = allRecordsData.filter((op) => this.isOperationTerminated(op)).length;
+                    this.notificationManager.warning(
+                        `Aucune opération TERMINÉE à transférer (${terminated} terminées, ${alreadyTransferred} déjà transférées)`
+                    );
+                    return;
+                }
+
+                const failedOps = displayTerminated;
+                const skippedKeySet = new Set(
+                    (lastConsolidationSkipped || []).map((s) => `${s.OperatorCode}/${s.LancementCode}`)
+                );
+                const failedNotSkipped = failedOps.filter(
+                    (op) => !skippedKeySet.has(`${op.OperatorCode}/${op.LancementCode}`)
+                );
+                const onlySkipped = failedOps.length > 0 &&
+                    failedNotSkipped.length === 0 &&
+                    (lastConsolidationErrors || []).length === 0;
                 if (onlySkipped) {
                     const reasonCounts = (lastConsolidationSkipped || []).reduce((acc, s) => {
                         const r = s.reason || 'Ignoré';
@@ -2188,7 +2288,7 @@ class AdminPage {
 
                     let msg = `Aucune opération terminée n'est éligible au transfert.\n\n` +
                         `${failedOps.length} opération(s) ont été ignorée(s) (normal):\n`;
-                    failedOps.forEach(op => {
+                    failedOps.forEach((op) => {
                         msg += `• ${op.OperatorCode || '?'}/${op.LancementCode || '?'} - ${op.OperatorName || 'Opérateur inconnu'}\n`;
                     });
                     msg += `\nRaisons d'ignorance (consolidation):\n${reasonsText || '- (non précisé)'}\n\n` +
@@ -2201,42 +2301,28 @@ class AdminPage {
                     );
                     return;
                 }
-                
-                // Construire un message détaillé pour alert() (qui gère mieux les multi-lignes)
+
                 let errorDetails = 'Aucune opération terminée n\'a un TempsId valide après consolidation.\n\n';
-                
                 if (failedOps.length > 0) {
                     errorDetails += `Opérations en échec (${failedOps.length}):\n`;
-                    failedOps.forEach(op => {
+                    failedOps.forEach((op) => {
                         errorDetails += `• ${op.OperatorCode || '?'}/${op.LancementCode || '?'} - ${op.OperatorName || 'Opérateur inconnu'}\n`;
                     });
                     errorDetails += '\n';
                 }
-                
                 errorDetails += 'Causes possibles:\n';
                 errorDetails += '• Événements DEBUT ou FIN manquants dans ABHISTORIQUE_OPERATEURS\n';
                 errorDetails += '• Heures incohérentes (fin < début)\n';
                 errorDetails += '• Données invalides dans la base de données\n\n';
                 errorDetails += 'Vérifiez les logs backend pour plus de détails.';
-                
-                this.logger.error('❌ Aucune opération consolidée:', {
-                    totalTerminated: terminatedOps.length,
-                    failedOps: failedOps.map(op => ({
-                        OperatorCode: op.OperatorCode,
-                        LancementCode: op.LancementCode,
-                        Status: op.Status,
-                        StatusCode: op.StatusCode,
-                        TempsId: op.TempsId,
-                        EventId: op.EventId
-                    }))
+
+                this.logger.error('❌ Aucune opération consolidée pour transfert:', {
+                    displayTerminated: failedOps.length,
+                    consolidationErrors: lastConsolidationErrors
                 });
-                
-                // Utiliser alert() pour afficher le message complet (meilleur pour les multi-lignes)
                 alert(errorDetails);
-                
-                // Aussi afficher une notification courte
                 this.notificationManager.error(
-                    `${failedOps.length} opération(s) n'ont pas pu être consolidée(s). Voir la console pour les détails.`,
+                    `${failedOps.length} opération(s) n'ont pas pu être consolidée(s). Voir l'alerte pour les détails.`,
                     10000
                 );
                 return;

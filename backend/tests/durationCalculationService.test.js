@@ -206,4 +206,15 @@ describe('processLancementEventsWithPauses work segments (SILOG)', () => {
     expect(items[1].endTime).toBeNull();
     expect(items[1].statusCode).toBe('EN_COURS');
   });
+
+  it('marks the last segment as "En pause" when operator is currently paused', () => {
+    // Cycle qui s'arrête sur une PAUSE non reprise et sans FIN.
+    const pausedEvents = baseEvents.filter((e) => e.Ident === 'DEBUT' || e.Ident === 'PAUSE');
+    const items = processLancementEventsWithPauses(pausedEvents, { includeWorkSegments: true });
+    expect(items.filter((i) => i._isWorkSegment)).toHaveLength(1);
+    expect(items[0].startTime).toBe('07:28');
+    expect(items[0].endTime).toBe('12:00');
+    expect(items[0].statusCode).toBe('EN_PAUSE');
+    expect(items[0].status).toBe('En pause');
+  });
 });

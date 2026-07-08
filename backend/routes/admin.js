@@ -559,9 +559,17 @@ function buildWorkSegmentItems(debutEvent, cycleEvents, pauseEvents, repriseEven
         return segments;
     }
 
-    pairs.forEach(({ pauseEvent, repriseEvent }) => {
+    pairs.forEach(({ pauseEvent, repriseEvent }, index) => {
         const pauseStart = extractEventTime(pauseEvent);
-        segments.push(createWorkSegmentItem(workStartEvent, pauseStart, 'TERMINE', 'Terminé', debutEvent, segIdx++));
+        const isLastPair = index === pairs.length - 1;
+        // Créneau intermédiaire (pause déjà reprise) => "Terminé".
+        // Dernier créneau alors que l'opérateur est TOUJOURS en pause (pas de reprise ni FIN)
+        // => on reflète l'état réel courant "En pause".
+        if (isLastPair && !repriseEvent && !finEvent) {
+            segments.push(createWorkSegmentItem(workStartEvent, pauseStart, 'EN_PAUSE', 'En pause', debutEvent, segIdx++));
+        } else {
+            segments.push(createWorkSegmentItem(workStartEvent, pauseStart, 'TERMINE', 'Terminé', debutEvent, segIdx++));
+        }
         if (repriseEvent) {
             workStartEvent = repriseEvent;
         }

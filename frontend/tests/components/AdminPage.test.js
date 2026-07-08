@@ -376,6 +376,86 @@ describe('AdminPage', () => {
     });
   });
 
+  describe('résolution transfert (segments SILOG)', () => {
+    beforeEach(() => {
+      adminPage = new AdminPage(mockApp);
+      mockApiService.getMonitoringTemps = vi.fn();
+      mockApiService.consolidateMonitoringBatch = vi.fn();
+    });
+
+    it('retrouve les TempsId consolidés même si seuls les segments sont affichés', async () => {
+      adminPage.operations = [
+        {
+          OperatorCode: '008',
+          LancementCode: 'LT2600401',
+          OperatorName: 'Intérimaire 8',
+          StatusCode: 'TERMINE',
+          Status: 'Terminé',
+          _isWorkSegment: true,
+          _isUnconsolidated: true
+        },
+        {
+          OperatorCode: '008',
+          LancementCode: 'LT2600401',
+          OperatorName: 'Intérimaire 8',
+          StatusCode: 'TERMINE',
+          Status: 'Terminé',
+          _isWorkSegment: true,
+          _isUnconsolidated: true
+        }
+      ];
+      mockApiService.getMonitoringTemps.mockResolvedValue({
+        success: true,
+        data: [{
+          TempsId: 501,
+          OperatorCode: '008',
+          LancementCode: 'LT2600401',
+          OperatorName: 'Intérimaire 8',
+          StatusCode: 'TERMINE',
+          Status: 'Terminé',
+          StatutTraitement: null
+        }]
+      });
+
+      const result = await adminPage._resolveTransferEligibleOperations();
+      expect(result.eligible).toHaveLength(1);
+      expect(result.eligible[0].TempsId).toBe(501);
+      expect(mockApiService.consolidateMonitoringBatch).not.toHaveBeenCalled();
+    });
+
+    it('utilise le TempsId renvoyé quand la consolidation répond "Déjà consolidé"', async () => {
+      adminPage.operations = [{
+        OperatorCode: '319',
+        LancementCode: 'LT2600390',
+        OperatorName: 'CHESSEBEUF Maria',
+        StatusCode: 'TERMINE',
+        Status: 'Terminé',
+        _isWorkSegment: true,
+        _isUnconsolidated: true
+      }];
+      mockApiService.getMonitoringTemps
+        .mockResolvedValueOnce({ success: true, data: [] })
+        .mockResolvedValueOnce({ success: true, data: [] });
+      mockApiService.consolidateMonitoringBatch.mockResolvedValue({
+        success: true,
+        results: {
+          success: [],
+          skipped: [{
+            OperatorCode: '319',
+            LancementCode: 'LT2600390',
+            TempsId: 902,
+            reason: 'Déjà consolidé'
+          }],
+          errors: []
+        }
+      });
+
+      const result = await adminPage._resolveTransferEligibleOperations();
+      expect(result.eligible).toHaveLength(1);
+      expect(result.eligible[0].TempsId).toBe(902);
+    });
+  });
+
   describe('updateOperationsTable', () => {
     beforeEach(() => {
       adminPage = new AdminPage(mockApp);
