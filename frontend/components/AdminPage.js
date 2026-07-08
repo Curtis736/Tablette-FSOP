@@ -36,6 +36,78 @@ function getAdminStepColumnDisplay(operation) {
     return { stepCode: ph || rub || '-', stepLabel: rub || ph || '-' };
 }
 
+/** DateCreation → YYYY-MM-DD (jour civil). */
+function parseAdminRowDateYmd(op) {
+    const raw = op?.DateCreation ?? op?.dateCreation;
+    if (!raw) return null;
+    if (typeof raw === 'string') {
+        const m = raw.match(/^(\d{4}-\d{2}-\d{2})/);
+        if (m) return m[1];
+    }
+    if (raw instanceof Date && !Number.isNaN(raw.getTime())) {
+        return toLocalDateOnlyString(raw);
+    }
+    return null;
+}
+
+/** Affichage date type SILOG (JJ/MM/AAAA). */
+function formatAdminRowDate(op) {
+    const ymd = parseAdminRowDateYmd(op);
+    if (!ymd) return '-';
+    const [y, m, d] = ymd.split('-');
+    return `${d}/${m}/${y}`;
+}
+
+/** Extrait HH:mm pour le tri chronologique. */
+function parseAdminRowTimeHm(raw) {
+    if (!raw) return null;
+    if (typeof raw === 'string') {
+        const m = raw.match(/(\d{1,2}):(\d{2})/);
+        if (m) return `${m[1].padStart(2, '0')}:${m[2]}`;
+    }
+    if (raw instanceof Date && !Number.isNaN(raw.getTime())) {
+        return raw.toLocaleTimeString('fr-FR', {
+            timeZone: 'Europe/Paris',
+            hour: '2-digit',
+            minute: '2-digit',
+            hour12: false
+        });
+    }
+    return null;
+}
+
+/** Timestamp de tri : opérateur puis ordre chronologique (timeline SILOG). */
+function getAdminRowSortTimestamp(op) {
+    const isoStart = op?.StartTime ?? op?.startTime;
+    if (typeof isoStart === 'string' && isoStart.includes('T')) {
+        const t = new Date(isoStart).getTime();
+        if (!Number.isNaN(t)) return t;
+    }
+    const ymd = parseAdminRowDateYmd(op);
+    const hm = parseAdminRowTimeHm(isoStart);
+    if (ymd && hm) {
+        const t = new Date(`${ymd}T${hm}:00`).getTime();
+        if (!Number.isNaN(t)) return t;
+    }
+    if (ymd) {
+        const t = new Date(`${ymd}T00:00:00`).getTime();
+        if (!Number.isNaN(t)) return t;
+    }
+    return Number.MAX_SAFE_INTEGER;
+}
+
+function compareAdminTimelineRows(a, b) {
+    const opA = String(a?.OperatorCode || a?.operatorCode || a?.operatorId || '').trim();
+    const opB = String(b?.OperatorCode || b?.operatorCode || b?.operatorId || '').trim();
+    if (opA !== opB) return opA.localeCompare(opB, 'fr');
+    const tsA = getAdminRowSortTimestamp(a);
+    const tsB = getAdminRowSortTimestamp(b);
+    if (tsA !== tsB) return tsA - tsB;
+    const idA = Number(a?.TempsId ?? a?.EventId ?? a?.id ?? 0) || 0;
+    const idB = Number(b?.TempsId ?? b?.EventId ?? b?.id ?? 0) || 0;
+    return idA - idB;
+}
+
 class AdminPage {
     constructor(app) {
         this.app = app;
@@ -101,6 +173,19 @@ class AdminPage {
         }
         if (raw instanceof Date) return toLocalDateOnlyString(raw);
         return null;
+    }
+
+    /** Période multi-jours : préfixer la date dans les colonnes horaires (timeline SILOG, intitulés inchangés). */
+    _isAdminMultiDayPeriod() {
+        const period = document.getElementById('periodFilter')?.value || 'month';
+        return period === 'month' || period === 'week';
+    }
+
+    formatAdminTimelineTime(op, timeValue) {
+        const time = this.formatDateTime(timeValue);
+        if (time === '-' || !this._isAdminMultiDayPeriod()) return time;
+        const date = formatAdminRowDate(op);
+        return date === '-' ? time : `${date} ${time}`;
     }
 
     /**
@@ -648,8 +733,11 @@ class AdminPage {
                     PauseDuration: op.pauseDuration ? parseInt(op.pauseDuration.replace(/[^0-9]/g, '')) : 0,
                     ProductiveDuration: null,
                     EventsCount: op.events || 0,
-                    Phase: op.phase || 'PRODUCTION',
-                    CodeRubrique: op.codeRubrique || op.operatorId,
+                    // Ne PAS fabriquer de valeurs: sinon la clé de dédoublonnage diverge de la ligne
+                    // consolidée (ABTEMPS) et l'on obtient des doublons + le code opérateur affiché
+                    // à tort dans la colonne étape.
+                    Phase: op.phase || null,
+                    CodeRubrique: op.codeRubrique || null,
                     StatutTraitement: null,
                     Status: op.status || 'En cours',
                     StatusCode: op.statusCode || 'EN_COURS',
@@ -657,7 +745,7 @@ class AdminPage {
                     statusCode: op.statusCode || 'EN_COURS',
                     type: op.type || 'lancement',
                     _isPauseRow: isPauseRow,
-                    DateCreation: today,
+                    DateCreation: op.dateCreation || op.DateCreation || today,
                     CalculatedAt: null,
                     CalculationMethod: null,
                     _isUnconsolidated: isPauseRow ? false : true
@@ -1013,10 +1101,10 @@ class AdminPage {
     normalizeOperationStatus(op) {
         const status = (op?.StatusCode || op?.statusCode || '').toString().toUpperCase();
         const statusLabel = (op?.Status || op?.status || '').toString().toUpperCase();
+        if (status === 'PAUSE_TERMINEE' || statusLabel.includes('PAUSE TERMIN')) return 'PAUSE_TERMINEE';
         if (status.includes('EN_COURS') || statusLabel.includes('EN COURS') || statusLabel.includes('ENCOURS')) return 'EN_COURS';
-        if (status.includes('PAUSE') || status.includes('EN_PAUSE') || statusLabel.includes('PAUSE') || statusLabel.includes('EN PAUSE')) {
-            return 'EN_PAUSE';
-        }
+        if (status === 'EN_PAUSE' || statusLabel.includes('EN PAUSE')) return 'EN_PAUSE';
+        if (status.includes('PAUSE') || statusLabel.includes('PAUSE')) return 'EN_PAUSE';
         if (status.includes('TERMINE') || statusLabel.includes('TERMIN')) return 'TERMINE';
         if (this.hasMeaningfulEndTime(op)) return 'TERMINE';
         return 'EN_COURS';
@@ -1279,10 +1367,20 @@ class AdminPage {
         if (previousSelected) {
             const exists = Array.from(this.operatorSelect.options || []).some(opt => String(opt.value) === String(previousSelected));
             if (exists) {
-                this.operatorSelect.value = previousSelected;
+                this.operatorSelect.value = String(previousSelected);
+            } else {
+                // L'opérateur sélectionné n'est pas (encore) dans la liste rafraîchie
+                // (ex: liste globale pas encore chargée). On conserve son option pour
+                // ne pas réinitialiser silencieusement le filtre vers un autre opérateur.
+                const keepOption = createElement('option', { value: String(previousSelected) }, `Opérateur ${previousSelected}`);
+                this.operatorSelect.appendChild(keepOption);
+                this.operatorSelect.value = String(previousSelected);
             }
+            // Préserver le filtre courant quoi qu'il arrive
+            this.selectedOperatorCode = String(previousSelected);
+        } else {
+            this.selectedOperatorCode = this.operatorSelect?.value || '';
         }
-        this.selectedOperatorCode = this.operatorSelect?.value || '';
         
         this.logger.log('✅ Menu déroulant mis à jour avec', connectedOperators.length, 'connectés et', allOperators.length, 'globaux');
     }
@@ -1715,25 +1813,8 @@ class AdminPage {
         // On ne regroupe plus par OperatorCode: chaque enregistrement retourné par le backend apparaît dans le tableau.
         const getOperatorCode = (op) => String(op?.OperatorCode || op?.operatorCode || op?.operatorId || '').trim();
         const getLancementCode = (op) => String(op?.LancementCode || op?.lancementCode || '').trim().toUpperCase();
-        const getRowId = (op) => {
-            const tempsId = op?.TempsId ?? null;
-            const eventId = op?.EventId ?? op?.id ?? null;
-            const v = tempsId || eventId;
-            const n = v ? Number(v) : 0;
-            return Number.isFinite(n) ? n : 0;
-        };
-        // Trier les opérations pour un affichage stable (opérateur, lancement, heure de début), puis paginer
-        const sorted = [...filteredOperations].sort((a, b) => {
-            const opA = getOperatorCode(a);
-            const opB = getOperatorCode(b);
-            if (opA !== opB) return opA.localeCompare(opB);
-            const ltA = getLancementCode(a);
-            const ltB = getLancementCode(b);
-            if (ltA !== ltB) return ltA.localeCompare(ltB);
-            const startA = this.formatDateTime(a?.StartTime ?? a?.startTime) || '';
-            const startB = this.formatDateTime(b?.StartTime ?? b?.startTime) || '';
-            return startA.localeCompare(startB);
-        });
+        // Timeline SILOG : opérateur puis ordre chronologique (opérations + pauses mélangées)
+        const sorted = [...filteredOperations].sort(compareAdminTimelineRows);
         const operationsToDisplay = sorted.slice(start, end);
 
         // Mémoriser des compteurs d'affichage pour la pagination (fallback)
@@ -1826,7 +1907,9 @@ class AdminPage {
                 statutCode = rawCode
                     ? rawCode.toUpperCase().replace(/[^A-Z0-9_]/g, '_')
                     : this.normalizeOperationStatus(operation);
-                statutLabel = (operation.Status || operation.status || '').toString().trim()
+                const rawLabel = (operation.Status || operation.status || '').toString().trim();
+                statutLabel = rawLabel
+                    || STATUS_LABELS[statutCode]
                     || (statutCode === 'TERMINE' ? 'Terminé' : statutCode === 'EN_PAUSE' ? 'En pause' : 'En cours');
             }
             // Si pas de statut explicite mais une heure de fin réelle, l'opération est terminée
@@ -1882,21 +1965,21 @@ class AdminPage {
             row.appendChild(cell5);
             
             // Cellule 6: Heure début
-            const cell6 = createTableCell(formattedStartTime);
+            const cell6 = createTableCell(this.formatAdminTimelineTime(operation, operation.StartTime ?? operation.startTime));
             row.appendChild(cell6);
             
             // Cellule 7: Heure fin avec warning
-            const endTimeText = formattedEndTime + timeWarning;
+            const endTimeText = this.formatAdminTimelineTime(operation, operation.EndTime ?? operation.endTime) + timeWarning;
             const cell7 = createTableCell(endTimeText);
             row.appendChild(cell7);
             
-            // Cellule 8: Statut
+            // Cellule 9: Statut
             const cell8 = createTableCell('');
             const statusBadge = createBadge(statutLabel, `status-badge status-${statutCode}`);
             cell8.appendChild(statusBadge);
             row.appendChild(cell8);
             
-            // Cellule 9: Actions
+            // Cellule 10: Actions
             const cell9 = createTableCell('', { className: 'actions-cell' });
             if (!isPauseRow) {
             const editBtn = createButton({
@@ -3935,5 +4018,10 @@ class AdminPage {
     }
 }
 
-export { getAdminStepColumnDisplay };
+export {
+    getAdminStepColumnDisplay,
+    compareAdminTimelineRows,
+    getAdminRowSortTimestamp,
+    formatAdminRowDate
+};
 export default AdminPage;

@@ -520,6 +520,7 @@ function createPauseRowItem(pauseEvent, repriseEvent, referenceEvent) {
         generalStatus: statusCode,
         events: 2,
         lastUpdate: pauseEvent.CreatedAt || pauseEvent.DateCreation,
+        dateCreation: String(pauseEvent.DateCreation || '').substring(0, 10) || null,
         type: 'pause',
         _isPauseRow: true,
         editable: false
@@ -696,9 +697,19 @@ function processLancementEventsWithPauses(events, { includePauseRows = false } =
     });
     
     console.log(`🔍 Total d'items créés: ${processedItems.length}`);
-    return processedItems.sort((a, b) => 
-        new Date(b.lastUpdate) - new Date(a.lastUpdate)
-    );
+    return processedItems.sort((a, b) => {
+        const opA = String(a.operatorId || '').trim();
+        const opB = String(b.operatorId || '').trim();
+        if (opA !== opB) return opA.localeCompare(opB, 'fr');
+        const dateA = String(a.dateCreation || '').substring(0, 10);
+        const dateB = String(b.dateCreation || '').substring(0, 10);
+        const timeA = String(a.startTime || '99:99');
+        const timeB = String(b.startTime || '99:99');
+        const tsA = dateA ? new Date(`${dateA}T${timeA}:00`).getTime() : 0;
+        const tsB = dateB ? new Date(`${dateB}T${timeB}:00`).getTime() : 0;
+        if (tsA !== tsB) return tsA - tsB;
+        return String(a.id || '').localeCompare(String(b.id || ''), 'fr');
+    });
 }
 
 // Fonction helper pour créer un item de lancement
@@ -835,6 +846,7 @@ function createLancementItem(startEvent, sequence, status, statusLabel, endTime 
         events: sequence.length,
         // lastUpdate doit être une datetime fiable pour le tri
         lastUpdate: finEvent ? (finEvent.CreatedAt || finEvent.DateCreation) : (pauseEvent ? (pauseEvent.CreatedAt || pauseEvent.DateCreation) : (startEvent.CreatedAt || startEvent.DateCreation)),
+        dateCreation: String(startEvent.DateCreation || '').substring(0, 10) || null,
         type: (status === 'PAUSE' || status === 'PAUSE_TERMINEE') ? 'pause' : 'lancement'
     };
 }
@@ -1406,7 +1418,8 @@ async function getAdminOperations(date, page = 1, limit = 25, dateStart = null, 
                 events: lancement.events,
                 type: lancement.type || 'lancement',
                 _isPauseRow: lancement._isPauseRow === true,
-                editable: lancement.editable !== false
+                editable: lancement.editable !== false,
+                dateCreation: lancement.dateCreation || null
             };
         });
 

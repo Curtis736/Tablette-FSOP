@@ -1,5 +1,9 @@
 import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest';
-import AdminPage, { getAdminStepColumnDisplay } from '../../components/AdminPage.js';
+import AdminPage, {
+  getAdminStepColumnDisplay,
+  compareAdminTimelineRows,
+  getAdminRowSortTimestamp
+} from '../../components/AdminPage.js';
 
 // Mock des dépendances
 vi.mock('../../utils/TimeUtils.js', () => ({
@@ -34,6 +38,38 @@ describe('getAdminStepColumnDisplay', () => {
       stepCode: '912',
       stepLabel: 'PRODUCTION'
     });
+  });
+});
+
+describe('compareAdminTimelineRows (logique SILOG)', () => {
+  const mk = (overrides) => ({
+    OperatorCode: '922',
+    DateCreation: '2026-07-08',
+    StartTime: '08:00',
+    LancementCode: 'LT001',
+    ...overrides
+  });
+
+  it('trie par opérateur puis heure de début chronologique', () => {
+    const rows = [
+      mk({ StartTime: '13:53', LancementCode: 'LT002', TempsId: 3 }),
+      mk({ StartTime: '07:28', LancementCode: 'LT001', TempsId: 1 }),
+      mk({ StartTime: '12:00', LancementCode: 'LT002', TempsId: 2 }),
+      mk({ OperatorCode: '100', StartTime: '09:00', TempsId: 4 })
+    ];
+    const sorted = [...rows].sort(compareAdminTimelineRows);
+    expect(sorted.map((r) => r.StartTime)).toEqual(['09:00', '07:28', '12:00', '13:53']);
+  });
+
+  it('intercale les lignes de pause entre les opérations du même opérateur', () => {
+    const rows = [
+      mk({ StartTime: '12:00', LancementCode: 'LT002', _isPauseRow: false }),
+      mk({ StartTime: '10:00', LancementCode: 'LT002', _isPauseRow: true, type: 'pause' }),
+      mk({ StartTime: '07:28', LancementCode: 'LT001', _isPauseRow: false })
+    ];
+    const sorted = [...rows].sort(compareAdminTimelineRows);
+    expect(sorted.map((r) => r.StartTime)).toEqual(['07:28', '10:00', '12:00']);
+    expect(getAdminRowSortTimestamp(sorted[1])).toBeLessThan(getAdminRowSortTimestamp(sorted[2]));
   });
 });
 
@@ -282,6 +318,61 @@ describe('AdminPage', () => {
       }));
       adminPage.updateStats();
       expect(adminPage.activeLancements.textContent).toBe('8');
+    });
+  });
+
+  describe('dédoublonnage overlay consolidé/non consolidé', () => {
+    beforeEach(() => {
+      adminPage = new AdminPage(mockApp);
+    });
+
+    it('génère la même clé de créneau quand CodeRubrique/Phase sont vides (évite les doublons)', () => {
+      const consolidated = {
+        TempsId: 10,
+        OperatorCode: '922',
+        LancementCode: 'LT001',
+        Phase: null,
+        CodeRubrique: null,
+        StartTime: '08:00',
+        EndTime: '10:00'
+      };
+      const unconsolidated = {
+        OperatorCode: '922',
+        LancementCode: 'LT001',
+        Phase: null,
+        CodeRubrique: null,
+        StartTime: '08:00',
+        EndTime: '10:00',
+        _isUnconsolidated: true
+      };
+      expect(adminPage._getAdminMergeDedupSlotKey(consolidated))
+        .toBe(adminPage._getAdminMergeDedupSlotKey(unconsolidated));
+    });
+
+    it('supprime la ligne non consolidée si une ligne consolidée couvre le même créneau', () => {
+      const ops = [
+        {
+          TempsId: 10,
+          OperatorCode: '922',
+          LancementCode: 'LT001',
+          Phase: null,
+          CodeRubrique: null,
+          StartTime: '08:00',
+          EndTime: '10:00'
+        },
+        {
+          OperatorCode: '922',
+          LancementCode: 'LT001',
+          Phase: null,
+          CodeRubrique: null,
+          StartTime: '08:00',
+          EndTime: '10:00',
+          _isUnconsolidated: true
+        }
+      ];
+      const out = adminPage._dedupeAdminConsolidatedOverlay(ops);
+      expect(out).toHaveLength(1);
+      expect(out[0].TempsId).toBe(10);
     });
   });
 
