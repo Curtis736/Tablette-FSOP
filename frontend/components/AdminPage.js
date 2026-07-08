@@ -1747,7 +1747,25 @@ class AdminPage {
         }
 
         // Transmis (T) : masqués du tableau admin (opération figée côté SILOG).
-        filteredOperations = filteredOperations.filter(op => this.shouldShowAdminDashboardRow(op));
+        // On masque aussi les segments de travail / lignes non consolidées qui appartiennent
+        // à une opération déjà transmise (même opérateur + lancement + jour), sinon la ligne
+        // "réapparaît" via l'overlay historique alors qu'elle est figée.
+        const transmittedKeys = new Set();
+        for (const op of this.operations || []) {
+            if (String(op?.StatutTraitement ?? '').toUpperCase().trim() !== 'T') continue;
+            const oc = String(op?.OperatorCode || op?.operatorCode || op?.operatorId || '').trim();
+            const lc = String(op?.LancementCode || op?.lancementCode || '').trim().toUpperCase();
+            const ymd = this._parseOpDateCreationLocalYmd(op?.DateCreation) || '';
+            transmittedKeys.add(`${oc}|${lc}|${ymd}`);
+        }
+        filteredOperations = filteredOperations.filter(op => {
+            if (!this.shouldShowAdminDashboardRow(op)) return false;
+            if (transmittedKeys.size === 0) return true;
+            const oc = String(op?.OperatorCode || op?.operatorCode || op?.operatorId || '').trim();
+            const lc = String(op?.LancementCode || op?.lancementCode || '').trim().toUpperCase();
+            const ymd = this._parseOpDateCreationLocalYmd(op?.DateCreation) || '';
+            return !transmittedKeys.has(`${oc}|${lc}|${ymd}`);
+        });
 
         // Mémoriser pour stats cohérentes avec le tableau
         this._lastFilteredOperationsForStats = filteredOperations;
