@@ -254,6 +254,33 @@ class AdminPage {
     }
 
     /**
+     * SILOG : si des segments productifs (historique) existent pour opérateur+LT+jour,
+     * masquer la ligne consolidée ABTEMPS qui couvre toute la journée (évite le doublon).
+     */
+    _preferWorkSegmentsOverConsolidated(ops) {
+        if (!ops?.length) return ops;
+        const daysWithSegments = new Set();
+        for (const op of ops) {
+            if (op?._isWorkSegment || (op?._isUnconsolidated && op?.EventId && !op?._isPauseRow)) {
+                const ymd = this._parseOpDateCreationLocalYmd(op?.DateCreation);
+                if (!ymd) continue;
+                const lc = String(op?.LancementCode || op?.lancementCode || '').trim().toUpperCase();
+                const oc = String(op?.OperatorCode || op?.operatorCode || op?.operatorId || '').trim();
+                daysWithSegments.add(`${oc}|${lc}|${ymd}`);
+            }
+        }
+        if (daysWithSegments.size === 0) return ops;
+        return ops.filter((op) => {
+            if (op?.TempsId == null || String(op.TempsId).trim() === '') return true;
+            const ymd = this._parseOpDateCreationLocalYmd(op?.DateCreation);
+            if (!ymd) return true;
+            const lc = String(op?.LancementCode || op?.lancementCode || '').trim().toUpperCase();
+            const oc = String(op?.OperatorCode || op?.operatorCode || op?.operatorId || '').trim();
+            return !daysWithSegments.has(`${oc}|${lc}|${ymd}`);
+        });
+    }
+
+    /**
      * Quand plusieurs lignes partagent exactement le même créneau (souvent deux TempsId pour la même plage),
      * on n’en garde qu’une pour éviter les doublons visuels identiques.
      */
@@ -745,6 +772,7 @@ class AdminPage {
                     statusCode: op.statusCode || 'EN_COURS',
                     type: op.type || 'lancement',
                     _isPauseRow: isPauseRow,
+                    _isWorkSegment: op._isWorkSegment === true,
                     DateCreation: op.dateCreation || op.DateCreation || today,
                     CalculatedAt: null,
                     CalculationMethod: null,
@@ -840,7 +868,9 @@ class AdminPage {
             });
             
             this.operations = this._dedupeAdminIdenticalSlotRows(
-                this._dedupeAdminConsolidatedOverlay(Array.from(mergedMap.values()))
+                this._dedupeAdminConsolidatedOverlay(
+                    this._preferWorkSegmentsOverConsolidated(Array.from(mergedMap.values()))
+                )
             );
             
             // Consolidation automatique des opérations terminées sans TempsId (éviter les "lancement non consolidé")

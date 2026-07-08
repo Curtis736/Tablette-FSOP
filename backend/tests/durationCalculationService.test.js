@@ -129,3 +129,81 @@ describe('processLancementEventsWithPauses pause rows', () => {
     expect(pauseRows[0].editable).toBe(false);
   });
 });
+
+describe('processLancementEventsWithPauses work segments (SILOG)', () => {
+  const baseEvents = [
+    {
+      NoEnreg: 1,
+      Ident: 'DEBUT',
+      OperatorCode: '922',
+      CodeLanctImprod: 'LT2500721',
+      Phase: '010',
+      CodeRubrique: 'CONNECTA',
+      HeureDebut: '07:28',
+      DateCreation: '2026-07-08',
+      CreatedAt: '2026-07-08T07:28:00.000Z',
+      operatorName: 'Papy SHOMBE',
+      Article: 'Article test'
+    },
+    {
+      NoEnreg: 2,
+      Ident: 'PAUSE',
+      OperatorCode: '922',
+      CodeLanctImprod: 'LT2500721',
+      Phase: '010',
+      CodeRubrique: 'CONNECTA',
+      HeureDebut: '12:00',
+      DateCreation: '2026-07-08',
+      CreatedAt: '2026-07-08T12:00:00.000Z',
+      operatorName: 'Papy SHOMBE',
+      Article: 'Article test'
+    },
+    {
+      NoEnreg: 3,
+      Ident: 'REPRISE',
+      OperatorCode: '922',
+      CodeLanctImprod: 'LT2500721',
+      Phase: '010',
+      CodeRubrique: 'CONNECTA',
+      HeureDebut: '12:05',
+      DateCreation: '2026-07-08',
+      CreatedAt: '2026-07-08T12:05:00.000Z',
+      operatorName: 'Papy SHOMBE',
+      Article: 'Article test'
+    },
+    {
+      NoEnreg: 4,
+      Ident: 'FIN',
+      OperatorCode: '922',
+      CodeLanctImprod: 'LT2500721',
+      Phase: '010',
+      CodeRubrique: 'CONNECTA',
+      HeureFin: '13:05',
+      DateCreation: '2026-07-08',
+      CreatedAt: '2026-07-08T13:05:00.000Z',
+      operatorName: 'Papy SHOMBE',
+      Article: 'Article test'
+    }
+  ];
+
+  it('emits productive segments instead of full cycle + pause rows', () => {
+    const items = processLancementEventsWithPauses(baseEvents, { includeWorkSegments: true });
+    expect(items.filter((i) => i._isPauseRow)).toHaveLength(0);
+    expect(items.filter((i) => i._isWorkSegment)).toHaveLength(2);
+    expect(items[0].startTime).toBe('07:28');
+    expect(items[0].endTime).toBe('12:00');
+    expect(items[0].statusCode).toBe('TERMINE');
+    expect(items[1].startTime).toBe('12:05');
+    expect(items[1].endTime).toBe('13:05');
+    expect(items[1].statusCode).toBe('TERMINE');
+  });
+
+  it('emits open segment when cycle ends on REPRISE without FIN', () => {
+    const openEvents = baseEvents.filter((e) => e.Ident !== 'FIN');
+    const items = processLancementEventsWithPauses(openEvents, { includeWorkSegments: true });
+    expect(items).toHaveLength(2);
+    expect(items[1].startTime).toBe('12:05');
+    expect(items[1].endTime).toBeNull();
+    expect(items[1].statusCode).toBe('EN_COURS');
+  });
+});

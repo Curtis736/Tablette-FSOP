@@ -480,6 +480,24 @@ function extractEventTime(event) {
     return formatDateTime(event.CreatedAt || event.DateCreation);
 }
 
+function extractEventEndTime(event) {
+    if (!event) return null;
+    const heure = Array.isArray(event.HeureFin) ? event.HeureFin[0] : event.HeureFin;
+    if (heure && typeof heure === 'string' && /^\d{2}:\d{2}(:\d{2})?$/.test(heure)) {
+        return heure.substring(0, 5);
+    }
+    if (heure && heure instanceof Date) {
+        return heure.toLocaleTimeString('fr-FR', {
+            timeZone: 'Europe/Paris',
+            hour: '2-digit',
+            minute: '2-digit',
+            hour12: false
+        });
+    }
+    if (heure) return formatDateTime(heure);
+    return formatDateTime(event.CreatedAt || event.DateCreation);
+}
+
 function pairPauseRepriseEvents(pauseEvents, repriseEvents) {
     const pairs = [];
     const usedRepriseIds = new Set();
@@ -494,6 +512,68 @@ function pairPauseRepriseEvents(pauseEvents, repriseEvents) {
         pairs.push({ pauseEvent, repriseEvent: repriseEvent || null });
     });
     return pairs;
+}
+
+function createWorkSegmentItem(startEvent, endTime, statusCode, statusLabel, referenceEvent, segmentIndex) {
+    return {
+        id: `SEG-${startEvent.NoEnreg}-${segmentIndex}`,
+        operatorId: referenceEvent.OperatorCode,
+        operatorName: referenceEvent.operatorName || 'Non assigné',
+        lancementCode: referenceEvent.CodeLanctImprod,
+        article: referenceEvent.Article || 'N/A',
+        phase: referenceEvent.Phase,
+        codeRubrique: referenceEvent.CodeRubrique || null,
+        startTime: extractEventTime(startEvent),
+        endTime: endTime || null,
+        pauseTime: null,
+        duration: null,
+        pauseDuration: null,
+        status: statusLabel,
+        statusCode,
+        generalStatus: statusCode,
+        events: 1,
+        lastUpdate: startEvent.CreatedAt || startEvent.DateCreation,
+        dateCreation: String(referenceEvent.DateCreation || startEvent.DateCreation || '').substring(0, 10) || null,
+        type: 'lancement',
+        _isWorkSegment: true,
+        _isPauseRow: false,
+        editable: true
+    };
+}
+
+function buildWorkSegmentItems(debutEvent, cycleEvents, pauseEvents, repriseEvents, finEvent) {
+    const segments = [];
+    const pairs = pairPauseRepriseEvents(pauseEvents, repriseEvents);
+    let workStartEvent = debutEvent;
+    let segIdx = 0;
+
+    if (pauseEvents.length === 0) {
+        if (finEvent) {
+            const finEnd = extractEventEndTime(finEvent);
+            segments.push(createWorkSegmentItem(workStartEvent, finEnd, 'TERMINE', 'Terminé', debutEvent, segIdx++));
+        } else {
+            segments.push(createWorkSegmentItem(workStartEvent, null, 'EN_COURS', 'En cours', debutEvent, segIdx++));
+        }
+        return segments;
+    }
+
+    pairs.forEach(({ pauseEvent, repriseEvent }) => {
+        const pauseStart = extractEventTime(pauseEvent);
+        segments.push(createWorkSegmentItem(workStartEvent, pauseStart, 'TERMINE', 'Terminé', debutEvent, segIdx++));
+        if (repriseEvent) {
+            workStartEvent = repriseEvent;
+        }
+    });
+
+    const lastIdent = cycleEvents[cycleEvents.length - 1]?.Ident;
+    if (finEvent) {
+        const finEnd = extractEventEndTime(finEvent);
+        segments.push(createWorkSegmentItem(workStartEvent, finEnd, 'TERMINE', 'Terminé', debutEvent, segIdx++));
+    } else if (lastIdent === 'REPRISE' || (lastIdent === 'DEBUT' && pauseEvents.length === 0)) {
+        segments.push(createWorkSegmentItem(workStartEvent, null, 'EN_COURS', 'En cours', debutEvent, segIdx++));
+    }
+
+    return segments;
 }
 
 function createPauseRowItem(pauseEvent, repriseEvent, referenceEvent) {
@@ -527,7 +607,7 @@ function createPauseRowItem(pauseEvent, repriseEvent, referenceEvent) {
     };
 }
 
-function processLancementEventsWithPauses(events, { includePauseRows = false } = {}) {
+function processLancementEventsWithPauses(events, { includePauseRows = false, includeWorkSegments = false } = {}) {
     const lancementGroups = {};
     
     // 🔒 ISOLATION STRICTE : Regrouper par CodeLanctImprod + OperatorCode + Phase + CodeRubrique
@@ -673,6 +753,16 @@ function processLancementEventsWithPauses(events, { includePauseRows = false } =
                 console.log(`🔍 Ligne pour ${key}, cycle ${idx}:`, currentStatus);
                 console.log(`🔍 Pauses trouvées: ${pauseEvents.length}, Reprises trouvées: ${repriseEvents.length}`);
 
+                if (includeWorkSegments) {
+                    const segments = buildWorkSegmentItems(
+                        debutEvent,
+                        cycleEvents,
+                        pauseEvents,
+                        repriseEvents,
+                        finEvent
+                    );
+                    processedItems.push(...segments);
+                } else {
                 processedItems.push(
                     createLancementItem(
                         debutEvent,
@@ -691,6 +781,7 @@ function processLancementEventsWithPauses(events, { includePauseRows = false } =
                             createPauseRowItem(pauseEvent, repriseEvent, debutEvent)
                         );
                     });
+                }
                 }
             }
         });
@@ -1369,7 +1460,7 @@ async function getAdminOperations(date, page = 1, limit = 25, dateStart = null, 
         }
         
         // Utiliser la fonction de regroupement avec pauses séparées
-        const processedLancements = processLancementEventsWithPauses(filteredEvents, { includePauseRows: true });
+        const processedLancements = processLancementEventsWithPauses(filteredEvents, { includeWorkSegments: true });
         console.log('🔍 Événements après regroupement:', processedLancements.length);
         console.log('🔍 Détail des événements regroupés:', processedLancements.map(p => ({
             lancement: p.lancementCode,
@@ -1418,6 +1509,7 @@ async function getAdminOperations(date, page = 1, limit = 25, dateStart = null, 
                 events: lancement.events,
                 type: lancement.type || 'lancement',
                 _isPauseRow: lancement._isPauseRow === true,
+                _isWorkSegment: lancement._isWorkSegment === true,
                 editable: lancement.editable !== false,
                 dateCreation: lancement.dateCreation || null
             };
