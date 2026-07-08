@@ -150,6 +150,10 @@ class AdminPage {
         }
         const out = [];
         for (const op of ops) {
+            if (op?._isPauseRow) {
+                out.push(op);
+                continue;
+            }
             if (op?._isUnconsolidated) {
                 const tid = op?.TempsId ?? op?.tempsId;
                 if (tid == null || String(tid).trim() === '') {
@@ -187,7 +191,12 @@ class AdminPage {
     _dedupeAdminIdenticalSlotRows(ops) {
         if (!ops?.length) return ops;
         const winnerBySlot = new Map();
+        const pauseRows = [];
         for (const op of ops) {
+            if (op?._isPauseRow) {
+                pauseRows.push(op);
+                continue;
+            }
             const slot = this._getAdminMergeDedupSlotKey(op);
             const prev = winnerBySlot.get(slot);
             winnerBySlot.set(slot, prev ? this._pickBestAdminSlotDuplicate(prev, op) : op);
@@ -195,12 +204,13 @@ class AdminPage {
         const out = [];
         const seen = new Set();
         for (const op of ops) {
+            if (op?._isPauseRow) continue;
             const slot = this._getAdminMergeDedupSlotKey(op);
             if (seen.has(slot)) continue;
             seen.add(slot);
             out.push(winnerBySlot.get(slot));
         }
-        return out;
+        return [...out, ...pauseRows];
     }
 
     initializeElements() {
@@ -616,7 +626,9 @@ class AdminPage {
             // Convertir les opérations de getAdminData au format monitoring (non consolidées)
             let adminOps = [];
             if (data && data.operations && data.operations.length > 0) {
-                adminOps = data.operations.map(op => ({
+                adminOps = data.operations.map(op => {
+                    const isPauseRow = op.type === 'pause' || op._isPauseRow === true;
+                    return {
                     // IMPORTANT:
                     // - TempsId = identifiant de ABTEMPS_OPERATEURS (consolidé)
                     // - EventId / id = identifiant de ABHISTORIQUE_OPERATEURS (non consolidé)
@@ -643,11 +655,14 @@ class AdminPage {
                     StatusCode: op.statusCode || 'EN_COURS',
                     status: op.status || 'En cours',
                     statusCode: op.statusCode || 'EN_COURS',
+                    type: op.type || 'lancement',
+                    _isPauseRow: isPauseRow,
                     DateCreation: today,
                     CalculatedAt: null,
                     CalculationMethod: null,
-                    _isUnconsolidated: true
-                }));
+                    _isUnconsolidated: isPauseRow ? false : true
+                };
+                });
             }
             
             // Appliquer les filtres sur les opérations non consolidées
@@ -743,6 +758,7 @@ class AdminPage {
             // Consolidation automatique des opérations terminées sans TempsId (éviter les "lancement non consolidé")
             if (enableAutoConsolidate && !this._isConsolidating) {
                 const terminatedWithoutTempsId = this.operations.filter(op =>
+                    !op._isPauseRow &&
                     this.isOperationTerminated(op) && !op.TempsId && (op._isUnconsolidated === true || op.OperatorCode)
                 );
                 if (terminatedWithoutTempsId.length > 0) {
@@ -1009,7 +1025,8 @@ class AdminPage {
     updateStats(opsOverride = null) {
         // Calculer les statistiques depuis les opérations affichées dans le tableau
         // Cela garantit la cohérence entre le tableau et les statistiques
-        const allOps = Array.isArray(opsOverride) ? opsOverride : (this._lastFilteredOperationsForStats || this.operations || []);
+        const allOps = (Array.isArray(opsOverride) ? opsOverride : (this._lastFilteredOperationsForStats || this.operations || []))
+            .filter(op => !op?._isPauseRow);
 
         const getOperatorCode = (op) => {
             // Best-effort selon les différentes sources (admin ops vs monitoring)
@@ -1774,6 +1791,15 @@ class AdminPage {
             });
             
             const row = createElement('tr');
+            const isPauseRow = operation._isPauseRow === true || operation.type === 'pause';
+
+            if (isPauseRow) {
+                row.classList.add('pause-row');
+                const pauseStatusCode = String(operation.StatusCode || operation.statusCode || '').toUpperCase();
+                if (pauseStatusCode === 'PAUSE_TERMINEE') {
+                    row.classList.add('pause-terminee');
+                }
+            }
             
             // Identifiants (ne pas confondre):
             // - TempsId: ABTEMPS_OPERATEURS (consolidé)
@@ -1824,7 +1850,14 @@ class AdminPage {
             // Cellule 2: Lancement avec badge multi-opérateurs
             const cell2 = createTableCell('');
             const lancementDiv = createElement('div', { style: { display: 'flex', flexDirection: 'column', gap: '4px' } });
-            const lancementCodeDiv = createElement('div', {}, operation.LancementCode || '-');
+            const lancementCodeDiv = createElement('div', {}, '');
+            if (isPauseRow) {
+                const pauseIcon = createElement('i', { className: 'fas fa-pause-circle pause-icon' });
+                lancementCodeDiv.appendChild(pauseIcon);
+                lancementCodeDiv.appendChild(document.createTextNode(` ${operation.LancementCode || '-'}`));
+            } else {
+                lancementCodeDiv.textContent = operation.LancementCode || '-';
+            }
             lancementDiv.appendChild(lancementCodeDiv);
             
             const lt = String(operation.LancementCode || '').trim().toUpperCase();
@@ -1865,6 +1898,7 @@ class AdminPage {
             
             // Cellule 9: Actions
             const cell9 = createTableCell('', { className: 'actions-cell' });
+            if (!isPauseRow) {
             const editBtn = createButton({
                 icon: 'fas fa-edit',
                 className: 'btn-edit',
@@ -1891,6 +1925,7 @@ class AdminPage {
             });
             cell9.appendChild(editBtn);
             cell9.appendChild(deleteBtn);
+            }
             row.appendChild(cell9);
             
             this.operationsTableBody.appendChild(row);
@@ -1937,7 +1972,7 @@ class AdminPage {
 
             // 1) Prendre uniquement les opérations TERMINÉES non déjà transférées
             let terminatedOps = allRecordsData.filter(
-                op => this.isOperationTerminated(op) && op.StatutTraitement !== 'T'
+                op => !op._isPauseRow && this.isOperationTerminated(op) && op.StatutTraitement !== 'T'
             );
 
             this.logger.log(`📊 Opérations TERMINÉES non transférées: ${terminatedOps.length}`);

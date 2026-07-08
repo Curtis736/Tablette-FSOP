@@ -462,7 +462,71 @@ function processLancementEventsSingleLine(events) {
 }
 
 // Fonction pour regrouper les événements par lancement et calculer les temps (évite les doublons)
-function processLancementEventsWithPauses(events) {
+function extractEventTime(event) {
+    if (!event) return null;
+    const heure = Array.isArray(event.HeureDebut) ? event.HeureDebut[0] : event.HeureDebut;
+    if (heure && typeof heure === 'string' && /^\d{2}:\d{2}(:\d{2})?$/.test(heure)) {
+        return heure.substring(0, 5);
+    }
+    if (heure && heure instanceof Date) {
+        return heure.toLocaleTimeString('fr-FR', {
+            timeZone: 'Europe/Paris',
+            hour: '2-digit',
+            minute: '2-digit',
+            hour12: false
+        });
+    }
+    if (heure) return formatDateTime(heure);
+    return formatDateTime(event.CreatedAt || event.DateCreation);
+}
+
+function pairPauseRepriseEvents(pauseEvents, repriseEvents) {
+    const pairs = [];
+    const usedRepriseIds = new Set();
+    pauseEvents.forEach((pauseEvent) => {
+        const pauseTs = new Date(pauseEvent.CreatedAt || pauseEvent.DateCreation).getTime();
+        const repriseEvent = repriseEvents.find((reprise) => {
+            if (usedRepriseIds.has(reprise.NoEnreg)) return false;
+            const repriseTs = new Date(reprise.CreatedAt || reprise.DateCreation).getTime();
+            return repriseTs >= pauseTs;
+        });
+        if (repriseEvent) usedRepriseIds.add(repriseEvent.NoEnreg);
+        pairs.push({ pauseEvent, repriseEvent: repriseEvent || null });
+    });
+    return pairs;
+}
+
+function createPauseRowItem(pauseEvent, repriseEvent, referenceEvent) {
+    const startTime = extractEventTime(pauseEvent);
+    const endTime = repriseEvent ? extractEventTime(repriseEvent) : null;
+    const statusCode = repriseEvent ? 'PAUSE_TERMINEE' : 'EN_PAUSE';
+    const statusLabel = repriseEvent ? 'Pause terminée' : 'En pause';
+
+    return {
+        id: `PAUSE-${pauseEvent.NoEnreg}`,
+        operatorId: referenceEvent.OperatorCode,
+        operatorName: referenceEvent.operatorName || 'Non assigné',
+        lancementCode: referenceEvent.CodeLanctImprod,
+        article: referenceEvent.Article || 'N/A',
+        phase: referenceEvent.Phase,
+        codeRubrique: referenceEvent.CodeRubrique || null,
+        startTime,
+        endTime,
+        pauseTime: startTime,
+        duration: null,
+        pauseDuration: null,
+        status: statusLabel,
+        statusCode,
+        generalStatus: statusCode,
+        events: 2,
+        lastUpdate: pauseEvent.CreatedAt || pauseEvent.DateCreation,
+        type: 'pause',
+        _isPauseRow: true,
+        editable: false
+    };
+}
+
+function processLancementEventsWithPauses(events, { includePauseRows = false } = {}) {
     const lancementGroups = {};
     
     // 🔒 ISOLATION STRICTE : Regrouper par CodeLanctImprod + OperatorCode + Phase + CodeRubrique
@@ -619,6 +683,14 @@ function processLancementEventsWithPauses(events) {
                         repriseEvents
                     )
                 );
+
+                if (includePauseRows && pauseEvents.length > 0) {
+                    pairPauseRepriseEvents(pauseEvents, repriseEvents).forEach(({ pauseEvent, repriseEvent }) => {
+                        processedItems.push(
+                            createPauseRowItem(pauseEvent, repriseEvent, debutEvent)
+                        );
+                    });
+                }
             }
         });
     });
@@ -1285,7 +1357,7 @@ async function getAdminOperations(date, page = 1, limit = 25, dateStart = null, 
         }
         
         // Utiliser la fonction de regroupement avec pauses séparées
-        const processedLancements = processLancementEventsWithPauses(filteredEvents);
+        const processedLancements = processLancementEventsWithPauses(filteredEvents, { includePauseRows: true });
         console.log('🔍 Événements après regroupement:', processedLancements.length);
         console.log('🔍 Détail des événements regroupés:', processedLancements.map(p => ({
             lancement: p.lancementCode,
@@ -1332,7 +1404,9 @@ async function getAdminOperations(date, page = 1, limit = 25, dateStart = null, 
                 statusCode: lancement.statusCode,
                 generalStatus: lancement.generalStatus,
                 events: lancement.events,
-                editable: true
+                type: lancement.type || 'lancement',
+                _isPauseRow: lancement._isPauseRow === true,
+                editable: lancement.editable !== false
             };
         });
 
