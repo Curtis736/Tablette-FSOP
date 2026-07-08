@@ -57,16 +57,14 @@ docker build --no-cache -t docker-sedi-backend:latest -f docker/Dockerfile.backe
 echo ""
 echo "🔨 Reconstruction de l'image frontend (sans cache)..."
 SSL_BUILD_ARG=""
+# Ne PAS sourcer tout le .env: certaines valeurs (chemins avec espaces/accents) ne sont pas
+# quotées et casseraient le build sous bash. On extrait uniquement SSL_EXTRA_IP.
 if [ -f "docker/.env" ]; then
-    # shellcheck disable=SC1091
-    set -a
-    # shellcheck source=/dev/null
-    . "docker/.env"
-    set +a
-fi
-if [ -n "${SSL_EXTRA_IP:-}" ]; then
-    SSL_BUILD_ARG="--build-arg SSL_EXTRA_IP=${SSL_EXTRA_IP}"
-    echo "   Certificat avec IP locale : ${SSL_EXTRA_IP}"
+    SSL_EXTRA_IP_VALUE="$(grep -E '^[[:space:]]*SSL_EXTRA_IP[[:space:]]*=' docker/.env | tail -n1 | cut -d'=' -f2- | tr -d '\r' | tr -d '"'\''' | xargs 2>/dev/null || true)"
+    if [ -n "${SSL_EXTRA_IP_VALUE:-}" ]; then
+        SSL_BUILD_ARG="--build-arg SSL_EXTRA_IP=${SSL_EXTRA_IP_VALUE}"
+        echo "   Certificat avec IP locale : ${SSL_EXTRA_IP_VALUE}"
+    fi
 fi
 docker build --no-cache ${SSL_BUILD_ARG} -t docker-sedi-frontend:latest -f docker/Dockerfile.frontend .
 
