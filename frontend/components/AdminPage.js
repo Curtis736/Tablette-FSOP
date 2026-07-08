@@ -189,19 +189,12 @@ class AdminPage {
     }
 
     /**
-     * Lignes transmises (T) : visibles admin tant que DateCreation n’est pas plus vieille que TRANSMITTED_VISIBLE_DAYS.
+     * Lignes transmises à SILOG (StatutTraitement='T') : masquées du tableau admin.
+     * Une fois transmise, l'opération n'est plus modifiable/supprimable et n'a plus à être affichée.
      */
     shouldShowAdminDashboardRow(op) {
         const st = String(op?.StatutTraitement ?? '').toUpperCase().trim();
-        if (st !== 'T') return true;
-        const created = this._parseOpDateCreationLocalYmd(op?.DateCreation);
-        if (!created) return true;
-        const today = toLocalDateOnlyString(new Date());
-        const c = new Date(`${created}T12:00:00`);
-        const t = new Date(`${today}T12:00:00`);
-        if (Number.isNaN(c.getTime()) || Number.isNaN(t.getTime())) return true;
-        const ageDays = Math.floor((t - c) / 86400000);
-        return ageDays <= ADMIN_CONFIG.TRANSMITTED_VISIBLE_DAYS;
+        return st !== 'T';
     }
 
     /**
@@ -1753,7 +1746,7 @@ class AdminPage {
             this.logger.log(`📊 Après filtrage recherche: ${filteredOperations.length} opérations`);
         }
 
-        // Transmis (T) : masqués au-delà de TRANSMITTED_VISIBLE_DAYS après DateCreation ; restent visibles ~1 mois pour l’audit admin uniquement.
+        // Transmis (T) : masqués du tableau admin (opération figée côté SILOG).
         filteredOperations = filteredOperations.filter(op => this.shouldShowAdminDashboardRow(op));
 
         // Mémoriser pour stats cohérentes avec le tableau
