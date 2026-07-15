@@ -79,6 +79,7 @@ services:
       # Validation auto des temps terminés → StatutTraitement='O' (V_REMONTE_TEMPS → SILOG)
       - ENABLE_AUTO_VALIDATE_TEMPS=${ENABLE_AUTO_VALIDATE_TEMPS:-true}
       - AUTO_VALIDATE_TEMPS_HOUR=${AUTO_VALIDATE_TEMPS_HOUR:-20}
+      - AUTO_VALIDATE_ON_FIN=${AUTO_VALIDATE_ON_FIN:-true}
       - SILOG_SSH_HOST=${SILOG_SSH_HOST:-SERVEURERP}
       - SILOG_SSH_USER=${SILOG_SSH_USER:-maintenance}
       - SILOG_SSH_PORT=${SILOG_SSH_PORT:-22}

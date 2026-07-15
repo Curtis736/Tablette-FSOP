@@ -1016,6 +1016,68 @@ class MonitoringService {
     }
 
     /**
+     * Validation immédiate à la fin d'opération (NULL → 'O') pour alimenter V_REMONTE_TEMPS
+     * avant le prochain passage SEDI_ETDIFF (ex. toutes les 2 h).
+     */
+    static isAutoValidateOnFinEnabled() {
+        return String(process.env.AUTO_VALIDATE_ON_FIN ?? 'true').toLowerCase() !== 'false';
+    }
+
+    /**
+     * Passe un TempsId terminé en 'O' s'il est encore NULL (idempotent).
+     * @param {number} tempsId
+     * @returns {Promise<{ validated: boolean, tempsId?: number, reason?: string }>}
+     */
+    static async validateTempsIdForSilog(tempsId) {
+        if (!tempsId) {
+            return { validated: false, reason: 'missing_temps_id' };
+        }
+        if (!this.isAutoValidateOnFinEnabled()) {
+            return { validated: false, reason: 'disabled', tempsId };
+        }
+
+        const { executeNonQuery, executeQuery } = require('../config/database');
+        const rows = await executeQuery(
+            `
+            SELECT TempsId, StatutTraitement, EndTime, ProductiveDuration
+            FROM [SEDI_APP_INDEPENDANTE].[dbo].[ABTEMPS_OPERATEURS]
+            WHERE TempsId = @tempsId
+            `,
+            { tempsId }
+        );
+        if (!rows?.length) {
+            return { validated: false, reason: 'not_found', tempsId };
+        }
+
+        const row = rows[0];
+        const status = row.StatutTraitement == null ? null : String(row.StatutTraitement).trim().toUpperCase();
+        if (status === 'T') {
+            return { validated: false, reason: 'already_transmitted', tempsId };
+        }
+        if (status === 'O') {
+            return { validated: false, reason: 'already_validated', tempsId };
+        }
+        if (!row.EndTime || Number(row.ProductiveDuration) <= 0) {
+            return { validated: false, reason: 'not_eligible', tempsId };
+        }
+
+        const result = await executeNonQuery(
+            `
+            UPDATE [SEDI_APP_INDEPENDANTE].[dbo].[ABTEMPS_OPERATEURS]
+            SET StatutTraitement = 'O'
+            WHERE TempsId = @tempsId
+              AND StatutTraitement IS NULL
+            `,
+            { tempsId }
+        );
+        const validated = (result?.rowsAffected || 0) > 0;
+        if (validated) {
+            console.log(`✅ TempsId ${tempsId} validé (O) — visible V_REMONTE_TEMPS / SEDI_ETDIFF`);
+        }
+        return { validated, tempsId };
+    }
+
+    /**
      * Valide les temps terminés (NULL → 'O') pour exposition dans V_REMONTE_TEMPS.
      * @param {Object} options
      * @param {boolean} options.includeToday - inclure le jour courant (requis avant job SILOG ~17h15)

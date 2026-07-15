@@ -22,6 +22,32 @@ class ConsolidationService {
     }
 
     /**
+     * Validation SILOG (NULL → 'O') après consolidation hors transaction.
+     */
+    static async _finishConsolidation(result, options = {}) {
+        if (
+            result?.success &&
+            result?.tempsId &&
+            !options?.db &&
+            options?.skipSilogValidate !== true
+        ) {
+            try {
+                const MonitoringService = require('./MonitoringService');
+                const v = await MonitoringService.validateTempsIdForSilog(result.tempsId);
+                if (v) {
+                    result.silogValidated = v.validated === true;
+                    if (v.reason && !v.validated) {
+                        result.silogValidateReason = v.reason;
+                    }
+                }
+            } catch (e) {
+                console.warn('Validation SILOG auto après consolidation (non bloquant):', e?.message || e);
+            }
+        }
+        return result;
+    }
+
+    /**
      * Sélectionne le "dernier cycle" (DEBUT..FIN) pertinent parmi tous les événements d'un opérateur/lancement.
      * - Si options.phase / options.codeRubrique / options.dateCreation sont fournis, on scope dessus.
      * - Sinon on infère à partir du dernier événement FIN (ou à défaut du dernier événement).
@@ -324,13 +350,13 @@ class ConsolidationService {
                     const rows = await db.executeQuery(byStartQuery, { operatorCode, lancementCode, startTime });
                     if (rows && rows.length > 0) {
                         console.log(`ℹ️ Opération déjà consolidée (StartTime match): TempsId=${rows[0].TempsId}`);
-                        return {
+                        return await ConsolidationService._finishConsolidation({
                             success: true,
                             tempsId: rows[0].TempsId,
                             error: null,
                             warnings: ['Opération déjà consolidée (StartTime)'],
                             alreadyExists: true
-                        };
+                        }, options);
                     }
                 } catch (e) {
                     // best-effort: ne pas bloquer si ce check échoue
@@ -357,13 +383,13 @@ class ConsolidationService {
                 });
                 if (existing.length > 0) {
                     console.log(`ℹ️ Opération déjà consolidée: TempsId=${existing[0].TempsId}`);
-                    return {
+                    return await ConsolidationService._finishConsolidation({
                         success: true,
                         tempsId: existing[0].TempsId,
                         error: null,
                         warnings: ['Opération déjà consolidée'],
                         alreadyExists: true
-                    };
+                    }, options);
                 }
             }
             
@@ -439,13 +465,13 @@ class ConsolidationService {
             
             console.log(`✅ Consolidation réussie: TempsId=${tempsId}, Durée=${durations.totalDuration}min (${durations.productiveDuration}min productif)`);
             
-            return {
+            return await ConsolidationService._finishConsolidation({
                 success: true,
                 tempsId,
                 error: null,
                 warnings: validation.warnings || [],
                 durations
-            };
+            }, options);
             
         } catch (error) {
             console.error(`❌ Erreur lors de la consolidation de ${operatorCode}/${lancementCode}:`, error);
@@ -465,13 +491,13 @@ class ConsolidationService {
                         `;
                         const byStart = await db.executeQuery(byStartQuery, { operatorCode, lancementCode, startTime });
                         if (byStart && byStart.length > 0) {
-                            return {
+                            return await ConsolidationService._finishConsolidation({
                                 success: true,
                                 tempsId: byStart[0].TempsId,
                                 error: null,
                                 warnings: ['Opération déjà consolidée (détecté via StartTime après erreur UNIQUE)'],
                                 alreadyExists: true
-                            };
+                            }, options);
                         }
                     }
                 } catch (e) {
@@ -498,13 +524,13 @@ class ConsolidationService {
                         dateCreation: opDate
                     });
                     if (existing.length > 0) {
-                        return {
+                        return await ConsolidationService._finishConsolidation({
                             success: true,
                             tempsId: existing[0].TempsId,
                             error: null,
                             warnings: ['Opération déjà consolidée (détecté après erreur)'],
                             alreadyExists: true
-                        };
+                        }, options);
                     }
                 } catch (queryError) {
                     // Ignorer l'erreur de requête

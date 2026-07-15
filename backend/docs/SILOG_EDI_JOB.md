@@ -20,9 +20,10 @@
 | Étape | Qui | Action | StatutTraitement |
 |-------|-----|--------|-----------------|
 | 1 | Backend (opérations) | INSERT dans ABTEMPS_OPERATEURS | `NULL` |
-| 2 | Backend (auto **20h** ou admin « Transfert ») | UPDATE StatutTraitement = 'O' (jour courant inclus) | `NULL` → `'O'` |
+| 2a | Backend (**AUTO_VALIDATE_ON_FIN**, dès FIN opérateur) | UPDATE StatutTraitement = 'O' si terminé | `NULL` → `'O'` |
+| 2b | Backend (auto **20h** ou admin « Transfert ») | UPDATE StatutTraitement = 'O' (filet de sécurité) | `NULL` → `'O'` |
 | 3 | V_REMONTE_TEMPS | Expose les lignes 'O' + ProductiveDuration > 0 | `'O'` |
-| 4 | SEDI_ETDIFF (SVC_SILOG, ex. ~17h15 le lendemain) | Lit V_REMONTE_TEMPS, intègre dans SILOG | `'O'` |
+| 4 | SEDI_ETDIFF (SVC_SILOG, cible **toutes 2 h 8h–20h** ou ~20h) | Lit V_REMONTE_TEMPS, intègre dans SILOG | `'O'` |
 | 5 | SILOG / fin de job SEDI_ETDIFF | Mise à jour du statut côté base après intégration (voir retour Franck MAILLARD, avril 2026) | `'O'` → `'T'` (ou équivalent métier) |
 
 ### Point critique : passage en 'T' (statut après intégration SILOG)
@@ -48,7 +49,9 @@ Le backend FSOP continue d’écrire `TempsID` (identité technique SQL) ; **ne 
 ### Fréquence d’exécution EDI
 
 - Ancienne observation (mars 2026) : exécutions très fréquentes sur `SVC_SILOG`.
-- **Depuis le 01/04/2026** : la tâche EDI ne tourne plus qu’**une fois par jour** (paramétrage planificateur / SILOG — hors code FSOP). Adapter les attentes métier et le seuil `SILOG_STALE_THRESHOLD_HOURS` si besoin.
+- **Depuis le 01/04/2026** : la tâche EDI ne tourne plus qu’**une fois par jour** (paramétrage planificateur / SILOG — hors code FSOP).
+- **Besoin métier (David, juillet 2026)** : voir les temps **directement dans SILOG** en cours de journée → planifier **SEDI_ETDIFF toutes les 1–2 h entre 8h et 20h** sur `SVC_SILOG` (action Franck / infra, hors FSOP).
+- FSOP alimente `V_REMONTE_TEMPS` via **`AUTO_VALIDATE_ON_FIN=true`** (validation `O` dès fin d’opération) + filet **20h**.
 
 ### Lancements soldés et lignes non validées
 
@@ -63,7 +66,7 @@ Le backend FSOP continue d’écrire `TempsID` (identité technique SQL) ; **ne 
 - **Poste** : `SVC_SILOG` (et NON `SERVEURERP`)
 - **Utilisateur SILOG** : `Production8`
 - **Planificateur de tâches** : sur `SVC_SILOG` (accès requis pour vérifier la fréquence)
-- **Fréquence SEDI_ETDIFF (tablettes CURTIS)** : **~17h15** chaque jour sur `SVC_SILOG` (retour exploitation, juillet 2026).
+- **Fréquence SEDI_ETDIFF (tablettes CURTIS)** : **~17h15** chaque jour sur `SVC_SILOG` (retour exploitation, juillet 2026) — **à faire évoluer** vers toutes **2 h (8h–20h)** pour visibilité SILOG en journée.
 - **Fréquence SIL_ETDIFF (Itium / saisie SILOG native)** : flux distinct, ne pas confondre.
 - Ancienne observation (mars 2026) : exécutions très fréquentes ; depuis avril 2026 observation **quotidienne** pour SEDI_ETDIFF.
 
@@ -90,7 +93,7 @@ start-process -FilePath "\\SERVEURERP\SILOG8\SILOG.exe" `
 Le backend est en mode `SILOG_REMOTE_MODE=scheduled` : il **ne déclenche pas** SILOG.exe.
 Il se contente de :
 1. Écrire dans `ABTEMPS_OPERATEURS`
-2. Passer `StatutTraitement = 'O'` (validation auto à 20h ou manuelle)
+2. Passer `StatutTraitement = 'O'` (**dès fin d'opération** si `AUTO_VALIDATE_ON_FIN=true`, plus validation auto à 20h ou manuelle)
 3. Surveiller que les enregistrements 'O' sont consommés (watchdog)
 
 ### Variables d'environnement pertinentes
@@ -101,6 +104,7 @@ SILOG_REMOTE_MODE=scheduled
 # Validation automatique des temps
 ENABLE_AUTO_VALIDATE_TEMPS=true
 AUTO_VALIDATE_TEMPS_HOUR=20
+AUTO_VALIDATE_ON_FIN=true
 
 # Watchdog : alerte si des enregistrements 'O' ne sont pas passés 'T' après X heures
 SILOG_STALE_THRESHOLD_HOURS=24

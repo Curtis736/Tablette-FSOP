@@ -51,6 +51,7 @@ services:
       # Validation auto des temps terminés → StatutTraitement='O' (V_REMONTE_TEMPS)
       - ENABLE_AUTO_VALIDATE_TEMPS=${ENABLE_AUTO_VALIDATE_TEMPS:-true}
       - AUTO_VALIDATE_TEMPS_HOUR=${AUTO_VALIDATE_TEMPS_HOUR:-20}
+      - AUTO_VALIDATE_ON_FIN=${AUTO_VALIDATE_ON_FIN:-true}
       # FSOP (tracabilité / templates)
       - TRACEABILITY_DIR=${TRACEABILITY_DIR:-/mnt/services}
       - FSOP_TEMPLATES_DIR=${FSOP_TEMPLATES_DIR:-}
