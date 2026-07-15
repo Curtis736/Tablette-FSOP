@@ -2374,10 +2374,14 @@ class AdminPage {
                 const triggerEdiJob = confirm('Déclencher EDI_JOB après transfert ?');
                 const result = await this.apiService.validateAndTransmitMonitoringBatch(ids, {
                     triggerEdiJob,
-                    adminMarkTransmitted: true
+                    // En mode planifié SILOG (17h15), ne passer qu'en 'O' : le job SEDI_ETDIFF consomme
+                    // V_REMONTE_TEMPS puis bascule en 'T'. Un marquage T ici empêche la remontée.
+                    adminMarkTransmitted: false
                 });
                 if (result?.success) {
-                    this.notificationManager.success(`Transfert terminé: ${result.count || ids.length} opération(s) transférée(s)`);
+                    this.notificationManager.success(
+                        `${result.count || ids.length} opération(s) validée(s) (statut O) — remontée SILOG après validation auto ~20h`
+                    );
                     // Recharger les données pour mettre à jour l'affichage
                     await this.loadData(false); // Désactiver autoConsolidate après transfert
                     // Mettre à jour le tableau pour refléter les changements
@@ -2513,10 +2517,12 @@ class AdminPage {
         const triggerEdiJob = confirm('Déclencher EDI_JOB après transfert ?');
         const result = await this.apiService.validateAndTransmitMonitoringBatch(ids, {
             triggerEdiJob,
-            adminMarkTransmitted: true
+            adminMarkTransmitted: false
         });
         if (result?.success) {
-                this.notificationManager.success(`Transfert terminé: ${result.count || ids.length} opération(s) transférée(s)`);
+                this.notificationManager.success(
+                    `${result.count || ids.length} opération(s) validée(s) (statut O) — remontée SILOG après validation auto ~20h`
+                );
             this.hideTransferModal();
                 await this.loadData(false); // Désactiver autoConsolidate après transfert
         } else {

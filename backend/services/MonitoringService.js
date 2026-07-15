@@ -1016,12 +1016,36 @@ class MonitoringService {
     }
 
     /**
-     * Clôture « dashboard » : pour les journées **strictement avant aujourd'hui**, valider puis marquer transmis
-     * les temps terminés encore en NULL / A / O, afin de vider l’admin au passage de minuit (tâche planifiée serveur).
-     * Les lignes du jour courant ne sont pas modifiées.
+     * Valide les temps terminés (NULL → 'O') pour exposition dans V_REMONTE_TEMPS.
+     * @param {Object} options
+     * @param {boolean} options.includeToday - inclure le jour courant (requis avant job SILOG ~17h15)
+     */
+    static async autoValidateEligibleTemps({ includeToday = false } = {}) {
+        const { executeNonQuery } = require('../config/database');
+        const dateCond = includeToday
+            ? '1=1'
+            : 'CAST(DateCreation AS DATE) < CAST(GETDATE() AS DATE)';
+        const result = await executeNonQuery(
+            `
+            UPDATE [SEDI_APP_INDEPENDANTE].[dbo].[ABTEMPS_OPERATEURS]
+            SET StatutTraitement = 'O'
+            WHERE StatutTraitement IS NULL
+              AND ProductiveDuration > 0
+              AND EndTime IS NOT NULL
+              AND ${dateCond}
+            `
+        );
+        return { count: result?.rowsAffected || 0 };
+    }
+
+    /**
+     * Clôture « dashboard » : pour les journées **strictement avant aujourd'hui**, valider les temps terminés
+     * encore en NULL / A. En mode SILOG planifié, ne pas marquer 'T' ici (SEDI_ETDIFF ~17h15 le fait).
      */
     static async runMidnightDashboardTransmit() {
         const { executeNonQuery } = require('../config/database');
+        const remoteMode = String(process.env.SILOG_REMOTE_MODE || '').trim().toLowerCase();
+        const isScheduledMode = ['scheduled', 'disable', 'disabled', 'none'].includes(remoteMode);
         try {
             const validatePending = `
                 UPDATE [SEDI_APP_INDEPENDANTE].[dbo].[ABTEMPS_OPERATEURS]
@@ -1037,20 +1061,23 @@ class MonitoringService {
             `;
             const r1 = await executeNonQuery(validatePending);
 
-            const markT = `
-                UPDATE [SEDI_APP_INDEPENDANTE].[dbo].[ABTEMPS_OPERATEURS]
-                SET StatutTraitement = 'T'
-                WHERE CAST(DateCreation AS DATE) < CAST(GETDATE() AS DATE)
-                  AND EndTime IS NOT NULL
-                  AND ProductiveDuration > 0
-                  AND StatutTraitement = 'O'
-            `;
-            const r2 = await executeNonQuery(markT);
+            let n2 = 0;
+            if (!isScheduledMode) {
+                const markT = `
+                    UPDATE [SEDI_APP_INDEPENDANTE].[dbo].[ABTEMPS_OPERATEURS]
+                    SET StatutTraitement = 'T'
+                    WHERE CAST(DateCreation AS DATE) < CAST(GETDATE() AS DATE)
+                      AND EndTime IS NOT NULL
+                      AND ProductiveDuration > 0
+                      AND StatutTraitement = 'O'
+                `;
+                const r2 = await executeNonQuery(markT);
+                n2 = r2?.rowsAffected || 0;
+            }
 
             const n1 = r1?.rowsAffected || 0;
-            const n2 = r2?.rowsAffected || 0;
-            console.log(`🌙 Midnight transmit: validés (→O)=${n1}, passés en T=${n2}`);
-            return { success: true, validatedRows: n1, transmittedRows: n2 };
+            console.log(`🌙 Midnight transmit: validés (→O)=${n1}, passés en T=${n2}${isScheduledMode ? ' (T laissé à SILOG)' : ''}`);
+            return { success: true, validatedRows: n1, transmittedRows: n2, silogScheduledMode: isScheduledMode };
         } catch (error) {
             console.error('❌ Erreur runMidnightDashboardTransmit:', error);
             return { success: false, error: error.message };

@@ -437,7 +437,7 @@ function scheduleDailyAutoCloseOperations() {
 }
 
 // Validation automatique quotidienne des temps terminés (StatutTraitement NULL → 'O')
-// Exécutée après la clôture auto des opérations pour que V_REMONTE_TEMPS expose les lignes à SILOG.
+// À 20h par défaut, jour courant inclus → visible dans V_REMONTE_TEMPS pour SILOG (SEDI_ETDIFF).
 function scheduleDailyAutoValidateTemps() {
     const enabled = String(process.env.ENABLE_AUTO_VALIDATE_TEMPS || 'true').toLowerCase() === 'true';
     if (!enabled) {
@@ -458,17 +458,9 @@ function scheduleDailyAutoValidateTemps() {
 
         setTimeout(async () => {
             try {
-                console.log('📋 Validation automatique des temps terminés...');
-                const result = await executeNonQuery(
-                    `
-                    UPDATE [SEDI_APP_INDEPENDANTE].[dbo].[ABTEMPS_OPERATEURS]
-                    SET StatutTraitement = 'O'
-                    WHERE StatutTraitement IS NULL
-                      AND ProductiveDuration > 0
-                      AND CAST(DateCreation AS DATE) < CAST(GETDATE() AS DATE)
-                    `
-                );
-                const count = result?.rowsAffected || 0;
+                const MonitoringService = require('./services/MonitoringService');
+                console.log('📋 Validation automatique des temps terminés (NULL → O, jour courant inclus)...');
+                const { count } = await MonitoringService.autoValidateEligibleTemps({ includeToday: true });
                 if (count > 0) {
                     console.log(`✅ ${count} enregistrement(s) validé(s) automatiquement (StatutTraitement → 'O').`);
                 } else {
@@ -486,7 +478,7 @@ function scheduleDailyAutoValidateTemps() {
 }
 
 /**
- * À minuit (configurable) : marquer transmis (T) les temps terminés des **jours passés**
+ * À minuit (configurable) : rattrapage validation (NULL → O) pour les jours passés.
  * encore en NULL / A / autre (puis O), pour vider le dashboard admin sans toucher au jour en cours.
  */
 function scheduleMidnightTransmitDashboard() {
@@ -603,10 +595,10 @@ if (shouldStartServer()) {
                 // Planifier la clôture automatique quotidienne des opérations (par défaut activée)
                 scheduleDailyAutoCloseOperations();
 
-                // Validation automatique des temps terminés (pour V_REMONTE_TEMPS → SILOG)
+                // Validation automatique à ~20h (NULL → O, jour courant inclus) pour V_REMONTE_TEMPS → SILOG
                 scheduleDailyAutoValidateTemps();
 
-                // Marquer transmis (T) les temps terminés des jours passés (dashboard admin vide au minuit)
+                // Nuit : rattrapage validation jours passés (sans marquer T en mode SILOG planifié)
                 scheduleMidnightTransmitDashboard();
 
                 // Vérifier les dépointages Factorial à partir de 17h toutes les 30 minutes

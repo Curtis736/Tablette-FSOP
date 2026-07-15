@@ -20,9 +20,9 @@
 | Étape | Qui | Action | StatutTraitement |
 |-------|-----|--------|-----------------|
 | 1 | Backend (opérations) | INSERT dans ABTEMPS_OPERATEURS | `NULL` |
-| 2 | Backend (auto 20h ou admin) | UPDATE StatutTraitement = 'O' | `NULL` → `'O'` |
+| 2 | Backend (auto **20h** ou admin « Transfert ») | UPDATE StatutTraitement = 'O' (jour courant inclus) | `NULL` → `'O'` |
 | 3 | V_REMONTE_TEMPS | Expose les lignes 'O' + ProductiveDuration > 0 | `'O'` |
-| 4 | SEDI_ETDIFF (SVC_SILOG) | Lit V_REMONTE_TEMPS, intègre dans SILOG | `'O'` |
+| 4 | SEDI_ETDIFF (SVC_SILOG, ex. ~17h15 le lendemain) | Lit V_REMONTE_TEMPS, intègre dans SILOG | `'O'` |
 | 5 | SILOG / fin de job SEDI_ETDIFF | Mise à jour du statut côté base après intégration (voir retour Franck MAILLARD, avril 2026) | `'O'` → `'T'` (ou équivalent métier) |
 
 ### Point critique : passage en 'T' (statut après intégration SILOG)
@@ -63,7 +63,9 @@ Le backend FSOP continue d’écrire `TempsID` (identité technique SQL) ; **ne 
 - **Poste** : `SVC_SILOG` (et NON `SERVEURERP`)
 - **Utilisateur SILOG** : `Production8`
 - **Planificateur de tâches** : sur `SVC_SILOG` (accès requis pour vérifier la fréquence)
-- **Fréquence** : en mars 2026, observation ponctuelle ~1 exécution/minute ; **depuis le 01/04/2026**, exécution **quotidienne** selon retour exploitation (à confirmer sur la tâche planifiée réelle).
+- **Fréquence SEDI_ETDIFF (tablettes CURTIS)** : **~17h15** chaque jour sur `SVC_SILOG` (retour exploitation, juillet 2026).
+- **Fréquence SIL_ETDIFF (Itium / saisie SILOG native)** : flux distinct, ne pas confondre.
+- Ancienne observation (mars 2026) : exécutions très fréquentes ; depuis avril 2026 observation **quotidienne** pour SEDI_ETDIFF.
 
 ### Commande de référence
 
