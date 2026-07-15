@@ -1020,7 +1020,7 @@ class MonitoringService {
      * avant le prochain passage SEDI_ETDIFF (ex. toutes les 2 h).
      */
     static isAutoValidateOnFinEnabled() {
-        return String(process.env.AUTO_VALIDATE_ON_FIN ?? 'true').toLowerCase() !== 'false';
+        return String(process.env.AUTO_VALIDATE_ON_FIN ?? 'false').toLowerCase() === 'true';
     }
 
     /**
