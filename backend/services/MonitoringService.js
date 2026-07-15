@@ -1017,7 +1017,7 @@ class MonitoringService {
 
     /**
      * Validation immédiate à la fin d'opération (NULL → 'O') pour alimenter V_REMONTE_TEMPS
-     * avant le prochain passage SEDI_ETDIFF (ex. toutes les 2 h).
+     * avant le prochain passage SEDI_ETDIFF (exécution en continu sur SVC_SILOG).
      */
     static isAutoValidateOnFinEnabled() {
         return String(process.env.AUTO_VALIDATE_ON_FIN ?? 'false').toLowerCase() === 'true';

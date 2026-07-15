@@ -22,7 +22,7 @@
 | 1 | Backend (opérations) | INSERT dans ABTEMPS_OPERATEURS | `NULL` |
 | 2 | Admin « Transfert » (ou auto **20h**) | UPDATE StatutTraitement = 'O' | `NULL` → `'O'` |
 | 3 | V_REMONTE_TEMPS | Expose les lignes 'O' + ProductiveDuration > 0 | `'O'` |
-| 4 | SEDI_ETDIFF (SVC_SILOG, **toutes 2 h dès 8h**) | Lit V_REMONTE_TEMPS, intègre dans SILOG | `'O'` |
+| 4 | SEDI_ETDIFF (SVC_SILOG, **en continu**) | Lit V_REMONTE_TEMPS, intègre dans SILOG | `'O'` |
 | 5 | SILOG / fin de job SEDI_ETDIFF | Mise à jour du statut côté base après intégration (voir retour Franck MAILLARD, avril 2026) | `'O'` → `'T'` (ou équivalent métier) |
 
 ### Point critique : passage en 'T' (statut après intégration SILOG)
@@ -49,7 +49,7 @@ Le backend FSOP continue d’écrire `TempsID` (identité technique SQL) ; **ne 
 
 - Ancienne observation (mars 2026) : exécutions très fréquentes sur `SVC_SILOG`.
 - **Depuis le 01/04/2026** : la tâche EDI ne tourne plus qu’**une fois par jour** (paramétrage planificateur / SILOG — hors code FSOP).
-- **Besoin métier (David, juillet 2026)** : visibilité des temps **dans SILOG en journée** → planifier **SEDI_ETDIFF toutes les 2 h à partir de 8h** sur `SVC_SILOG` (action Franck / infra).
+- **Besoin métier (SEDI, juillet 2026)** : visibilité des temps **à tout moment dans SILOG** → faire tourner **SEDI_ETDIFF en continu** sur `SVC_SILOG` (action Franck / infra).
 - La validation `NULL` → `'O'` reste manuelle via **Transfert admin** (évite les doublons côté SILOG). Filet auto à **20h**.
 
 ### Lancements soldés et lignes non validées
@@ -65,7 +65,7 @@ Le backend FSOP continue d’écrire `TempsID` (identité technique SQL) ; **ne 
 - **Poste** : `SVC_SILOG` (et NON `SERVEURERP`)
 - **Utilisateur SILOG** : `Production8`
 - **Planificateur de tâches** : sur `SVC_SILOG` (accès requis pour vérifier la fréquence)
-- **Fréquence SEDI_ETDIFF (tablettes CURTIS)** : **~17h15** actuellement — **à faire évoluer** vers **toutes 2 h à partir de 8h** (visibilité SILOG en journée).
+- **Fréquence SEDI_ETDIFF (tablettes CURTIS)** : **~17h15** actuellement — **à faire évoluer** vers une exécution **en continu** (visibilité SILOG permanente).
 - **Fréquence SIL_ETDIFF (Itium / saisie SILOG native)** : flux distinct, ne pas confondre.
 - Ancienne observation (mars 2026) : exécutions très fréquentes ; depuis avril 2026 observation **quotidienne** pour SEDI_ETDIFF.
 
