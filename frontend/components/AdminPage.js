@@ -22,18 +22,21 @@ function toLocalDateOnlyString(d) {
 /**
  * Colonnes « étape » du tableau admin : dans ABHISTORIQUE, Phase et CodeRubrique ne sont pas toujours
  * remplis au même sens (souvent Phase = 010 et CodeRubrique = ConnectS, parfois l’inverse type PRODUCTION / 912).
- * On affiche toujours d’abord un code court puis un libellé lisible quand c’est détectable.
+ * Le libellé lisible de l’étape est LCTC.CodeOperation, exposé par le backend sous « Fabrication » ;
+ * Phase/CodeRubrique ne servent de repli que lorsque l’ERP ne renvoie rien.
  */
 function getAdminStepColumnDisplay(operation) {
     const ph = String(operation?.Phase ?? operation?.phase ?? '').trim();
     const rub = String(operation?.CodeRubrique ?? operation?.codeRubrique ?? '').trim();
-    if (!ph && !rub) return { stepCode: '-', stepLabel: '-' };
+    const fabrication = String(operation?.Fabrication ?? operation?.fabrication ?? '').trim();
+    const erpLabel = fabrication && fabrication !== '-' ? fabrication : '';
+    if (!ph && !rub) return { stepCode: '-', stepLabel: erpLabel || '-' };
     const phIsNumeric = /^\d+$/.test(ph);
     const rubIsNumeric = /^\d+$/.test(rub);
-    if (phIsNumeric && rub && !rubIsNumeric) return { stepCode: ph, stepLabel: rub };
-    if (rubIsNumeric && ph && !phIsNumeric) return { stepCode: rub, stepLabel: ph };
-    if (ph && rub) return { stepCode: ph, stepLabel: rub };
-    return { stepCode: ph || rub || '-', stepLabel: rub || ph || '-' };
+    if (phIsNumeric && rub && !rubIsNumeric) return { stepCode: ph, stepLabel: erpLabel || rub };
+    if (rubIsNumeric && ph && !phIsNumeric) return { stepCode: rub, stepLabel: erpLabel || ph };
+    if (ph && rub) return { stepCode: ph, stepLabel: erpLabel || rub };
+    return { stepCode: ph || rub || '-', stepLabel: erpLabel || rub || ph || '-' };
 }
 
 /** DateCreation → YYYY-MM-DD (jour civil). */
@@ -761,6 +764,8 @@ class AdminPage {
                     // à tort dans la colonne étape.
                     Phase: op.phase || null,
                     CodeRubrique: op.codeRubrique || null,
+                    // Libellé ERP de l'étape (LCTC.CodeOperation) résolu côté backend
+                    Fabrication: op.Fabrication || op.fabrication || null,
                     StatutTraitement: null,
                     Status: op.status || 'En cours',
                     StatusCode: op.statusCode || 'EN_COURS',

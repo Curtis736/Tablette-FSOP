@@ -39,6 +39,39 @@ describe('getAdminStepColumnDisplay', () => {
       stepLabel: 'PRODUCTION'
     });
   });
+
+  it('uses the ERP designation (Fabrication) as step label when available', () => {
+    expect(getAdminStepColumnDisplay({
+      Phase: '010',
+      CodeRubrique: 'ConnectS',
+      Fabrication: 'Montage carte'
+    })).toEqual({
+      stepCode: '010',
+      stepLabel: 'Montage carte'
+    });
+  });
+
+  it('shows the ERP designation even when only a numeric Phase is known', () => {
+    expect(getAdminStepColumnDisplay({
+      Phase: '040',
+      CodeRubrique: '',
+      fabrication: 'Câblage'
+    })).toEqual({
+      stepCode: '040',
+      stepLabel: 'Câblage'
+    });
+  });
+
+  it('ignores the "-" placeholder returned when the ERP has no designation', () => {
+    expect(getAdminStepColumnDisplay({
+      Phase: '010',
+      CodeRubrique: 'ConnectS',
+      Fabrication: '-'
+    })).toEqual({
+      stepCode: '010',
+      stepLabel: 'ConnectS'
+    });
+  });
 });
 
 describe('compareAdminTimelineRows (logique SILOG)', () => {
