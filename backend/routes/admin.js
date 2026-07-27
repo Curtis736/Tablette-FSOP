@@ -5007,52 +5007,7 @@ router.post('/reconsolidate', async (req, res) => {
     }
 });
 
-// POST /api/admin/validate-temps
-// Passe StatutTraitement = 'O' pour les enregistrements sélectionnés ou tous ceux éligibles.
-router.post('/validate-temps', async (req, res) => {
-    try {
-        const { tempsIds, all = false, beforeDate } = req.body || {};
-
-        if (!all && (!tempsIds || !Array.isArray(tempsIds) || tempsIds.length === 0)) {
-            return res.status(400).json({ success: false, error: 'Fournir tempsIds (tableau) ou all=true.' });
-        }
-
-        let result;
-        if (all) {
-            let dateCond = `CAST(DateCreation AS DATE) < CAST(GETDATE() AS DATE)`;
-            const params = {};
-            if (beforeDate) {
-                dateCond = `CAST(DateCreation AS DATE) <= @beforeDate`;
-                params.beforeDate = beforeDate;
-            }
-            result = await executeNonQuery(
-                `UPDATE [SEDI_APP_INDEPENDANTE].[dbo].[ABTEMPS_OPERATEURS]
-                 SET StatutTraitement = 'O'
-                 WHERE StatutTraitement IS NULL
-                   AND ProductiveDuration > 0
-                   AND ${dateCond}`,
-                params
-            );
-        } else {
-            const ids = tempsIds.map(Number).filter(n => !isNaN(n));
-            if (ids.length === 0) return res.status(400).json({ success: false, error: 'Aucun TempsId valide.' });
-            const idList = ids.join(',');
-            result = await executeNonQuery(
-                `UPDATE [SEDI_APP_INDEPENDANTE].[dbo].[ABTEMPS_OPERATEURS]
-                 SET StatutTraitement = 'O'
-                 WHERE TempsId IN (${idList})
-                   AND StatutTraitement IS NULL
-                   AND ProductiveDuration > 0`
-            );
-        }
-
-        const count = result?.rowsAffected || 0;
-        res.json({ success: true, validated: count, message: `${count} enregistrement(s) passé(s) en StatutTraitement='O'.` });
-    } catch (error) {
-        console.error('❌ Erreur validate-temps:', error);
-        res.status(500).json({ success: false, error: error.message });
-    }
-});
+// POST /api/admin/validate-temps — remplacé par la version avec contrôle LCTC (plus bas)
 
 // GET /api/admin/diagnostic-temps
 // Compare ABTEMPS_OPERATEURS avec ABHISTORIQUE_OPERATEURS pour identifier les incohérences.
@@ -5269,6 +5224,56 @@ router.get('/silog-pipeline-status', async (req, res) => {
         });
     } catch (error) {
         console.error('❌ Erreur silog-pipeline-status:', error);
+        res.status(500).json({ success: false, error: error.message });
+    }
+});
+
+// ============================================
+// Validation temps SILOG — cohérence LCTC
+// ============================================
+const MonitoringService = require('../services/MonitoringService');
+const OperationValidationService = require('../services/OperationValidationService');
+
+// POST /api/admin/validate-temps — passe StatutTraitement = 'O' si cohérent LCTC
+router.post('/validate-temps', authenticateAdmin, async (req, res) => {
+    try {
+        const { tempsIds, all = false, beforeDate } = req.body || {};
+        const result = await MonitoringService.validateEligibleTempsIds({
+            tempsIds,
+            all,
+            beforeDate
+        });
+
+        if (!result.success) {
+            return res.status(400).json(result);
+        }
+
+        res.json(result);
+    } catch (error) {
+        console.error('❌ Erreur validate-temps:', error);
+        res.status(500).json({ success: false, error: error.message });
+    }
+});
+
+// GET /api/admin/diagnostic-lctc — temps non intégrables (pas de ligne LCTC correspondante)
+router.get('/diagnostic-lctc', authenticateAdmin, async (req, res) => {
+    try {
+        const { dateStart, dateEnd, operatorCode, statutTraitement } = req.query;
+        const rows = await OperationValidationService.listLctcIncoherentRecords({
+            dateStart,
+            dateEnd,
+            operatorCode,
+            statutTraitement
+        });
+
+        res.json({
+            success: true,
+            count: rows.length,
+            data: rows,
+            hint: 'Ces lignes ne peuvent pas être validées pour SILOG tant que CodeLancement/Phase/CodeRubrique ne correspondent pas à LCTC.'
+        });
+    } catch (error) {
+        console.error('❌ Erreur diagnostic-lctc:', error);
         res.status(500).json({ success: false, error: error.message });
     }
 });

@@ -627,10 +627,20 @@ class MonitoringService {
      */
     static async validateRecord(tempsId) {
         try {
+            const OperationValidationService = require('./OperationValidationService');
+            const validation = await OperationValidationService.validateForSilogValidation(tempsId);
+            if (!validation.valid) {
+                return {
+                    success: false,
+                    error: validation.errors.join('; ')
+                };
+            }
+
             const updateQuery = `
                 UPDATE [SEDI_APP_INDEPENDANTE].[dbo].[ABTEMPS_OPERATEURS]
                 SET StatutTraitement = 'O'
                 WHERE TempsId = @tempsId
+                  AND (StatutTraitement IS NULL OR StatutTraitement = 'O')
             `;
             
             const result = await executeNonQuery(updateQuery, { tempsId });
@@ -904,41 +914,33 @@ class MonitoringService {
                 // NOTE: On accepte aussi les enregistrements déjà validés ('O') pour permettre une ré-exécution
                 // (idempotence côté SILOG via ETEMPS.VarNumUtil2 / tempsId).
                 
-                // Validation optionnelle (vérifier cohérence des durées, etc.)
-                const validation = await OperationValidationService.validateTransferData(tempsId);
-                
+                // Validation avant passage en 'O' (cohérence LCTC + champs obligatoires)
+                const validation = await OperationValidationService.validateForSilogValidation(tempsId);
+
                 if (!validation.valid) {
-                    // Auto-correction si activée
                     if (autoFix) {
                         console.log(`🔧 Tentative d'auto-correction pour TempsId=${tempsId}...`);
                         const fixed = await OperationValidationService.autoFixTransferData(tempsId);
-                        
+
                         if (fixed.fixed) {
                             console.log(`✅ Auto-corrections appliquées pour TempsId=${tempsId}:`, fixed.fixes);
                             fixedIds.push(tempsId);
-                            
-                            // Re-valider après correction
-                            const revalidation = await OperationValidationService.validateTransferData(tempsId);
+                            const revalidation = await OperationValidationService.validateForSilogValidation(tempsId);
                             if (revalidation.valid) {
                                 validIds.push(tempsId);
                             } else {
-                                // Même si la validation échoue après correction, on peut quand même valider si les champs obligatoires sont présents
-                                console.warn(`⚠️ Validation échouée après correction pour TempsId=${tempsId}, mais champs obligatoires présents - inclusion quand même`);
-                                validIds.push(tempsId);
+                                invalidIds.push({ tempsId, errors: revalidation.errors });
                             }
                         } else {
-                            // Même si l'auto-correction échoue, on peut valider si les champs obligatoires sont présents
-                            console.warn(`⚠️ Auto-correction impossible pour TempsId=${tempsId}, mais champs obligatoires présents - inclusion quand même`);
-                            validIds.push(tempsId);
+                            invalidIds.push({ tempsId, errors: validation.errors });
                         }
                     } else {
-                        // Même sans auto-correction, on peut valider si les champs obligatoires sont présents
-                        console.warn(`⚠️ Validation échouée pour TempsId=${tempsId}, mais champs obligatoires présents - inclusion quand même`);
-                        validIds.push(tempsId);
+                        invalidIds.push({ tempsId, errors: validation.errors });
                     }
-                } else {
-                    validIds.push(tempsId);
+                    continue;
                 }
+
+                validIds.push(tempsId);
             }
             
             if (validIds.length === 0) {
@@ -1061,6 +1063,17 @@ class MonitoringService {
             return { validated: false, reason: 'not_eligible', tempsId };
         }
 
+        const OperationValidationService = require('./OperationValidationService');
+        const validation = await OperationValidationService.validateForSilogValidation(tempsId);
+        if (!validation.valid) {
+            return {
+                validated: false,
+                reason: 'validation_failed',
+                tempsId,
+                errors: validation.errors
+            };
+        }
+
         const result = await executeNonQuery(
             `
             UPDATE [SEDI_APP_INDEPENDANTE].[dbo].[ABTEMPS_OPERATEURS]
@@ -1078,15 +1091,122 @@ class MonitoringService {
     }
 
     /**
+     * Valide des TempsIds (ou lot « all ») avec contrôle LCTC avant StatutTraitement = 'O'.
+     */
+    static async validateEligibleTempsIds({ tempsIds, all = false, beforeDate } = {}) {
+        const OperationValidationService = require('./OperationValidationService');
+        const { executeNonQuery, executeQuery } = require('../config/database');
+        const lctcClause = OperationValidationService.getLctcExistsClause('t');
+
+        if (all) {
+            let dateCond = 'CAST(t.DateCreation AS DATE) < CAST(GETDATE() AS DATE)';
+            const params = {};
+            if (beforeDate) {
+                dateCond = 'CAST(t.DateCreation AS DATE) <= @beforeDate';
+                params.beforeDate = beforeDate;
+            }
+
+            const incoherentRows = await executeQuery(
+                `
+                SELECT COUNT(*) AS cnt
+                FROM [SEDI_APP_INDEPENDANTE].[dbo].[ABTEMPS_OPERATEURS] t
+                WHERE t.StatutTraitement IS NULL
+                  AND t.ProductiveDuration > 0
+                  AND t.EndTime IS NOT NULL
+                  AND ${dateCond}
+                  AND NOT (${lctcClause})
+                `,
+                params
+            );
+
+            const result = await executeNonQuery(
+                `
+                UPDATE t
+                SET StatutTraitement = 'O'
+                FROM [SEDI_APP_INDEPENDANTE].[dbo].[ABTEMPS_OPERATEURS] t
+                WHERE t.StatutTraitement IS NULL
+                  AND t.ProductiveDuration > 0
+                  AND t.EndTime IS NOT NULL
+                  AND t.Phase IS NOT NULL
+                  AND t.CodeRubrique IS NOT NULL
+                  AND ${dateCond}
+                  AND ${lctcClause}
+                `,
+                params
+            );
+
+            return {
+                success: true,
+                validated: result?.rowsAffected || 0,
+                incoherentSkipped: incoherentRows?.[0]?.cnt || 0,
+                message: `${result?.rowsAffected || 0} enregistrement(s) validé(s) (cohérents LCTC).`
+            };
+        }
+
+        const ids = (tempsIds || []).map(Number).filter((n) => !isNaN(n));
+        if (ids.length === 0) {
+            return { success: false, error: 'Aucun TempsId valide', validated: 0 };
+        }
+
+        const validIds = [];
+        const invalidIds = [];
+        for (const tempsId of ids) {
+            const validation = await OperationValidationService.validateForSilogValidation(tempsId);
+            if (validation.valid) {
+                validIds.push(tempsId);
+            } else {
+                invalidIds.push({ tempsId, errors: validation.errors });
+            }
+        }
+
+        if (validIds.length === 0) {
+            return {
+                success: false,
+                validated: 0,
+                invalidIds,
+                error: 'Aucun enregistrement éligible (cohérence LCTC ou champs obligatoires)'
+            };
+        }
+
+        const placeholders = validIds.map((_, i) => `@id${i}`).join(', ');
+        const params = {};
+        validIds.forEach((id, i) => {
+            params[`id${i}`] = id;
+        });
+
+        const result = await executeNonQuery(
+            `
+            UPDATE [SEDI_APP_INDEPENDANTE].[dbo].[ABTEMPS_OPERATEURS]
+            SET StatutTraitement = 'O'
+            WHERE TempsId IN (${placeholders})
+              AND StatutTraitement IS NULL
+              AND ProductiveDuration > 0
+              AND EndTime IS NOT NULL
+            `,
+            params
+        );
+
+        return {
+            success: true,
+            validated: result?.rowsAffected || 0,
+            validatedIds: validIds,
+            invalidIds: invalidIds.length > 0 ? invalidIds : undefined,
+            message: `${result?.rowsAffected || 0} enregistrement(s) validé(s).`
+        };
+    }
+
+    /**
      * Valide les temps terminés (NULL → 'O') pour exposition dans V_REMONTE_TEMPS.
      * @param {Object} options
      * @param {boolean} options.includeToday - inclure le jour courant (requis avant job SILOG ~17h15)
      */
     static async autoValidateEligibleTemps({ includeToday = false } = {}) {
         const { executeNonQuery } = require('../config/database');
+        const OperationValidationService = require('./OperationValidationService');
         const dateCond = includeToday
             ? '1=1'
             : 'CAST(DateCreation AS DATE) < CAST(GETDATE() AS DATE)';
+        const lctcClause = OperationValidationService.getLctcExistsClause('ABTEMPS_OPERATEURS');
         const result = await executeNonQuery(
             `
             UPDATE [SEDI_APP_INDEPENDANTE].[dbo].[ABTEMPS_OPERATEURS]
@@ -1094,7 +1214,10 @@ class MonitoringService {
             WHERE StatutTraitement IS NULL
               AND ProductiveDuration > 0
               AND EndTime IS NOT NULL
+              AND Phase IS NOT NULL
+              AND CodeRubrique IS NOT NULL
               AND ${dateCond}
+              AND ${lctcClause}
             `
         );
         return { count: result?.rowsAffected || 0 };
@@ -1108,17 +1231,23 @@ class MonitoringService {
         const { executeNonQuery } = require('../config/database');
         const remoteMode = String(process.env.SILOG_REMOTE_MODE || '').trim().toLowerCase();
         const isScheduledMode = ['scheduled', 'disable', 'disabled', 'none'].includes(remoteMode);
+        const OperationValidationService = require('./OperationValidationService');
+        const lctcClause = OperationValidationService.getLctcExistsClause('t');
         try {
             const validatePending = `
-                UPDATE [SEDI_APP_INDEPENDANTE].[dbo].[ABTEMPS_OPERATEURS]
+                UPDATE t
                 SET StatutTraitement = 'O'
-                WHERE CAST(DateCreation AS DATE) < CAST(GETDATE() AS DATE)
-                  AND EndTime IS NOT NULL
-                  AND ProductiveDuration > 0
+                FROM [SEDI_APP_INDEPENDANTE].[dbo].[ABTEMPS_OPERATEURS] t
+                WHERE CAST(t.DateCreation AS DATE) < CAST(GETDATE() AS DATE)
+                  AND t.EndTime IS NOT NULL
+                  AND t.ProductiveDuration > 0
+                  AND t.Phase IS NOT NULL
+                  AND t.CodeRubrique IS NOT NULL
+                  AND ${lctcClause}
                   AND (
-                      StatutTraitement IS NULL
-                      OR StatutTraitement = 'A'
-                      OR (StatutTraitement IS NOT NULL AND StatutTraitement <> 'O' AND StatutTraitement <> 'T')
+                      t.StatutTraitement IS NULL
+                      OR t.StatutTraitement = 'A'
+                      OR (t.StatutTraitement IS NOT NULL AND t.StatutTraitement <> 'O' AND t.StatutTraitement <> 'T')
                   )
             `;
             const r1 = await executeNonQuery(validatePending);
