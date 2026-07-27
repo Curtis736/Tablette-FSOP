@@ -5231,7 +5231,6 @@ router.get('/silog-pipeline-status', async (req, res) => {
 // ============================================
 // Validation temps SILOG — cohérence LCTC
 // ============================================
-const MonitoringService = require('../services/MonitoringService');
 const OperationValidationService = require('../services/OperationValidationService');
 
 // POST /api/admin/validate-temps — passe StatutTraitement = 'O' si cohérent LCTC
