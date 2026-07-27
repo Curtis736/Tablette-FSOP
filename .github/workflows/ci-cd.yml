@@ -16,9 +16,8 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        # Node 18+ provides globalThis.crypto.getRandomValues nativement,
-        # ce qui évite les erreurs de démarrage de Vitest/Vite.
-        node-version: [18.x, 20.x]
+        # Vitest 4 (rolldown) requires Node 20+ (node:util.styleText).
+        node-version: [20.x, 22.x]
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -55,7 +54,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: 18.x
+          node-version: 20.x
           cache: npm
           cache-dependency-path: frontend/package-lock.json
 
@@ -87,7 +86,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: 18.x
+          node-version: 20.x
           cache: npm
           cache-dependency-path: backend/package-lock.json
 
@@ -110,7 +109,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: 18.x
+          node-version: 20.x
           cache: npm
           cache-dependency-path: backend/package-lock.json
 
@@ -141,7 +140,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: 18.x
+          node-version: 20.x
           cache: npm
           cache-dependency-path: backend/package-lock.json
 
