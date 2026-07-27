@@ -20,23 +20,19 @@ function toLocalDateOnlyString(d) {
 }
 
 /**
- * Colonnes « étape » du tableau admin : dans ABHISTORIQUE, Phase et CodeRubrique ne sont pas toujours
- * remplis au même sens (souvent Phase = 010 et CodeRubrique = ConnectS, parfois l’inverse type PRODUCTION / 912).
- * Le libellé lisible de l’étape est LCTC.CodeOperation, exposé par le backend sous « Fabrication » ;
- * Phase/CodeRubrique ne servent de repli que lorsque l’ERP ne renvoie rien.
+ * Colonnes « étape » du tableau admin :
+ * - Code / Phase = Phase ERP (010, 040, 060…) — jamais CodeRubrique ni code opérateur
+ * - Libellé = LCTC.CodeOperation (exposé par le backend sous Fabrication)
  */
 function getAdminStepColumnDisplay(operation) {
-    const ph = String(operation?.Phase ?? operation?.phase ?? '').trim();
-    const rub = String(operation?.CodeRubrique ?? operation?.codeRubrique ?? '').trim();
+    const EVENT_MARKERS = new Set(['PRODUCTION', 'PAUSE', 'REPRISE', 'TERMINE', 'TERMINÉE', 'ADMIN', '']);
+    const phase = String(operation?.Phase ?? operation?.phase ?? '').trim();
     const fabrication = String(operation?.Fabrication ?? operation?.fabrication ?? '').trim();
     const erpLabel = fabrication && fabrication !== '-' ? fabrication : '';
-    if (!ph && !rub) return { stepCode: '-', stepLabel: erpLabel || '-' };
-    const phIsNumeric = /^\d+$/.test(ph);
-    const rubIsNumeric = /^\d+$/.test(rub);
-    if (phIsNumeric && rub && !rubIsNumeric) return { stepCode: ph, stepLabel: erpLabel || rub };
-    if (rubIsNumeric && ph && !phIsNumeric) return { stepCode: rub, stepLabel: erpLabel || ph };
-    if (ph && rub) return { stepCode: ph, stepLabel: erpLabel || rub };
-    return { stepCode: ph || rub || '-', stepLabel: erpLabel || rub || ph || '-' };
+
+    const stepCode = EVENT_MARKERS.has(phase.toUpperCase()) ? '-' : phase;
+    const stepLabel = erpLabel || '-';
+    return { stepCode: stepCode || '-', stepLabel };
 }
 
 /** DateCreation → YYYY-MM-DD (jour civil). */

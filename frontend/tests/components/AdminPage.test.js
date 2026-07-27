@@ -26,21 +26,7 @@ vi.mock('../../utils/TimeUtils.js', () => ({
 }));
 
 describe('getAdminStepColumnDisplay', () => {
-  it('places numeric value in stepCode when Phase is numeric and CodeRubrique is text', () => {
-    expect(getAdminStepColumnDisplay({ Phase: '010', CodeRubrique: 'ConnectS' })).toEqual({
-      stepCode: '010',
-      stepLabel: 'ConnectS'
-    });
-  });
-
-  it('places numeric value in stepCode when CodeRubrique is numeric and Phase is text', () => {
-    expect(getAdminStepColumnDisplay({ Phase: 'PRODUCTION', CodeRubrique: '912' })).toEqual({
-      stepCode: '912',
-      stepLabel: 'PRODUCTION'
-    });
-  });
-
-  it('uses the ERP designation (Fabrication) as step label when available', () => {
+  it('shows Phase as step code and Fabrication as label', () => {
     expect(getAdminStepColumnDisplay({
       Phase: '010',
       CodeRubrique: 'ConnectS',
@@ -51,25 +37,34 @@ describe('getAdminStepColumnDisplay', () => {
     });
   });
 
-  it('shows the ERP designation even when only a numeric Phase is known', () => {
+  it('never uses CodeRubrique or operator code as step code', () => {
     expect(getAdminStepColumnDisplay({
-      Phase: '040',
-      CodeRubrique: '',
-      fabrication: 'Câblage'
+      Phase: 'PRODUCTION',
+      CodeRubrique: '001'
     })).toEqual({
-      stepCode: '040',
-      stepLabel: 'Câblage'
+      stepCode: '-',
+      stepLabel: '-'
     });
   });
 
-  it('ignores the "-" placeholder returned when the ERP has no designation', () => {
+  it('hides event-marker phases (PRODUCTION, PAUSE...) from the Phase column', () => {
     expect(getAdminStepColumnDisplay({
-      Phase: '010',
-      CodeRubrique: 'ConnectS',
-      Fabrication: '-'
+      Phase: 'PRODUCTION',
+      Fabrication: 'Montage'
     })).toEqual({
-      stepCode: '010',
-      stepLabel: 'ConnectS'
+      stepCode: '-',
+      stepLabel: 'Montage'
+    });
+  });
+
+  it('shows Phase even without Fabrication', () => {
+    expect(getAdminStepColumnDisplay({
+      Phase: '040',
+      CodeRubrique: '',
+      fabrication: '-'
+    })).toEqual({
+      stepCode: '040',
+      stepLabel: '-'
     });
   });
 });
