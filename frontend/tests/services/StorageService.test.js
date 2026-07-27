@@ -6,21 +6,42 @@ describe('StorageService', () => {
   let mockLocalStorage;
 
   beforeEach(() => {
-    mockLocalStorage = {
-      data: {},
-      getItem: vi.fn((key) => mockLocalStorage.data[key] || null),
-      setItem: vi.fn((key, value) => {
-        mockLocalStorage.data[key] = value;
-        // Simuler un localStorage réel: les clés sont énumérables sur l'objet
-        mockLocalStorage[key] = value;
-      }),
-      removeItem: vi.fn((key) => {
-        delete mockLocalStorage.data[key];
-        delete mockLocalStorage[key];
-      }),
-      clear: vi.fn(() => { mockLocalStorage.data = {}; }),
-      hasOwnProperty: vi.fn((key) => key in mockLocalStorage.data)
+    const store = {};
+    const setItem = vi.fn((key, value) => { store[key] = String(value); });
+    const removeItem = vi.fn((key) => { delete store[key]; });
+    const clear = vi.fn(() => { Object.keys(store).forEach((key) => delete store[key]); });
+    const getItem = vi.fn((key) => (key in store ? store[key] : null));
+    const keyFn = vi.fn((index) => Object.keys(store)[index] ?? null);
+
+    const storageTarget = {
+      getItem,
+      setItem,
+      removeItem,
+      clear,
+      key: keyFn,
+      get length() {
+        return Object.keys(store).length;
+      },
+      hasOwnProperty: (key) => Object.prototype.hasOwnProperty.call(store, key)
     };
+
+    mockLocalStorage = new Proxy(storageTarget, {
+      ownKeys: () => Object.keys(store),
+      getOwnPropertyDescriptor: (_target, prop) => {
+        if (Object.prototype.hasOwnProperty.call(store, prop)) {
+          return { configurable: true, enumerable: true, value: store[prop] };
+        }
+        return undefined;
+      },
+      get: (target, prop) => {
+        if (Object.prototype.hasOwnProperty.call(store, prop)) {
+          return store[prop];
+        }
+        return target[prop];
+      },
+      has: (_target, prop) => Object.prototype.hasOwnProperty.call(store, prop)
+    });
+
     global.localStorage = mockLocalStorage;
     service = new StorageService();
   });
@@ -146,15 +167,13 @@ describe('StorageService', () => {
 
   describe('clearAllCache', () => {
     it('should clear all cache', () => {
-      mockLocalStorage.data = {
-        'cacheData_test1': 'value1',
-        'cacheData_test2': 'value2',
-        'other': 'value'
-      };
-      // Refléter ces clés sur l'objet lui-même pour Object.keys(localStorage)
-      Object.entries(mockLocalStorage.data).forEach(([k, v]) => (mockLocalStorage[k] = v));
+      mockLocalStorage.setItem('cacheData_test1', 'value1');
+      mockLocalStorage.setItem('cacheData_test2', 'value2');
+      mockLocalStorage.setItem('other', 'value');
       service.clearAllCache();
-      expect(mockLocalStorage.removeItem).toHaveBeenCalled();
+      expect(mockLocalStorage.removeItem).toHaveBeenCalledWith('cacheData_test1');
+      expect(mockLocalStorage.removeItem).toHaveBeenCalledWith('cacheData_test2');
+      expect(mockLocalStorage.removeItem).not.toHaveBeenCalledWith('other');
     });
   });
 
@@ -167,8 +186,8 @@ describe('StorageService', () => {
 
   describe('getStorageSize', () => {
     it('should calculate storage size', () => {
-      mockLocalStorage.data = { key1: 'value1', key2: 'value2' };
-      Object.entries(mockLocalStorage.data).forEach(([k, v]) => (mockLocalStorage[k] = v));
+      mockLocalStorage.setItem('key1', 'value1');
+      mockLocalStorage.setItem('key2', 'value2');
       const size = service.getStorageSize();
       expect(size).toBeGreaterThan(0);
     });

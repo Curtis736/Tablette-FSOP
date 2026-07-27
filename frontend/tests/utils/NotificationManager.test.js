@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
-import { NotificationManager } from '../../utils/NotificationManager.js';
+import notificationManager from '../../utils/NotificationManager.js';
 
 describe('NotificationManager', () => {
   let manager;
@@ -7,7 +7,11 @@ describe('NotificationManager', () => {
   beforeEach(() => {
     document.body.innerHTML = '';
     document.head.innerHTML = '';
-    manager = new NotificationManager();
+    notificationManager.notifications = [];
+    notificationManager.container?.remove();
+    notificationManager.createContainer();
+    notificationManager.setupStyles();
+    manager = notificationManager;
   });
 
   describe('constructor', () => {

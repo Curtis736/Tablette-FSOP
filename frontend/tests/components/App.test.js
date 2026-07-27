@@ -2,32 +2,40 @@ import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest';
 import App from '../../components/App.js';
 
 // Mock des dépendances
-vi.mock('../../components/OperateurInterface.js', () => ({
-  default: vi.fn().mockImplementation(() => ({
-    loadLancements: vi.fn()
-  }))
+vi.mock('../../components/OperateurInterface.js?v=20251021-scanner-fix', () => ({
+  default: class MockOperateurInterface {
+    constructor() {
+      this.loadLancements = vi.fn();
+    }
+  }
 }));
 
-vi.mock('../../components/AdminPage.js', () => ({
-  default: vi.fn().mockImplementation(() => ({
-    loadData: vi.fn()
-  }))
+vi.mock('../../components/AdminPage.js?v=20251021-scanner-fix', () => ({
+  default: class MockAdminPage {
+    constructor() {
+      this.loadData = vi.fn();
+    }
+  }
 }));
 
-vi.mock('../../services/ApiService.js', () => ({
-  default: vi.fn().mockImplementation(() => ({
-    getOperator: vi.fn(),
-    healthCheck: vi.fn().mockResolvedValue({ status: 'ok' })
-  }))
+vi.mock('../../services/ApiService.js?v=20251021-scanner-fix', () => ({
+  default: class MockApiService {
+    constructor() {
+      this.getOperator = vi.fn();
+      this.healthCheck = vi.fn().mockResolvedValue({ status: 'ok' });
+    }
+  }
 }));
 
-vi.mock('../../services/StorageService.js', () => ({
-  default: vi.fn().mockImplementation(() => ({
-    getCurrentOperator: vi.fn(),
-    setCurrentOperator: vi.fn(),
-    clearCurrentOperator: vi.fn(),
-    clearAllCache: vi.fn()
-  }))
+vi.mock('../../services/StorageService.js?v=20251007-final', () => ({
+  default: class MockStorageService {
+    constructor() {
+      this.getCurrentOperator = vi.fn();
+      this.setCurrentOperator = vi.fn();
+      this.clearCurrentOperator = vi.fn();
+      this.clearAllCache = vi.fn();
+    }
+  }
 }));
 
 vi.mock('../../utils/NotificationManager.js', () => ({
@@ -51,8 +59,8 @@ describe('App', () => {
       <div id="adminScreen" class="screen"></div>
       <div id="adminLoginScreen" class="screen"></div>
       <div id="currentOperator"></div>
-      <form id="loginForm"></form>
-      <form id="adminLoginForm"></form>
+      <form id="loginForm"><button type="submit">Login</button></form>
+      <form id="adminLoginForm"><button type="submit">Admin Login</button></form>
       <button id="logoutBtn"></button>
       <button id="backToOperatorBtn"></button>
       <button id="adminModeBtn"></button>

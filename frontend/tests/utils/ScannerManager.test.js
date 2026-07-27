@@ -1,11 +1,12 @@
 import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest';
 import ScannerManager from '../../utils/ScannerManager.js';
 
-describe.skip('ScannerManager', () => {
+describe('ScannerManager', () => {
   let manager;
   let mockVideo;
   let mockCanvas;
   let mockStream;
+  let mockTrack;
 
   beforeEach(() => {
     manager = new ScannerManager();
@@ -24,10 +25,9 @@ describe.skip('ScannerManager', () => {
       }))
     };
     
+    mockTrack = { stop: vi.fn() };
     mockStream = {
-      getTracks: vi.fn(() => [{
-        stop: vi.fn()
-      }])
+      getTracks: vi.fn(() => [mockTrack])
     };
     
     global.navigator = {
@@ -85,19 +85,20 @@ describe.skip('ScannerManager', () => {
     });
 
     it('should try to load from CDN', async () => {
-      const script = document.createElement('script');
-      script.onload = () => {
-        global.ZXing = { BrowserMultiFormatReader: class {} };
-      };
-      document.createElement = vi.fn(() => script);
-      document.head.appendChild = vi.fn();
-      
+      const loadScriptSpy = vi.spyOn(manager, 'loadScript').mockResolvedValue(true);
+
       const result = await manager.loadZXing();
-      expect(document.createElement).toHaveBeenCalled();
+
+      expect(loadScriptSpy).toHaveBeenCalled();
+      expect(result).toBe(true);
     });
   });
 
   describe('start', () => {
+    beforeEach(() => {
+      vi.spyOn(manager, 'loadZXing').mockResolvedValue(false);
+    });
+
     it('should start scanner successfully', async () => {
       manager.init(vi.fn(), vi.fn());
       await manager.start(mockVideo, mockCanvas);
@@ -167,7 +168,7 @@ describe.skip('ScannerManager', () => {
       manager.stop();
       
       expect(manager.isScanning).toBe(false);
-      expect(mockStream.getTracks()[0].stop).toHaveBeenCalled();
+      expect(mockTrack.stop).toHaveBeenCalled();
       expect(mockVideo.srcObject).toBeNull();
     });
   });
