@@ -3,8 +3,13 @@
  * Valide la cohérence des événements, détecte les problèmes et les corrige automatiquement
  */
 
-const { executeQuery, executeNonQuery } = require('../config/database');
+const db = require('../config/database');
 const DurationCalculationService = require('./DurationCalculationService');
+
+// Indirection volontaire : résout les fonctions au moment de l'appel
+// (sinon une destructuration fige la référence et les mocks ne s'appliquent plus).
+const executeQuery = (...args) => db.executeQuery(...args);
+const executeNonQuery = (...args) => db.executeNonQuery(...args);
 
 class OperationValidationService {
     /**
@@ -176,7 +181,12 @@ class OperationValidationService {
                 t.StatutTraitement,
                 t.ProductiveDuration,
                 t.StartTime,
-                t.EndTime
+                t.EndTime,
+                CASE
+                    WHEN t.Phase IS NULL OR t.CodeRubrique IS NULL
+                        THEN 'Cles ERP non resolues (lancement absent de V_LCTC au moment du pointage)'
+                    ELSE 'Combinaison CodeLancement/Phase/CodeRubrique absente de LCTC'
+                END AS Motif
             FROM [SEDI_APP_INDEPENDANTE].[dbo].[ABTEMPS_OPERATEURS] t
             WHERE ${where.join(' AND ')}
             ORDER BY t.DateCreation DESC, t.TempsId DESC

@@ -1624,9 +1624,17 @@ router.get('/:operatorCode/operations',
                 ON t.OperatorCode = h.OperatorCode 
                 AND t.LancementCode = h.CodeLanctImprod
                 AND CAST(t.DateCreation AS DATE) = CAST(h.DateCreation AS DATE)
-                -- IMPORTANT: ne pas cacher une autre étape du même lancement (Phase+CodeRubrique)
-                AND ISNULL(LTRIM(RTRIM(t.Phase)), '') = ISNULL(LTRIM(RTRIM(COALESCE(h.Phase, 'PRODUCTION'))), '')
-                AND ISNULL(LTRIM(RTRIM(t.CodeRubrique)), '') = ISNULL(LTRIM(RTRIM(h.CodeRubrique)), '')
+                -- IMPORTANT: ne pas cacher une autre étape du même lancement (Phase+CodeRubrique).
+                -- Si les clés ERP n'ont pas pu être résolues (V_LCTC muet), t.Phase/t.CodeRubrique
+                -- sont NULL : on retombe sur le rattachement lancement + date.
+                AND (
+                    t.Phase IS NULL
+                    OR ISNULL(LTRIM(RTRIM(t.Phase)), '') = ISNULL(LTRIM(RTRIM(COALESCE(h.Phase, 'PRODUCTION'))), '')
+                )
+                AND (
+                    t.CodeRubrique IS NULL
+                    OR ISNULL(LTRIM(RTRIM(t.CodeRubrique)), '') = ISNULL(LTRIM(RTRIM(h.CodeRubrique)), '')
+                )
             -- ⚡ OPTIMISATION : Utiliser h.Phase directement (plus simple et fiable)
             -- Si Phase n'est pas dans h, on utilise 'PRODUCTION' par défaut
             WHERE h.OperatorCode = @operatorCode

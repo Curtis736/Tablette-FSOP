@@ -217,9 +217,10 @@ router.post('/start', authenticateOperator, validateConcurrency, releaseResource
             const existingTemps = await executeQuery(tempsCheckQuery, { operatorId, lancementCode });
             
             if (existingTemps.length === 0) {
-                // Récupérer Phase et CodeRubrique depuis V_LCTC (comme demandé par Franck MAILLARD)
-                let phase = 'PRODUCTION';
-                let codeRubrique = operatorId;
+                // Phase/CodeRubrique doivent venir de V_LCTC : sans correspondance ERP, on laisse NULL
+                // (une valeur par défaut serait rejetée par SILOG au moment de l'intégration).
+                let phase = null;
+                let codeRubrique = null;
                 try {
                     const vlctcQuery = `
                         SELECT TOP 1 Phase, CodeRubrique
@@ -228,8 +229,10 @@ router.post('/start', authenticateOperator, validateConcurrency, releaseResource
                     `;
                     const vlctcResult = await executeQuery(vlctcQuery, { lancementCode });
                     if (vlctcResult && vlctcResult.length > 0) {
-                        phase = vlctcResult[0].Phase || phase;
-                        codeRubrique = vlctcResult[0].CodeRubrique || codeRubrique;
+                        phase = vlctcResult[0].Phase || null;
+                        codeRubrique = vlctcResult[0].CodeRubrique || null;
+                    } else {
+                        console.warn(`⚠️ Lancement ${lancementCode} absent de V_LCTC — Phase/CodeRubrique laissés NULL (non validable SILOG)`);
                     }
                 } catch (error) {
                     console.warn(`⚠️ Impossible de récupérer Phase/CodeRubrique depuis V_LCTC: ${error.message}`);
@@ -722,9 +725,10 @@ router.post('/update-temps', authenticateOperator, async (req, res) => {
             });
             
         } else {
-            // Récupérer Phase et CodeRubrique depuis V_LCTC (comme demandé par Franck MAILLARD)
-            let phase = 'PRODUCTION';
-            let codeRubrique = operatorCode;
+            // Phase/CodeRubrique doivent venir de V_LCTC : sans correspondance ERP, on laisse NULL
+            // (une valeur par défaut serait rejetée par SILOG au moment de l'intégration).
+            let phase = null;
+            let codeRubrique = null;
             try {
                 const vlctcQuery = `
                     SELECT TOP 1 Phase, CodeRubrique
@@ -733,8 +737,10 @@ router.post('/update-temps', authenticateOperator, async (req, res) => {
                 `;
                 const vlctcResult = await executeQuery(vlctcQuery, { lancementCode });
                 if (vlctcResult && vlctcResult.length > 0) {
-                    phase = vlctcResult[0].Phase || phase;
-                    codeRubrique = vlctcResult[0].CodeRubrique || codeRubrique;
+                    phase = vlctcResult[0].Phase || null;
+                    codeRubrique = vlctcResult[0].CodeRubrique || null;
+                } else {
+                    console.warn(`⚠️ Lancement ${lancementCode} absent de V_LCTC — Phase/CodeRubrique laissés NULL (non validable SILOG)`);
                 }
             } catch (error) {
                 console.warn(`⚠️ Impossible de récupérer Phase/CodeRubrique depuis V_LCTC: ${error.message}`);

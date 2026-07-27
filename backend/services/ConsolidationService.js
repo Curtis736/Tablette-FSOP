@@ -245,14 +245,25 @@ class ConsolidationService {
             phase = debutEvent?.Phase || null;
             codeRubrique = debutEvent?.CodeRubrique || null;
 
+            // ABHISTORIQUE.Phase sert de marqueur d'événement ('PRODUCTION', 'PAUSE', ...) :
+            // ce ne sont pas des phases ERP et SILOG les rejette.
+            const EVENT_MARKER_PHASES = new Set(['PRODUCTION', 'PAUSE', 'REPRISE', 'TERMINE', 'TERMINÉE', 'ADMIN']);
+            const isEventMarkerPhase = EVENT_MARKER_PHASES.has(String(phase || '').trim().toUpperCase());
+
             const hasErpKeysFromEvents = Boolean(
                 phase &&
                 codeRubrique &&
                 String(codeRubrique).trim() !== '' &&
                 String(phase).trim() !== '' &&
+                !isEventMarkerPhase &&
                 // Ancienne implémentation mettait CodeRubrique = operatorCode => ignorer ce cas
                 String(codeRubrique).trim() !== String(operatorCode).trim()
             );
+
+            if (isEventMarkerPhase) {
+                phase = null;
+                codeRubrique = null;
+            }
             
             if (!hasErpKeysFromEvents) {
             try {
@@ -272,17 +283,18 @@ class ConsolidationService {
                 } else {
                     console.warn(`⚠️ Lancement ${lancementCode} non trouvé dans V_LCTC`);
                     console.warn(`⚠️ Raisons possibles: TypeRubrique <> 'O' (composant), LancementSolde <> 'N' (soldé), ou lancement inexistant dans SEDI_ERP`);
-                    // Fallback opérationnel: ne pas bloquer la transmission si V_LCTC manque.
-                    // On reprend le comportement historique tolérant en posant des valeurs par défaut.
-                    phase = phase || 'PRODUCTION';
-                    codeRubrique = codeRubrique || String(operatorCode || '').trim() || 'UNKNOWN';
-                    console.warn(`⚠️ Fallback consolidation appliqué: Phase=${phase}, CodeRubrique=${codeRubrique}`);
+                    // Pas de valeur par défaut : SILOG rejette toute clé absente de LCTC.
+                    // On consolide avec Phase/CodeRubrique NULL, la ligne restera non validable
+                    // et remontera dans /api/admin/diagnostic-lctc.
+                    phase = null;
+                    codeRubrique = null;
+                    console.warn(`⚠️ Consolidation sans clés ERP: Phase/CodeRubrique laissés NULL (non validable SILOG)`);
                 }
             } catch (error) {
                 console.error(`❌ Erreur lors de la récupération de Phase/CodeRubrique depuis V_LCTC:`, error);
-                phase = phase || 'PRODUCTION';
-                codeRubrique = codeRubrique || String(operatorCode || '').trim() || 'UNKNOWN';
-                console.warn(`⚠️ Fallback consolidation après erreur V_LCTC: Phase=${phase}, CodeRubrique=${codeRubrique}`);
+                phase = null;
+                codeRubrique = null;
+                console.warn(`⚠️ Consolidation après erreur V_LCTC: Phase/CodeRubrique laissés NULL (non validable SILOG)`);
                 }
             } else {
                 console.log(`✅ Phase/CodeRubrique déjà présents dans les événements: Phase=${phase}, CodeRubrique=${codeRubrique}`);
@@ -435,7 +447,9 @@ class ConsolidationService {
                          SET StartTime = @startTime, EndTime = @endTime,
                              TotalDuration = @totalDuration, PauseDuration = @pauseDuration,
                              ProductiveDuration = @productiveDuration, EventsCount = @eventsCount,
-                             Phase = @phase, CodeRubrique = @codeRubrique
+                             -- Ne pas écraser des clés ERP déjà corrigées par une reconsolidation sans V_LCTC
+                             Phase = COALESCE(@phase, Phase),
+                             CodeRubrique = COALESCE(@codeRubrique, CodeRubrique)
                          WHERE TempsId = @tempsId`,
                         { ...durationParams, tempsId }
                     );

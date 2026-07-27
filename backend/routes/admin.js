@@ -3080,8 +3080,9 @@ router.get('/operators/:operatorCode/operations', async (req, res) => {
             LEFT JOIN [SEDI_APP_INDEPENDANTE].[dbo].[ABTEMPS_OPERATEURS] t 
                 ON t.OperatorCode = h.OperatorCode 
                 AND t.LancementCode = h.CodeLanctImprod
-                AND ISNULL(t.Phase, '') = ISNULL(h.Phase, '')
-                AND ISNULL(t.CodeRubrique, '') = ISNULL(h.CodeRubrique, '')
+                -- t.Phase/t.CodeRubrique NULL = clés ERP non résolues : rattachement lancement + date
+                AND (t.Phase IS NULL OR ISNULL(t.Phase, '') = ISNULL(h.Phase, ''))
+                AND (t.CodeRubrique IS NULL OR ISNULL(t.CodeRubrique, '') = ISNULL(h.CodeRubrique, ''))
                 AND CAST(t.DateCreation AS DATE) = CAST(h.DateCreation AS DATE)
             -- ⚡ OPTIMISATION : Utiliser h.Phase directement (plus simple et fiable)
             WHERE h.OperatorCode = @operatorCode
