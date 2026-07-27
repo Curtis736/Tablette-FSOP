@@ -217,35 +217,55 @@ router.post('/start', authenticateOperator, validateConcurrency, releaseResource
             const existingTemps = await executeQuery(tempsCheckQuery, { operatorId, lancementCode });
             
             if (existingTemps.length === 0) {
-                // Phase/CodeRubrique doivent venir de V_LCTC : sans correspondance ERP, on laisse NULL
-                // (une valeur par défaut serait rejetée par SILOG au moment de l'intégration).
+                // Phase/CodeRubrique doivent venir de l'ERP (V_LCTC / LCTC).
+                // ABTEMPS.Phase/CodeRubrique sont NOT NULL : sans clés ERP, on n'insère pas
+                // (évite PRODUCTION inventé et les échecs SQL).
                 let phase = null;
                 let codeRubrique = null;
                 try {
-                    const vlctcQuery = `
+                    let rows = await executeQuery(
+                        `
                         SELECT TOP 1 Phase, CodeRubrique
                         FROM [SEDI_APP_INDEPENDANTE].[dbo].[V_LCTC]
                         WHERE CodeLancement = @lancementCode
-                    `;
-                    const vlctcResult = await executeQuery(vlctcQuery, { lancementCode });
-                    if (vlctcResult && vlctcResult.length > 0) {
-                        phase = vlctcResult[0].Phase || null;
-                        codeRubrique = vlctcResult[0].CodeRubrique || null;
+                        `,
+                        { lancementCode }
+                    );
+                    if (!rows?.length) {
+                        rows = await executeQuery(
+                            `
+                            SELECT TOP 1
+                                LTRIM(RTRIM(Phase)) AS Phase,
+                                LTRIM(RTRIM(CodeRubrique)) AS CodeRubrique
+                            FROM [SEDI_ERP].[dbo].[LCTC]
+                            WHERE CodeLancement = @lancementCode
+                              AND TypeRubrique = 'O'
+                            ORDER BY Phase, CodeRubrique
+                            `,
+                            { lancementCode }
+                        );
+                    }
+                    if (rows?.length) {
+                        phase = rows[0].Phase || null;
+                        codeRubrique = rows[0].CodeRubrique || null;
                     } else {
-                        console.warn(`⚠️ Lancement ${lancementCode} absent de V_LCTC — Phase/CodeRubrique laissés NULL (non validable SILOG)`);
+                        console.warn(`⚠️ Lancement ${lancementCode} absent de V_LCTC/LCTC — création ABTEMPS reportée`);
                     }
                 } catch (error) {
                     console.warn(`⚠️ Impossible de récupérer Phase/CodeRubrique depuis V_LCTC: ${error.message}`);
                 }
-                
-                // Créer nouvel enregistrement temps
-                const tempsInsertQuery = `
-                    INSERT INTO [SEDI_APP_INDEPENDANTE].[dbo].[ABTEMPS_OPERATEURS]
-                    (OperatorCode, LancementCode, StartTime, EndTime, TotalDuration, PauseDuration, ProductiveDuration, EventsCount, Phase, CodeRubrique, DateCreation)
-                    VALUES (@operatorId, @lancementCode, GETDATE(), GETDATE(), 0, 0, 0, 1, @phase, @codeRubrique, GETDATE())
-                `;
-                await executeQuery(tempsInsertQuery, { operatorId, lancementCode, phase, codeRubrique });
-                console.log('✅ Nouvel enregistrement temps créé');
+
+                if (phase && codeRubrique) {
+                    const tempsInsertQuery = `
+                        INSERT INTO [SEDI_APP_INDEPENDANTE].[dbo].[ABTEMPS_OPERATEURS]
+                        (OperatorCode, LancementCode, StartTime, EndTime, TotalDuration, PauseDuration, ProductiveDuration, EventsCount, Phase, CodeRubrique, DateCreation)
+                        VALUES (@operatorId, @lancementCode, GETDATE(), GETDATE(), 0, 0, 0, 1, @phase, @codeRubrique, GETDATE())
+                    `;
+                    await executeQuery(tempsInsertQuery, { operatorId, lancementCode, phase, codeRubrique });
+                    console.log('✅ Nouvel enregistrement temps créé');
+                } else {
+                    console.warn(`⚠️ ABTEMPS non créé au démarrage (clés ERP manquantes) — sera consolidé à la FIN`);
+                }
             } else {
                 // Mettre à jour l'enregistrement existant
                 const tempsUpdateQuery = `
@@ -725,25 +745,48 @@ router.post('/update-temps', authenticateOperator, async (req, res) => {
             });
             
         } else {
-            // Phase/CodeRubrique doivent venir de V_LCTC : sans correspondance ERP, on laisse NULL
-            // (une valeur par défaut serait rejetée par SILOG au moment de l'intégration).
+            // Phase/CodeRubrique doivent venir de l'ERP. Colonnes NOT NULL : sans clés, on refuse l'insert.
             let phase = null;
             let codeRubrique = null;
             try {
-                const vlctcQuery = `
+                let rows = await executeQuery(
+                    `
                     SELECT TOP 1 Phase, CodeRubrique
                     FROM [SEDI_APP_INDEPENDANTE].[dbo].[V_LCTC]
                     WHERE CodeLancement = @lancementCode
-                `;
-                const vlctcResult = await executeQuery(vlctcQuery, { lancementCode });
-                if (vlctcResult && vlctcResult.length > 0) {
-                    phase = vlctcResult[0].Phase || null;
-                    codeRubrique = vlctcResult[0].CodeRubrique || null;
+                    `,
+                    { lancementCode }
+                );
+                if (!rows?.length) {
+                    rows = await executeQuery(
+                        `
+                        SELECT TOP 1
+                            LTRIM(RTRIM(Phase)) AS Phase,
+                            LTRIM(RTRIM(CodeRubrique)) AS CodeRubrique
+                        FROM [SEDI_ERP].[dbo].[LCTC]
+                        WHERE CodeLancement = @lancementCode
+                          AND TypeRubrique = 'O'
+                        ORDER BY Phase, CodeRubrique
+                        `,
+                        { lancementCode }
+                    );
+                }
+                if (rows?.length) {
+                    phase = rows[0].Phase || null;
+                    codeRubrique = rows[0].CodeRubrique || null;
                 } else {
-                    console.warn(`⚠️ Lancement ${lancementCode} absent de V_LCTC — Phase/CodeRubrique laissés NULL (non validable SILOG)`);
+                    console.warn(`⚠️ Lancement ${lancementCode} absent de V_LCTC/LCTC — insert ABTEMPS impossible`);
                 }
             } catch (error) {
                 console.warn(`⚠️ Impossible de récupérer Phase/CodeRubrique depuis V_LCTC: ${error.message}`);
+            }
+
+            if (!phase || !codeRubrique) {
+                return res.status(422).json({
+                    success: false,
+                    error: 'ERP_KEYS_MISSING',
+                    message: `Impossible de créer le temps: Phase/CodeRubrique introuvables dans LCTC pour ${lancementCode}`
+                });
             }
             
             // Créer un nouvel enregistrement

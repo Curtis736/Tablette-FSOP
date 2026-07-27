@@ -240,64 +240,103 @@ class ConsolidationService {
             })();
 
             // 6. Déterminer Phase et CodeRubrique (clés ERP)
-            // - Si les événements contiennent déjà Phase/CodeRubrique (issus de l'ERP), on les utilise.
-            // - Sinon, fallback historique : récupérer depuis V_LCTC.
+            // ABTEMPS.Phase/CodeRubrique sont NOT NULL : on n'insère JAMAIS NULL,
+            // et on n'invente JAMAIS 'PRODUCTION' (rejeté par SILOG).
+            // Sans clés ERP résolues → skip consolidation (FIN reste écrit, stop OK).
+            const EVENT_MARKER_PHASES = new Set(['PRODUCTION', 'PAUSE', 'REPRISE', 'TERMINE', 'TERMINÉE', 'ADMIN']);
+            const isEventMarkerPhase = (value) =>
+                EVENT_MARKER_PHASES.has(String(value || '').trim().toUpperCase());
+            const looksLikeErpKeys = (ph, rub) => {
+                const p = String(ph || '').trim();
+                const r = String(rub || '').trim();
+                if (!p || !r) return false;
+                if (isEventMarkerPhase(p)) return false;
+                // Ancienne implémentation mettait CodeRubrique = operatorCode => ignorer ce cas
+                if (r === String(operatorCode || '').trim()) return false;
+                return true;
+            };
+
             phase = debutEvent?.Phase || null;
             codeRubrique = debutEvent?.CodeRubrique || null;
 
-            // ABHISTORIQUE.Phase sert de marqueur d'événement ('PRODUCTION', 'PAUSE', ...) :
-            // ce ne sont pas des phases ERP et SILOG les rejette.
-            const EVENT_MARKER_PHASES = new Set(['PRODUCTION', 'PAUSE', 'REPRISE', 'TERMINE', 'TERMINÉE', 'ADMIN']);
-            const isEventMarkerPhase = EVENT_MARKER_PHASES.has(String(phase || '').trim().toUpperCase());
-
-            const hasErpKeysFromEvents = Boolean(
-                phase &&
-                codeRubrique &&
-                String(codeRubrique).trim() !== '' &&
-                String(phase).trim() !== '' &&
-                !isEventMarkerPhase &&
-                // Ancienne implémentation mettait CodeRubrique = operatorCode => ignorer ce cas
-                String(codeRubrique).trim() !== String(operatorCode).trim()
-            );
-
-            if (isEventMarkerPhase) {
+            if (!looksLikeErpKeys(phase, codeRubrique)) {
                 phase = null;
                 codeRubrique = null;
-            }
-            
-            if (!hasErpKeysFromEvents) {
-            try {
-                const vlctcQuery = `
-                    SELECT TOP 1 Phase, CodeRubrique
-                    FROM [SEDI_APP_INDEPENDANTE].[dbo].[V_LCTC]
-                    WHERE CodeLancement = @lancementCode
-                `;
-                
-                const vlctcResult = await db.executeQuery(vlctcQuery, { lancementCode });
-                
-                if (vlctcResult && vlctcResult.length > 0) {
-                    // Prendre les valeurs EXACTEMENT telles quelles depuis V_LCTC (sans transformation)
-                    phase = vlctcResult[0].Phase;
-                    codeRubrique = vlctcResult[0].CodeRubrique;
-                    console.log(`✅ Phase et CodeRubrique récupérés depuis V_LCTC: Phase=${phase}, CodeRubrique=${codeRubrique}`);
-                } else {
-                    console.warn(`⚠️ Lancement ${lancementCode} non trouvé dans V_LCTC`);
-                    console.warn(`⚠️ Raisons possibles: TypeRubrique <> 'O' (composant), LancementSolde <> 'N' (soldé), ou lancement inexistant dans SEDI_ERP`);
-                    // Pas de valeur par défaut : SILOG rejette toute clé absente de LCTC.
-                    // On consolide avec Phase/CodeRubrique NULL, la ligne restera non validable
-                    // et remontera dans /api/admin/diagnostic-lctc.
-                    phase = null;
-                    codeRubrique = null;
-                    console.warn(`⚠️ Consolidation sans clés ERP: Phase/CodeRubrique laissés NULL (non validable SILOG)`);
-                }
-            } catch (error) {
-                console.error(`❌ Erreur lors de la récupération de Phase/CodeRubrique depuis V_LCTC:`, error);
-                phase = null;
-                codeRubrique = null;
-                console.warn(`⚠️ Consolidation après erreur V_LCTC: Phase/CodeRubrique laissés NULL (non validable SILOG)`);
+
+                // Prefer keys passed by /stop (étape réellement choisie / résolue)
+                const optPhase = options.phase ?? options.Phase ?? null;
+                const optRub = options.codeRubrique ?? options.CodeRubrique ?? null;
+                if (looksLikeErpKeys(optPhase, optRub)) {
+                    phase = String(optPhase).trim();
+                    codeRubrique = String(optRub).trim();
+                    console.log(`✅ Phase/CodeRubrique depuis options stop: Phase=${phase}, CodeRubrique=${codeRubrique}`);
                 }
             } else {
+                phase = String(phase).trim();
+                codeRubrique = String(codeRubrique).trim();
                 console.log(`✅ Phase/CodeRubrique déjà présents dans les événements: Phase=${phase}, CodeRubrique=${codeRubrique}`);
+            }
+
+            if (!looksLikeErpKeys(phase, codeRubrique)) {
+                try {
+                    // 1) V_LCTC (lancements non soldés, TypeRubrique='O')
+                    let rows = await db.executeQuery(
+                        `
+                        SELECT TOP 1 Phase, CodeRubrique
+                        FROM [SEDI_APP_INDEPENDANTE].[dbo].[V_LCTC]
+                        WHERE CodeLancement = @lancementCode
+                        `,
+                        { lancementCode }
+                    );
+
+                    // 2) LCTC brut si V_LCTC muet (ex: lancement soldé entre-temps)
+                    if (!rows?.length) {
+                        rows = await db.executeQuery(
+                            `
+                            SELECT TOP 1
+                                LTRIM(RTRIM(Phase)) AS Phase,
+                                LTRIM(RTRIM(CodeRubrique)) AS CodeRubrique
+                            FROM [SEDI_ERP].[dbo].[LCTC]
+                            WHERE CodeLancement = @lancementCode
+                              AND TypeRubrique = 'O'
+                            ORDER BY Phase, CodeRubrique
+                            `,
+                            { lancementCode }
+                        );
+                        if (rows?.length) {
+                            console.warn(`⚠️ Lancement ${lancementCode} absent de V_LCTC — clés reprises depuis LCTC`);
+                        }
+                    }
+
+                    if (rows?.length && looksLikeErpKeys(rows[0].Phase, rows[0].CodeRubrique)) {
+                        phase = String(rows[0].Phase).trim();
+                        codeRubrique = String(rows[0].CodeRubrique).trim();
+                        console.log(`✅ Phase et CodeRubrique récupérés ERP: Phase=${phase}, CodeRubrique=${codeRubrique}`);
+                    } else {
+                        console.warn(`⚠️ Lancement ${lancementCode}: impossible de résoudre Phase/CodeRubrique ERP`);
+                        console.warn(`⚠️ Raisons possibles: TypeRubrique <> 'O', lancement inexistant, ou clés marqueur uniquement`);
+                        return {
+                            success: false,
+                            skipped: true,
+                            skipReason: 'VLCTC_MISSING',
+                            tempsId: null,
+                            error: null,
+                            message: `Clés ERP introuvables pour ${lancementCode} — consolidation reportée (FIN enregistrée)`,
+                            warnings: ['Phase/CodeRubrique non résolus — pas d\'insertion ABTEMPS (colonnes NOT NULL)']
+                        };
+                    }
+                } catch (error) {
+                    console.error(`❌ Erreur résolution Phase/CodeRubrique ERP:`, error);
+                    return {
+                        success: false,
+                        skipped: true,
+                        skipReason: 'VLCTC_MISSING',
+                        tempsId: null,
+                        error: null,
+                        message: `Erreur résolution clés ERP pour ${lancementCode} — consolidation reportée`,
+                        warnings: [error.message]
+                    };
+                }
             }
             
             // 7. Préparer les valeurs pour l'insertion
