@@ -21,16 +21,20 @@ function toLocalDateOnlyString(d) {
 
 /**
  * Colonnes « étape » du tableau admin :
- * - Code / Phase = Phase ERP (010, 040, 060…) — jamais CodeRubrique ni code opérateur
- * - Libellé = LCTC.CodeOperation (exposé par le backend sous Fabrication)
+ * - Phase = Phase ERP du lancement (010, 040…) — jamais le code opérateur
+ * - Libellé = LCTC.CodeOperation (Fabrication)
  */
 function getAdminStepColumnDisplay(operation) {
     const EVENT_MARKERS = new Set(['PRODUCTION', 'PAUSE', 'REPRISE', 'TERMINE', 'TERMINÉE', 'ADMIN', '']);
     const phase = String(operation?.Phase ?? operation?.phase ?? '').trim();
+    const operatorCode = String(
+        operation?.OperatorCode ?? operation?.operatorId ?? operation?.operatorCode ?? ''
+    ).trim();
     const fabrication = String(operation?.Fabrication ?? operation?.fabrication ?? '').trim();
     const erpLabel = fabrication && fabrication !== '-' ? fabrication : '';
 
-    const stepCode = EVENT_MARKERS.has(phase.toUpperCase()) ? '-' : phase;
+    const isOperatorCode = operatorCode && phase === operatorCode;
+    const stepCode = (EVENT_MARKERS.has(phase.toUpperCase()) || isOperatorCode) ? '-' : phase;
     const stepLabel = erpLabel || '-';
     return { stepCode: stepCode || '-', stepLabel };
 }

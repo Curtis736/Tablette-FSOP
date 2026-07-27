@@ -40,10 +40,22 @@ describe('getAdminStepColumnDisplay', () => {
   it('never uses CodeRubrique or operator code as step code', () => {
     expect(getAdminStepColumnDisplay({
       Phase: 'PRODUCTION',
-      CodeRubrique: '001'
+      CodeRubrique: '001',
+      OperatorCode: '001'
     })).toEqual({
       stepCode: '-',
       stepLabel: '-'
+    });
+  });
+
+  it('hides Phase when it is actually the operator code', () => {
+    expect(getAdminStepColumnDisplay({
+      Phase: '001',
+      OperatorCode: '001',
+      Fabrication: 'Montage'
+    })).toEqual({
+      stepCode: '-',
+      stepLabel: 'Montage'
     });
   });
 

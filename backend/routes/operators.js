@@ -694,12 +694,12 @@ function buildInParams(values, prefix) {
     return { params, placeholders: placeholders.join(', ') };
 }
 
-async function getFabricationMapForOperations(ops) {
-    // Map: `${CodeLancement}_${Phase}_${CodeRubrique}` -> "CodeOperation" (or joined list)
-    const launches = [...new Set((ops || []).map(o => String(o?.lancementCode || o?.CodeLancement || '').trim()).filter(Boolean))];
-    if (launches.length === 0) return new Map();
+async function getLctcStepsByLaunch(launches) {
+    const unique = [...new Set((launches || []).map(x => String(x || '').trim()).filter(Boolean))];
+    const byLaunch = new Map();
+    if (unique.length === 0) return byLaunch;
 
-    const { params, placeholders } = buildInParams(launches, 'lc');
+    const { params, placeholders } = buildInParams(unique, 'lc');
     const rows = await executeQuery(`
         SELECT DISTINCT
             C.CodeLancement,
@@ -710,27 +710,39 @@ async function getFabricationMapForOperations(ops) {
         WHERE C.TypeRubrique = 'O'
           AND C.CodeOperation IS NOT NULL
           AND LTRIM(RTRIM(C.CodeOperation)) <> ''
-          -- Ne jamais proposer "Séchage" / "ÉtuVage" (accents/casse ignorés)
           AND UPPER(LTRIM(RTRIM(C.CodeOperation))) COLLATE Latin1_General_CI_AI NOT IN ('SECHAGE', 'ETUVAGE')
           AND C.CodeLancement IN (${placeholders})
+        ORDER BY C.CodeLancement, LTRIM(RTRIM(C.Phase)), LTRIM(RTRIM(C.CodeRubrique))
     `, params);
 
-    const acc = new Map(); // key -> Set
     (rows || []).forEach(r => {
         const lc = String(r?.CodeLancement || '').trim();
         const ph = String(r?.Phase || '').trim();
         const rub = String(r?.CodeRubrique || '').trim();
         const op = String(r?.CodeOperation || '').trim();
-        if (!lc || !op) return;
-        const key = `${lc}_${ph}_${rub}`;
-        if (!acc.has(key)) acc.set(key, new Set());
-        acc.get(key).add(op);
+        if (!lc || !ph || !op) return;
+        if (!byLaunch.has(lc)) byLaunch.set(lc, []);
+        byLaunch.get(lc).push({ Phase: ph, CodeRubrique: rub, CodeOperation: op });
     });
+    return byLaunch;
+}
 
+async function getFabricationMapForOperations(ops) {
+    // Map: `${CodeLancement}_${Phase}_${CodeRubrique}` -> "CodeOperation" (or joined list)
+    const launches = [...new Set((ops || []).map(o => String(o?.lancementCode || o?.CodeLancement || '').trim()).filter(Boolean))];
+    const byLaunch = await getLctcStepsByLaunch(launches);
     const out = new Map();
-    acc.forEach((set, key) => {
-        out.set(key, Array.from(set).join(' / '));
+    byLaunch.forEach((steps, lc) => {
+        const acc = new Map();
+        steps.forEach(s => {
+            const key = `${lc}_${s.Phase}_${s.CodeRubrique}`;
+            if (!acc.has(key)) acc.set(key, new Set());
+            acc.get(key).add(s.CodeOperation);
+        });
+        acc.forEach((set, key) => out.set(key, Array.from(set).join(' / ')));
     });
+    // Also stash steps for phase resolution
+    out._byLaunch = byLaunch;
     return out;
 }
 
@@ -1705,10 +1717,32 @@ router.get('/:operatorCode/operations',
                 status = statusMap[statusCode] || statusCode;
             }
             
-            const phase = operation.phase || 'PRODUCTION';
-            const codeRubrique = operation.codeRubrique || null;
+            const MARKERS = new Set(['PRODUCTION', 'PAUSE', 'REPRISE', 'TERMINE', 'TERMINÉE', 'ADMIN']);
+            let phase = String(operation.phase || '').trim();
+            let codeRubrique = operation.codeRubrique || null;
+            const opCode = String(operation.operatorId || operation.operatorCode || operatorCode || '').trim();
+            const steps = (fabricationMap._byLaunch && fabricationMap._byLaunch.get(String(operation.lancementCode || '').trim())) || [];
+            if (!phase || MARKERS.has(phase.toUpperCase()) || phase === opCode) {
+                let match = null;
+                const rub = String(codeRubrique || '').trim();
+                if (rub && rub !== opCode) {
+                    match = steps.find(s => s.CodeRubrique === rub) || null;
+                }
+                if (!match && steps.length === 1) match = steps[0];
+                if (!match && steps.length > 0) match = steps[0];
+                if (match) {
+                    phase = match.Phase;
+                    codeRubrique = match.CodeRubrique;
+                } else {
+                    phase = '-';
+                }
+            }
             const fabKey = `${operation.lancementCode}_${String(phase || '').trim()}_${String(codeRubrique || '').trim()}`;
-            const fabrication = fabricationMap.get(fabKey) || operation.codeOperation || operation.fabrication || '-';
+            const fabrication = fabricationMap.get(fabKey)
+                || (steps.filter(s => s.Phase === phase).map(s => s.CodeOperation).filter(Boolean).join(' / '))
+                || operation.codeOperation
+                || operation.fabrication
+                || '-';
             
             return {
                 id: operation.id,

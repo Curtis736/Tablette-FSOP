@@ -1342,10 +1342,11 @@ function buildInParams(values, prefix) {
     return { params, placeholders: placeholders.join(', ') };
 }
 
-async function getFabricationMapForLaunches(lancements) {
-    // Map: `${CodeLancement}_${Phase}_${CodeRubrique}` -> "CodeOperation" (or joined list)
+async function getLctcStepsByLaunch(lancements) {
+    // Map: CodeLancement -> [{ Phase, CodeRubrique, CodeOperation }]
     const unique = [...new Set((lancements || []).map(x => String(x || '').trim()).filter(Boolean))];
-    if (unique.length === 0) return new Map();
+    const byLaunch = new Map();
+    if (unique.length === 0) return byLaunch;
 
     const { params, placeholders } = buildInParams(unique, 'lc');
     const rows = await executeQuery(`
@@ -1358,25 +1359,104 @@ async function getFabricationMapForLaunches(lancements) {
         WHERE C.TypeRubrique = 'O'
           AND C.CodeOperation IS NOT NULL
           AND LTRIM(RTRIM(C.CodeOperation)) <> ''
-          AND UPPER(LTRIM(RTRIM(C.CodeOperation))) COLLATE Latin1_General_CI_AI <> 'SECHAGE'
+          AND UPPER(LTRIM(RTRIM(C.CodeOperation))) COLLATE Latin1_General_CI_AI NOT IN ('SECHAGE', 'ETUVAGE')
           AND C.CodeLancement IN (${placeholders})
+        ORDER BY C.CodeLancement, LTRIM(RTRIM(C.Phase)), LTRIM(RTRIM(C.CodeRubrique))
     `, params);
 
-    const acc = new Map(); // key -> Set(CodeOperation)
     (rows || []).forEach(r => {
         const lc = String(r?.CodeLancement || '').trim();
         const ph = String(r?.Phase || '').trim();
         const rub = String(r?.CodeRubrique || '').trim();
         const op = String(r?.CodeOperation || '').trim();
-        if (!lc || !op) return;
-        const key = `${lc}_${ph}_${rub}`;
-        if (!acc.has(key)) acc.set(key, new Set());
-        acc.get(key).add(op);
+        if (!lc || !ph || !op) return;
+        if (!byLaunch.has(lc)) byLaunch.set(lc, []);
+        byLaunch.get(lc).push({ Phase: ph, CodeRubrique: rub, CodeOperation: op });
     });
+    return byLaunch;
+}
 
+async function getFabricationMapForLaunches(lancements) {
+    // Map: `${CodeLancement}_${Phase}_${CodeRubrique}` -> "CodeOperation" (or joined list)
+    const byLaunch = await getLctcStepsByLaunch(lancements);
     const out = new Map();
-    acc.forEach((set, key) => out.set(key, Array.from(set).join(' / ')));
+    byLaunch.forEach((steps, lc) => {
+        const acc = new Map(); // key -> Set
+        steps.forEach(s => {
+            const key = `${lc}_${s.Phase}_${s.CodeRubrique}`;
+            if (!acc.has(key)) acc.set(key, new Set());
+            acc.get(key).add(s.CodeOperation);
+        });
+        acc.forEach((set, key) => out.set(key, Array.from(set).join(' / ')));
+    });
     return out;
+}
+
+const EVENT_MARKER_PHASES = new Set(['PRODUCTION', 'PAUSE', 'REPRISE', 'TERMINE', 'TERMINÉE', 'ADMIN']);
+
+function isStoredPhaseInvalidForDisplay(phase, operatorCode) {
+    const p = String(phase || '').trim();
+    if (!p) return true;
+    if (EVENT_MARKER_PHASES.has(p.toUpperCase())) return true;
+    const op = String(operatorCode || '').trim();
+    // Ne jamais afficher le code opérateur à la place de la phase ERP
+    if (op && p === op) return true;
+    return false;
+}
+
+/**
+ * Pose Phase + Fabrication depuis LCTC (phase du lancement), pas depuis le code opérateur.
+ */
+function applyLctcPhaseFabrication(record, byLaunch) {
+    const lc = String(record?.LancementCode || record?.lancementCode || '').trim();
+    const steps = byLaunch.get(lc) || [];
+    const operatorCode = String(
+        record?.OperatorCode || record?.operatorId || record?.operatorCode || ''
+    ).trim();
+    let phase = String(record?.Phase || record?.phase || '').trim();
+    let rubrique = String(record?.CodeRubrique || record?.codeRubrique || '').trim();
+
+    if (isStoredPhaseInvalidForDisplay(phase, operatorCode)) {
+        // 1) match par CodeRubrique ERP (si ce n'est pas le code opérateur)
+        let match = null;
+        if (rubrique && rubrique !== operatorCode) {
+            match = steps.find(s => s.CodeRubrique === rubrique) || null;
+        }
+        // 2) une seule étape sur le lancement
+        if (!match && steps.length === 1) {
+            match = steps[0];
+        }
+        // 3) sinon première phase ERP du lancement (affichage)
+        if (!match && steps.length > 0) {
+            match = steps[0];
+        }
+        if (match) {
+            phase = match.Phase;
+            rubrique = match.CodeRubrique;
+            record.Phase = phase;
+            record.phase = phase;
+            record.CodeRubrique = rubrique;
+            record.codeRubrique = rubrique;
+        } else {
+            // Pas de phase ERP connue : ne pas afficher un code opérateur
+            record.Phase = null;
+            record.phase = null;
+            phase = '';
+        }
+    }
+
+    const fabKey = `${lc}_${phase}_${String(record?.CodeRubrique || record?.codeRubrique || '').trim()}`;
+    let fabrication = '-';
+    if (phase) {
+        const exact = steps.filter(s => s.Phase === phase && s.CodeRubrique === String(record?.CodeRubrique || record?.codeRubrique || '').trim());
+        const byPhase = exact.length ? exact : steps.filter(s => s.Phase === phase);
+        if (byPhase.length) {
+            fabrication = [...new Set(byPhase.map(s => s.CodeOperation))].join(' / ');
+        }
+    }
+    record.Fabrication = fabrication;
+    record.fabrication = fabrication;
+    return record;
 }
 
 async function getAdminOperations(date, page = 1, limit = 25, dateStart = null, dateEnd = null) {
@@ -1525,18 +1605,13 @@ async function getAdminOperations(date, page = 1, limit = 25, dateStart = null, 
             };
         });
 
-        // Ajouter le libellé de fabrication (CodeOperation) depuis l'ERP via (LT + Phase + CodeRubrique)
+        // Phase + libellé depuis LCTC (phase du lancement), jamais le code opérateur
         try {
             const lts = [...new Set(formattedOperations.map(o => String(o?.lancementCode || '').trim()).filter(Boolean))];
-            const fabMap = await getFabricationMapForLaunches(lts);
-            formattedOperations.forEach(o => {
-                const key = `${String(o.lancementCode || '').trim()}_${String(o.Phase || o.phase || '').trim()}_${String(o.CodeRubrique || o.codeRubrique || '').trim()}`;
-                const fabrication = fabMap.get(key) || '-';
-                o.fabrication = fabrication;
-                o.Fabrication = fabrication;
-            });
+            const byLaunch = await getLctcStepsByLaunch(lts);
+            formattedOperations.forEach(o => applyLctcPhaseFabrication(o, byLaunch));
         } catch (e) {
-            console.warn('⚠️ Impossible d\'enrichir les opérations admin avec la fabrication (CodeOperation):', e.message);
+            console.warn('⚠️ Impossible d\'enrichir les opérations admin avec la phase LCTC:', e.message);
         }
 
         console.log(`🎯 Envoi de ${formattedOperations.length} lancements regroupés (page ${page}/${Math.ceil(processedLancements.length / limit)})`);
@@ -4371,18 +4446,13 @@ router.get('/monitoring', async (req, res) => {
         const result = await MonitoringService.getTempsRecords(filters);
         
         if (result.success) {
-            // Enrichir les lignes consolidées (ABTEMPS) avec la fabrication (CodeOperation) depuis l'ERP
+            // Enrichir Phase + libellé depuis LCTC (phase du lancement)
             try {
                 const lts = [...new Set((result.data || []).map(r => String(r?.LancementCode || '').trim()).filter(Boolean))];
-                const fabMap = await getFabricationMapForLaunches(lts);
-                (result.data || []).forEach(r => {
-                    const key = `${String(r.LancementCode || '').trim()}_${String(r.Phase || '').trim()}_${String(r.CodeRubrique || '').trim()}`;
-                    const fabrication = fabMap.get(key) || '-';
-                    r.Fabrication = fabrication;
-                    r.fabrication = fabrication;
-                });
+                const byLaunch = await getLctcStepsByLaunch(lts);
+                (result.data || []).forEach(r => applyLctcPhaseFabrication(r, byLaunch));
             } catch (e) {
-                console.warn('⚠️ Impossible d\'enrichir /admin/monitoring avec la fabrication:', e.message);
+                console.warn('⚠️ Impossible d\'enrichir /admin/monitoring avec la phase LCTC:', e.message);
             }
 
             res.json({
