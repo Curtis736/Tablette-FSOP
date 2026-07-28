@@ -1406,6 +1406,26 @@ tr:hover {
     min-height: 36px;
 }
 
+/* Ligne déjà transmise à SILOG (StatutTraitement = T) : grisée, lecture seule */
+#operationsTable tbody tr.row-transmitted {
+    background-color: #e9ecef !important;
+    color: #6c757d;
+    opacity: 0.85;
+}
+
+#operationsTable tbody tr.row-transmitted:hover {
+    background-color: #dee2e6 !important;
+}
+
+#operationsTable tbody tr.row-transmitted td {
+    color: #6c757d;
+}
+
+#operationsTable tbody tr.row-transmitted .status-badge.status-T {
+    background-color: #6c757d;
+    color: #fff;
+}
+
 /* Ligne déjà transmise à SILOG : indicateur verrouillé (pas d'action possible) */
 .actions-cell .transmitted-lock {
     display: inline-flex;

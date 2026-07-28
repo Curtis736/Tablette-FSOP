@@ -167,7 +167,13 @@ describe('AdminPage', () => {
       <span id="completedLancements"></span>
       <table><tbody id="operationsTableBody"></tbody></table>
       <select id="operatorFilter"></select>
-      <select id="statusFilter"></select>
+      <select id="statusFilter">
+        <option value=""></option>
+        <option value="EN_COURS">En cours</option>
+        <option value="EN_PAUSE">En pause</option>
+        <option value="TERMINE">Terminé</option>
+        <option value="T">Transmis SILOG</option>
+      </select>
       <input id="searchFilter" />
       <button id="clearFiltersBtn"></button>
       <button id="transferBtn"></button>
@@ -520,13 +526,38 @@ describe('AdminPage', () => {
 
     it('should filter by status', () => {
       adminPage.operations = [
-        { TempsId: 1, LancementCode: 'LT001', StatutTraitement: null },
-        { TempsId: 2, LancementCode: 'LT002', StatutTraitement: 'T' }
+        { TempsId: 1, LancementCode: 'LT001', StatutTraitement: null, StatusCode: 'EN_COURS' },
+        { TempsId: 2, LancementCode: 'LT002', StatutTraitement: 'T', DateCreation: new Date().toISOString().slice(0, 10) }
       ];
       document.getElementById('statusFilter').value = 'T';
       adminPage.updateOperationsTable();
       const rows = adminPage.operationsTableBody.querySelectorAll('tr');
-      expect(rows.length).toBeGreaterThan(0);
+      expect(rows.length).toBe(1);
+      expect(rows[0].classList.contains('row-transmitted')).toBe(true);
+    });
+
+    it('should grey out transmitted SILOG rows (StatutTraitement T)', () => {
+      const today = new Date().toISOString().slice(0, 10);
+      adminPage.operations = [
+        {
+          TempsId: 10,
+          OperatorCode: '912',
+          OperatorName: 'Test',
+          LancementCode: 'LT2600001',
+          LancementName: 'ART',
+          Phase: '010',
+          Fabrication: 'Montage',
+          StartTime: '08:00',
+          EndTime: '10:00',
+          StatutTraitement: 'T',
+          DateCreation: today
+        }
+      ];
+      adminPage.updateOperationsTable();
+      const row = adminPage.operationsTableBody.querySelector('tr.row-transmitted');
+      expect(row).toBeTruthy();
+      expect(row.textContent).toContain('TRANSMIS');
+      expect(row.querySelector('.transmitted-lock')).toBeTruthy();
     });
 
     it('should filter by search', () => {

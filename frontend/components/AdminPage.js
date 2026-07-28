@@ -192,12 +192,24 @@ class AdminPage {
     }
 
     /**
-     * Lignes transmises à SILOG (StatutTraitement='T') : masquées du tableau admin.
-     * Une fois transmise, l'opération n'est plus modifiable/supprimable et n'a plus à être affichée.
+     * Lignes transmises à SILOG (StatutTraitement='T') : visibles et grisées
+     * pendant TRANSMITTED_VISIBLE_DAYS, pour savoir ce qui a déjà basculé.
      */
     shouldShowAdminDashboardRow(op) {
         const st = String(op?.StatutTraitement ?? '').toUpperCase().trim();
-        return st !== 'T';
+        if (st !== 'T') return true;
+
+        const days = Number(ADMIN_CONFIG.TRANSMITTED_VISIBLE_DAYS ?? 30);
+        if (!Number.isFinite(days) || days <= 0) return true;
+
+        const ymd = this._parseOpDateCreationLocalYmd(op?.DateCreation);
+        if (!ymd) return true;
+        const created = new Date(`${ymd}T00:00:00`);
+        if (Number.isNaN(created.getTime())) return true;
+        const cutoff = new Date();
+        cutoff.setHours(0, 0, 0, 0);
+        cutoff.setDate(cutoff.getDate() - days);
+        return created >= cutoff;
     }
 
     /**
@@ -1719,6 +1731,13 @@ class AdminPage {
 
         if (selectedOpStatus && selectedOpStatus !== '') {
             filteredOperations = filteredOperations.filter(op => {
+                if (selectedOpStatus === 'T') {
+                    return String(op?.StatutTraitement ?? '').toUpperCase().trim() === 'T';
+                }
+                // Hors filtre "Transmis" : ne pas mélanger les lignes déjà basculées SILOG
+                if (String(op?.StatutTraitement ?? '').toUpperCase().trim() === 'T') {
+                    return false;
+                }
                 const normalized = this.normalizeOperationStatus(op);
                 if (selectedOpStatus === 'EN_COURS') return normalized === 'EN_COURS';
                 if (selectedOpStatus === 'EN_PAUSE') return normalized === 'EN_PAUSE';
@@ -1751,10 +1770,9 @@ class AdminPage {
             this.logger.log(`📊 Après filtrage recherche: ${filteredOperations.length} opérations`);
         }
 
-        // Transmis (T) : masqués du tableau admin (opération figée côté SILOG).
-        // On masque aussi les segments de travail / lignes non consolidées qui appartiennent
-        // à une opération déjà transmise (même opérateur + lancement + jour), sinon la ligne
-        // "réapparaît" via l'overlay historique alors qu'elle est figée.
+        // Transmis (T) : visibles et grisés. On masque seulement les overlays
+        // historiques (segments / non consolidés) du même opérateur+LT+jour,
+        // pour éviter les doublons à côté de la ligne consolidée déjà basculée.
         const transmittedKeys = new Set();
         for (const op of this.operations || []) {
             if (String(op?.StatutTraitement ?? '').toUpperCase().trim() !== 'T') continue;
@@ -1765,6 +1783,8 @@ class AdminPage {
         }
         filteredOperations = filteredOperations.filter(op => {
             if (!this.shouldShowAdminDashboardRow(op)) return false;
+            const isT = String(op?.StatutTraitement ?? '').toUpperCase().trim() === 'T';
+            if (isT) return true;
             if (transmittedKeys.size === 0) return true;
             const oc = String(op?.OperatorCode || op?.operatorCode || op?.operatorId || '').trim();
             const lc = String(op?.LancementCode || op?.lancementCode || '').trim().toUpperCase();
@@ -1923,6 +1943,7 @@ class AdminPage {
             
             const row = createElement('tr');
             const isPauseRow = operation._isPauseRow === true || operation.type === 'pause';
+            const isTransmitted = String(operation.StatutTraitement || '').toUpperCase() === 'T';
 
             if (isPauseRow) {
                 row.classList.add('pause-row');
@@ -1930,6 +1951,10 @@ class AdminPage {
                 if (pauseStatusCode === 'PAUSE_TERMINEE') {
                     row.classList.add('pause-terminee');
                 }
+            }
+            if (isTransmitted) {
+                row.classList.add('row-transmitted');
+                row.title = 'Transmis à SILOG (StatutTraitement = T)';
             }
             
             // Identifiants (ne pas confondre):
@@ -1947,12 +1972,15 @@ class AdminPage {
             row.dataset.unconsolidated = isUnconsolidated ? 'true' : 'false';
 
             // Déterminer le statut à afficher :
-            // 1. Priorité au statut de l'opération (Status/StatusCode) - indique si l'opération est Terminé, En cours, En pause
-            // 2. Sinon, utiliser le statut de traitement/consolidation (StatutTraitement) - indique si l'opération est consolidée/transférée
+            // Priorité au basculement SILOG (T) pour que l'admin voie clairement ce qui est déjà transmis.
             let statutCode, statutLabel;
-            
-            // Vérifier d'abord le statut de l'opération (Status/StatusCode — l’un ou l’autre peut manquer selon la source)
-            if (operation.StatusCode || operation.statusCode || operation.Status || operation.status) {
+
+            if (isTransmitted) {
+                statutCode = 'T';
+                statutLabel = STATUS_LABELS[STATUS_CODES.TRANSMIS] || 'TRANSMIS';
+            }
+            // Sinon statut opération (Status/StatusCode)
+            else if (operation.StatusCode || operation.statusCode || operation.Status || operation.status) {
                 const rawCode = (operation.StatusCode || operation.statusCode || '').toString().trim();
                 statutCode = rawCode
                     ? rawCode.toUpperCase().replace(/[^A-Z0-9_]/g, '_')
@@ -2033,7 +2061,6 @@ class AdminPage {
             const cell9 = createTableCell('', { className: 'actions-cell' });
             // Un enregistrement déjà transmis à SILOG (StatutTraitement='T') ne peut être ni corrigé
             // ni supprimé côté backend : on masque les boutons pour éviter une erreur trompeuse.
-            const isTransmitted = String(operation.StatutTraitement || '').toUpperCase() === 'T';
             if (!isPauseRow && isTransmitted) {
                 const lockedInfo = createElement('span', {
                     className: 'transmitted-lock',
