@@ -5211,12 +5211,17 @@ router.get('/silog-pipeline-status', async (req, res) => {
             GROUP BY StatutTraitement
         `;
 
+        const erpDb = process.env.DB_ERP_DATABASE || 'SEDI_ERP';
         const staleQuery = `
-            SELECT COUNT(*) AS NbStale,
-                   MIN(DateCreation) AS PlusAncienStale
-            FROM [SEDI_APP_INDEPENDANTE].[dbo].[ABTEMPS_OPERATEURS]
-            WHERE StatutTraitement = 'O'
-              AND DATEDIFF(HOUR, DateCreation, GETDATE()) > @staleHours
+            SELECT
+                COUNT(*) AS NbStale,
+                SUM(CASE WHEN ISNULL(E.LancementSolde, 'O') = 'N' THEN 1 ELSE 0 END) AS NbStaleActionable,
+                SUM(CASE WHEN ISNULL(E.LancementSolde, 'O') <> 'N' THEN 1 ELSE 0 END) AS NbStaleSoldes,
+                MIN(t.DateCreation) AS PlusAncienStale
+            FROM [SEDI_APP_INDEPENDANTE].[dbo].[ABTEMPS_OPERATEURS] t
+            LEFT JOIN [${erpDb}].[dbo].[LCTE] E ON E.CodeLancement = t.LancementCode
+            WHERE t.StatutTraitement = 'O'
+              AND DATEDIFF(HOUR, t.DateCreation, GETDATE()) > @staleHours
         `;
 
         const viewCountQuery = `
@@ -5237,17 +5242,24 @@ router.get('/silog-pipeline-status', async (req, res) => {
         }
 
         const nbStale = stale?.[0]?.NbStale || 0;
+        const nbStaleActionable = stale?.[0]?.NbStaleActionable || 0;
+        const nbStaleSoldes = stale?.[0]?.NbStaleSoldes || 0;
         const oldestStale = stale?.[0]?.PlusAncienStale || null;
         const nbInView = viewCount?.[0]?.NbVue ?? -1;
 
         let health = 'OK';
         const warnings = [];
 
-        if (nbStale > 0) {
+        if (nbStaleActionable > 0) {
             health = 'WARNING';
             warnings.push(
-                `${nbStale} enregistrement(s) en StatutTraitement='O' depuis plus de ${staleHours}h (plus ancien : ${oldestStale}). ` +
-                `SEDI_ETDIFF est peut-être bloquée ou arrêtée sur SVC_SILOG.`
+                `${nbStaleActionable} enregistrement(s) en 'O' depuis >${staleHours}h sur lancements NON soldés ` +
+                `(plus ancien : ${oldestStale}). SEDI_ETDIFF est peut-être bloquée ou arrêtée sur SVC_SILOG.`
+            );
+        }
+        if (nbStaleSoldes > 0) {
+            warnings.push(
+                `${nbStaleSoldes} enregistrement(s) en 'O' stale sur lancements soldés (EDI ne peut pas intégrer — hors alerte critique).`
             );
         }
 
@@ -5289,6 +5301,8 @@ router.get('/silog-pipeline-status', async (req, res) => {
                 total: nbNull + nbO + nbT,
                 vueRemonteTemps: nbInView,
                 staleO: nbStale,
+                staleOActionable: nbStaleActionable,
+                staleOSoldes: nbStaleSoldes,
                 oldestStale
             },
             detail: statusMap

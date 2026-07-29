@@ -9,7 +9,36 @@ docker ps --format "table {{.Names}}\t{{.Status}}"
 docker logs --tail 120 sedi-tablette-backend
 tail -n 80 /var/log/sedi-watchdog.log
 tail -n 80 /var/log/sedi-watchdog-alert.log
+sudo systemctl status sedi-backend-health.timer sedi-watchdog.timer sedi-backup.timer
 ```
+
+### Activer alertes + timers (une fois sur la VM)
+
+Dans `docker/.env` :
+```
+TEAMS_WEBHOOK_URL=https://outlook.office.com/webhook/...
+ALERT_EMAIL=...
+ALERTS_ENABLED=true
+```
+
+```bash
+sudo chmod +x /home/Tablette-FSOP/docker/scripts/*.sh
+sudo cp /home/Tablette-FSOP/docker/systemd/sedi-backend-health.* /etc/systemd/system/
+sudo cp /home/Tablette-FSOP/docker/systemd/sedi-watchdog.* /etc/systemd/system/
+sudo cp /home/Tablette-FSOP/docker/systemd/sedi-backup.* /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now sedi-backend-health.timer sedi-watchdog.timer sedi-backup.timer
+```
+
+Test manuel :
+```bash
+/home/Tablette-FSOP/docker/scripts/check-backend-alive.sh
+docker exec sedi-tablette-backend node /app/scripts/proactive-watchdog.js
+/home/Tablette-FSOP/docker/scripts/backup-fsop.sh
+```
+
+Sauvegarde → `/var/backups/tablette-fsop/YYYYMMDD_HHMMSS`  
+Restore : `./docker/scripts/restore-fsop.sh /var/backups/tablette-fsop/...`
 
 ## 2) Incident FSOP templates (TEMPLATES_DIR_NOT_FOUND)
 

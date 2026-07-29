@@ -91,6 +91,24 @@ services:
       # SILOG executable path as seen by the Windows runner (local path recommended)
       - SILOG_EXE_PATH=${SILOG_EXE_PATH:-C:\\SILOG8\\SILOG.exe}
       - SILOG_WORKDIR=${SILOG_WORKDIR:-C:\\SILOG8}
+      - SILOG_STALE_THRESHOLD_HOURS=${SILOG_STALE_THRESHOLD_HOURS:-24}
+      # Alertes fiabilité (watchdog → Teams / email)
+      - ALERTS_ENABLED=${ALERTS_ENABLED:-true}
+      - ALERT_COOLDOWN_MINUTES=${ALERT_COOLDOWN_MINUTES:-60}
+      - ALERT_EMAIL=${ALERT_EMAIL:-}
+      - TEAMS_WEBHOOK_URL=${TEAMS_WEBHOOK_URL:-}
+      - ALERT_TEAMS_WEBHOOK=${ALERT_TEAMS_WEBHOOK:-}
+      - EMAIL_DISABLED=${EMAIL_DISABLED:-false}
+      - EMAIL_USE_HTTP=${EMAIL_USE_HTTP:-false}
+      - EMAIL_WEBHOOK_URL=${EMAIL_WEBHOOK_URL:-}
+      - SMTP_HOST=${SMTP_HOST:-}
+      - SMTP_PORT=${SMTP_PORT:-587}
+      - SMTP_USER=${SMTP_USER:-}
+      - SMTP_PASS=${SMTP_PASS:-}
+      - SMTP_FROM=${SMTP_FROM:-}
+    # Limites mémoire : évite qu'un conteneur saturer la RAM hôte
+    mem_limit: ${BACKEND_MEM_LIMIT:-1536m}
+    mem_reservation: ${BACKEND_MEM_RESERVATION:-512m}
     volumes:
       # Host mount -> container mount (defaults keep existing behavior)
       # VM variant example: SERVICES_HOST_PATH=/mnt/partage_fsop and SERVICES_CONTAINER_PATH=/mnt/services/Tracabilite
@@ -136,6 +154,8 @@ services:
       - "8080:80"
     environment:
       - TZ=Europe/Paris
+    mem_limit: ${FRONTEND_MEM_LIMIT:-256m}
+    mem_reservation: ${FRONTEND_MEM_RESERVATION:-64m}
     # Pas de depends_on backend : le front doit démarrer même si l'API est arrêtée (mode dégradé Nginx + UI).
     networks:
       - sedi-network
@@ -159,6 +179,8 @@ services:
     networks:
       - sedi-network
     restart: always
+    mem_limit: ${REDIS_MEM_LIMIT:-384m}
+    mem_reservation: ${REDIS_MEM_RESERVATION:-64m}
     command: redis-server --appendonly yes --maxmemory 256mb --maxmemory-policy allkeys-lru ${REDIS_PASSWORD:+--requirepass ${REDIS_PASSWORD}}
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]

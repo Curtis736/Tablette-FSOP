@@ -1,0 +1,10 @@
+[Unit]
+Description=FSOP daily backup at 02:30
+
+[Timer]
+OnCalendar=*-*-* 02:30:00
+Persistent=true
+Unit=sedi-backup.service
+
+[Install]
+WantedBy=timers.target
