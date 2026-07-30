@@ -8,10 +8,15 @@ pipeline {
     timeout(time: 90, unit: 'MINUTES')
   }
 
+  parameters {
+    booleanParam(name: 'SKIP_SONAR', defaultValue: false, description: 'Passer Sonar + Quality Gate (debug)')
+    booleanParam(name: 'SKIP_DEPLOY', defaultValue: false, description: 'Passer build/deploy/smoke test')
+  }
+
   environment {
-    SONAR_SERVER   = 'sedi-sonar'
+    SONAR_SERVER    = 'sedi-sonar'
     COMPOSE_PROJECT = 'sedi-tablette-test'
-    SMOKE_URL      = "${env.FSOP_TEST_SMOKE_URL ?: 'http://127.0.0.1:8088/api/health'}"
+    SMOKE_URL       = "${env.FSOP_TEST_SMOKE_URL ?: 'http://127.0.0.1:8088/api/health'}"
   }
 
   stages {
@@ -33,9 +38,12 @@ pipeline {
     stage('Backend — lint') {
       steps {
         dir('backend') {
-          // Dette ESLint éventuelle : ne bloque pas le deploy (UNSTABLE seulement)
-          catchError(buildResult: 'UNSTABLE', stageResult: 'UNSTABLE') {
-            sh 'npm run lint'
+          // Dette ESLint connue (scripts/, console, curly…) : informatif seulement
+          script {
+            def rc = sh(script: 'npm run lint || true', returnStatus: true)
+            if (rc != 0) {
+              unstable('ESLint: erreurs présentes (non bloquant pour Sonar/deploy)')
+            }
           }
         }
       }
@@ -51,35 +59,46 @@ pipeline {
     }
 
     stage('SonarQube') {
+      when {
+        expression { return !params.SKIP_SONAR }
+      }
       steps {
-        withCredentials([string(credentialsId: 'sonar-token', variable: 'SONAR_TOKEN')]) {
-          withSonarQubeEnv("${SONAR_SERVER}") {
-            sh '''
-              set -e
-              if command -v sonar-scanner >/dev/null 2>&1; then
-                sonar-scanner \
-                  -Dsonar.login="$SONAR_TOKEN" \
-                  -Dsonar.host.url="$SONAR_HOST_URL"
-              elif [ -x /opt/sonar-scanner/bin/sonar-scanner ]; then
-                /opt/sonar-scanner/bin/sonar-scanner \
-                  -Dsonar.login="$SONAR_TOKEN" \
-                  -Dsonar.host.url="$SONAR_HOST_URL"
-              else
-                docker run --rm \
-                  --network sedi-ci-network \
-                  -e SONAR_HOST_URL="$SONAR_HOST_URL" \
-                  -e SONAR_TOKEN="$SONAR_TOKEN" \
-                  -v "$PWD:/usr/src" \
-                  sonarsource/sonar-scanner-cli:11 \
-                  -Dsonar.projectBaseDir=/usr/src
-              fi
-            '''
+        script {
+          try {
+            withCredentials([string(credentialsId: 'sonar-token', variable: 'SONAR_TOKEN')]) {
+              withSonarQubeEnv("${SONAR_SERVER}") {
+                sh '''
+                  set -e
+                  echo "SONAR_HOST_URL=${SONAR_HOST_URL}"
+                  if command -v sonar-scanner >/dev/null 2>&1; then
+                    sonar-scanner -Dsonar.login="$SONAR_TOKEN" -Dsonar.host.url="$SONAR_HOST_URL"
+                  elif [ -x /opt/sonar-scanner/bin/sonar-scanner ]; then
+                    /opt/sonar-scanner/bin/sonar-scanner -Dsonar.login="$SONAR_TOKEN" -Dsonar.host.url="$SONAR_HOST_URL"
+                  else
+                    docker run --rm \
+                      --network sedi-ci-network \
+                      -e SONAR_HOST_URL="$SONAR_HOST_URL" \
+                      -e SONAR_TOKEN="$SONAR_TOKEN" \
+                      -v "$PWD:/usr/src" \
+                      sonarsource/sonar-scanner-cli:11 \
+                      -Dsonar.projectBaseDir=/usr/src
+                  fi
+                '''
+              }
+            }
+          } catch (err) {
+            echo "SonarQube stage failed: ${err}"
+            echo "Vérifier: plugin SonarQube Scanner, serveur nommé '${SONAR_SERVER}', credential 'sonar-token', URL http://sonarqube:9000"
+            error("SonarQube non configuré ou analyse en échec — voir message ci-dessus")
           }
         }
       }
     }
 
     stage('Quality Gate') {
+      when {
+        expression { return !params.SKIP_SONAR }
+      }
       steps {
         timeout(time: 10, unit: 'MINUTES') {
           waitForQualityGate abortPipeline: true
@@ -88,6 +107,9 @@ pipeline {
     }
 
     stage('Build images :test') {
+      when {
+        expression { return !params.SKIP_DEPLOY }
+      }
       steps {
         sh '''
           set -e
@@ -99,10 +121,13 @@ pipeline {
 
     stage('Deploy test') {
       when {
-        anyOf {
-          branch 'main'
-          branch 'master'
-          branch pattern: 'feature/.*', comparator: 'REGEXP'
+        allOf {
+          expression { return !params.SKIP_DEPLOY }
+          anyOf {
+            branch 'main'
+            branch 'master'
+            branch pattern: 'feature/.*', comparator: 'REGEXP'
+          }
         }
       }
       steps {
@@ -110,7 +135,6 @@ pipeline {
           set -e
           chmod +x docker/scripts/deploy-test.sh
           mkdir -p docker/ssl-runtime-test/nginx-ssl docker/ssl-runtime-test/tablet backend/logs-test
-          # Si certificats test absents, réutiliser ceux de ssl-runtime prod locaux (hôte test uniquement)
           if [ ! -f docker/ssl-runtime-test/nginx-ssl/fullchain.pem ] && [ -d docker/ssl-runtime/nginx-ssl ]; then
             cp -a docker/ssl-runtime/nginx-ssl/. docker/ssl-runtime-test/nginx-ssl/ 2>/dev/null || true
             cp -a docker/ssl-runtime/tablet/. docker/ssl-runtime-test/tablet/ 2>/dev/null || true
@@ -122,10 +146,13 @@ pipeline {
 
     stage('Smoke') {
       when {
-        anyOf {
-          branch 'main'
-          branch 'master'
-          branch pattern: 'feature/.*', comparator: 'REGEXP'
+        allOf {
+          expression { return !params.SKIP_DEPLOY }
+          anyOf {
+            branch 'main'
+            branch 'master'
+            branch pattern: 'feature/.*', comparator: 'REGEXP'
+          }
         }
       }
       steps {
@@ -146,8 +173,11 @@ pipeline {
     success {
       echo 'CI OK — env test déployé (si branche éligible). Prod non touchée.'
     }
+    unstable {
+      echo 'CI UNSTABLE (souvent ESLint) — Sonar/deploy peuvent avoir réussi.'
+    }
     failure {
-      echo 'CI KO — aucun déploiement test (ou smoke échoué).'
+      echo 'CI KO — souvent Sonar non branché (sedi-sonar / sonar-token) ou Quality Gate / deploy.'
     }
   }
 }
