@@ -12,7 +12,7 @@ vi.mock('../../utils/TimeUtils.js', () => ({
       if (!str) return 0;
       const parts = str.split(':');
       if (parts.length === 3) {
-        return parseInt(parts[0]) * 3600 + parseInt(parts[1]) * 60 + parseInt(parts[2]);
+        return Number.parseInt(parts[0]) * 3600 + Number.parseInt(parts[1]) * 60 + Number.parseInt(parts[2]);
       }
       return 0;
     }),

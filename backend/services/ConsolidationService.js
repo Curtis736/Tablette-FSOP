@@ -13,7 +13,7 @@ class ConsolidationService {
      */
     static _localDateKey(value) {
         if (!value) return null;
-        const d = value instanceof Date ? new Date(value) : new Date(value);
+        const d = value instanceof Date ? value : new Date(value);
         if (Number.isNaN(d.getTime())) return null;
         const yyyy = d.getFullYear();
         const mm = String(d.getMonth() + 1).padStart(2, '0');
@@ -346,14 +346,14 @@ class ConsolidationService {
                 if (typeof timeValue === 'string') {
                     const match = timeValue.trim().match(/^(\d{1,2}):(\d{2})(?::(\d{2}))?$/);
                     if (match) {
-                        return { hour: parseInt(match[1], 10), minute: parseInt(match[2], 10) };
+                        return { hour: Number.parseInt(match[1], 10), minute: Number.parseInt(match[2], 10) };
                     }
                 }
                 if (timeValue instanceof Date) {
                     return { hour: timeValue.getHours(), minute: timeValue.getMinutes() };
                 }
                 if (typeof timeValue === 'object' && timeValue.hour !== undefined && timeValue.minute !== undefined) {
-                    return { hour: parseInt(timeValue.hour, 10), minute: parseInt(timeValue.minute, 10) };
+                    return { hour: Number.parseInt(timeValue.hour, 10), minute: Number.parseInt(timeValue.minute, 10) };
                 }
                 return null;
             };
@@ -363,12 +363,12 @@ class ConsolidationService {
                 const createdAt = event.CreatedAt || event.createdAt;
                 if (createdAt) {
                     const d = new Date(createdAt);
-                    if (!isNaN(d.getTime())) return d;
+                    if (!Number.isNaN(d.getTime())) return d;
                 }
 
                 // 2) Use DateCreation as date + HeureDebut/HeureFin as time
                 const base = new Date(event.DateCreation || event.dateCreation);
-                if (!isNaN(base.getTime())) {
+                if (!Number.isNaN(base.getTime())) {
                     const t = extractTime(kind === 'start' ? event.HeureDebut : event.HeureFin);
                     if (t) {
                         base.setHours(t.hour, t.minute, 0, 0);

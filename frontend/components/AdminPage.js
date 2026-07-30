@@ -298,8 +298,8 @@ class AdminPage {
         const tidB = hasTid(b);
         if (tidA !== tidB) return tidA ? a : b;
         if (tidA && tidB) {
-            const na = parseInt(String(a.TempsId).replace(/\D/g, ''), 10) || 0;
-            const nb = parseInt(String(b.TempsId).replace(/\D/g, ''), 10) || 0;
+            const na = Number.parseInt(String(a.TempsId).replace(/\D/g, ''), 10) || 0;
+            const nb = Number.parseInt(String(b.TempsId).replace(/\D/g, ''), 10) || 0;
             if (na !== nb) return na > nb ? a : b;
         }
         if (Boolean(a?._isUnconsolidated) !== Boolean(b?._isUnconsolidated)) {
@@ -499,7 +499,7 @@ class AdminPage {
                     tableBody.addEventListener('click', async (e) => {
                         if (e.target.closest('.btn-delete')) {
                             const btn = e.target.closest('.btn-delete');
-                            const tempsId = btn.dataset.tempsId ? parseInt(btn.dataset.tempsId, 10) : null;
+                            const tempsId = btn.dataset.tempsId ? Number.parseInt(btn.dataset.tempsId, 10) : null;
                             const eventId = btn.dataset.eventId ? btn.dataset.eventId : null;
                             const id = btn.dataset.id || btn.dataset.operationId;
                             const isUnconsolidated = (btn.dataset.unconsolidated === 'true') || !tempsId;
@@ -513,7 +513,7 @@ class AdminPage {
                             e.preventDefault();
                             e.stopPropagation();
                             const btn = e.target.closest('.btn-edit');
-                            const tempsId = btn.dataset.tempsId ? parseInt(btn.dataset.tempsId, 10) : null;
+                            const tempsId = btn.dataset.tempsId ? Number.parseInt(btn.dataset.tempsId, 10) : null;
                             const eventId = btn.dataset.eventId ? btn.dataset.eventId : null;
                             const id = btn.dataset.id || btn.dataset.operationId;
                             const isUnconsolidated = (btn.dataset.unconsolidated === 'true') || !tempsId;
@@ -767,8 +767,8 @@ class AdminPage {
                     EndTime: op.endTime,
                     startTime: op.startTime,
                     endTime: op.endTime,
-                    TotalDuration: op.duration ? parseInt(op.duration.replace(/[^0-9]/g, '')) : null,
-                    PauseDuration: op.pauseDuration ? parseInt(op.pauseDuration.replace(/[^0-9]/g, '')) : 0,
+                    TotalDuration: op.duration ? Number.parseInt(op.duration.replace(/[^0-9]/g, '')) : null,
+                    PauseDuration: op.pauseDuration ? Number.parseInt(op.pauseDuration.replace(/[^0-9]/g, '')) : 0,
                     ProductiveDuration: null,
                     EventsCount: op.events || 0,
                     // Ne PAS fabriquer de valeurs: sinon la clé de dédoublonnage diverge de la ligne
@@ -859,8 +859,8 @@ class AdminPage {
                 if (sa !== sb) return sa > sb ? a : b;
 
                 // Tie-break: TempsId le plus récent si présent
-                const ta = a?.TempsId ? parseInt(a.TempsId, 10) : 0;
-                const tb = b?.TempsId ? parseInt(b.TempsId, 10) : 0;
+                const ta = a?.TempsId ? Number.parseInt(a.TempsId, 10) : 0;
+                const tb = b?.TempsId ? Number.parseInt(b.TempsId, 10) : 0;
                 if (ta !== tb) return ta > tb ? a : b;
 
                 return a; // stable
@@ -939,7 +939,7 @@ class AdminPage {
             }
             
             // Mettre à jour le menu déroulant des opérateurs avec les deux listes
-            const connectedOps = operatorsData && (operatorsData.success ? operatorsData.operators : operatorsData.operators) || [];
+            const connectedOps = (operatorsData && operatorsData.operators) || [];
             // Utiliser une cache locale pour la liste complète (évite de re-télécharger pendant les refresh)
             const cachedAll = this._allOperatorsCache || [];
             if (connectedOps.length > 0 || cachedAll.length > 0) {
@@ -953,7 +953,7 @@ class AdminPage {
             if (shouldRefreshAll) {
                 this.apiService.getAllOperators()
                     .then((allOperatorsData) => {
-                        const allOps = allOperatorsData && (allOperatorsData.success ? allOperatorsData.operators : allOperatorsData.operators) || [];
+                        const allOps = (allOperatorsData && allOperatorsData.operators) || [];
                         this._allOperatorsCache = allOps;
                         this._allOperatorsCacheAt = Date.now();
                         if (connectedOps.length > 0 || allOps.length > 0) {
@@ -1444,8 +1444,8 @@ class AdminPage {
                 this.apiService.getAllOperators()
             ]);
             
-            const connectedOps = connectedResponse && (connectedResponse.success ? connectedResponse.operators : connectedResponse.operators) || [];
-            const allOps = allOperatorsResponse && (allOperatorsResponse.success ? allOperatorsResponse.operators : allOperatorsResponse.operators) || [];
+            const connectedOps = (connectedResponse && connectedResponse.operators) || [];
+            const allOps = (allOperatorsResponse && allOperatorsResponse.operators) || [];
             
             if (connectedOps.length > 0 || allOps.length > 0) {
                 this.updateOperatorSelect(connectedOps, allOps);
@@ -2403,20 +2403,28 @@ class AdminPage {
                     return;
                 }
                 
-                const triggerEdiJob = confirm('Déclencher EDI_JOB après transfert ?');
+                // Toujours demander EDI : en mode ssh = immédiat ; en scheduled = filet Windows
+                const ok = confirm(
+                    `Valider ${ids.length} opération(s) et envoyer vers SILOG maintenant ?\n\n` +
+                    `OK = validation (O) + déclenchement EDI\nAnnuler = abandon`
+                );
+                if (!ok) return;
+
                 const result = await this.apiService.validateAndTransmitMonitoringBatch(ids, {
-                    triggerEdiJob,
-                    // En mode planifié SILOG (17h15), ne passer qu'en 'O' : le job SEDI_ETDIFF consomme
-                    // V_REMONTE_TEMPS puis bascule en 'T'. Un marquage T ici empêche la remontée.
+                    triggerEdiJob: true,
+                    // Ne pas marquer T ici : SILOG bascule O→T après intégration réelle
                     adminMarkTransmitted: false
                 });
                 if (result?.success) {
                     this.notificationManager.success(
-                        `${result.count || ids.length} opération(s) validée(s) (statut O) — remontée SILOG après validation auto ~20h`
+                        this._formatTransferResultMessage(result, ids.length)
                     );
-                    // Recharger les données pour mettre à jour l'affichage
-                    await this.loadData(false); // Désactiver autoConsolidate après transfert
-                    // Mettre à jour le tableau pour refléter les changements
+                    if (result.ediJob && result.ediJob.success === false) {
+                        this.notificationManager.warning(
+                            result.ediJob.error || result.ediJob.message || 'EDI_JOB a échoué — lignes en O, retry possible'
+                        );
+                    }
+                    await this.loadData(false);
                     this.updateOperationsTable();
                 } else {
                     this.notificationManager.error(result?.error || 'Erreur lors du transfert');
@@ -2539,31 +2547,60 @@ class AdminPage {
     }
 
     async confirmTransferFromModal() {
-        const ids = Array.from(this.transferSelectionIds).map(x => parseInt(x, 10)).filter(n => !Number.isNaN(n));
+        const ids = Array.from(this.transferSelectionIds).map(x => Number.parseInt(x, 10)).filter(n => !Number.isNaN(n));
         if (ids.length === 0) {
             this.notificationManager.warning('Aucune ligne sélectionnée');
             return;
         }
         
         try {
-        const triggerEdiJob = confirm('Déclencher EDI_JOB après transfert ?');
-        const result = await this.apiService.validateAndTransmitMonitoringBatch(ids, {
-            triggerEdiJob,
-            adminMarkTransmitted: false
-        });
-        if (result?.success) {
+            const ok = confirm(
+                `Valider ${ids.length} opération(s) et envoyer vers SILOG maintenant ?\n\n` +
+                `OK = validation (O) + déclenchement EDI\nAnnuler = abandon`
+            );
+            if (!ok) return;
+
+            const result = await this.apiService.validateAndTransmitMonitoringBatch(ids, {
+                triggerEdiJob: true,
+                adminMarkTransmitted: false
+            });
+            if (result?.success) {
                 this.notificationManager.success(
-                    `${result.count || ids.length} opération(s) validée(s) (statut O) — remontée SILOG après validation auto ~20h`
+                    this._formatTransferResultMessage(result, ids.length)
                 );
-            this.hideTransferModal();
-                await this.loadData(false); // Désactiver autoConsolidate après transfert
-        } else {
-            this.notificationManager.error(result?.error || 'Erreur transfert');
+                if (result.ediJob && result.ediJob.success === false) {
+                    this.notificationManager.warning(
+                        result.ediJob.error || result.ediJob.message || 'EDI_JOB a échoué — lignes en O'
+                    );
+                }
+                this.hideTransferModal();
+                await this.loadData(false);
+            } else {
+                this.notificationManager.error(result?.error || 'Erreur transfert');
             }
         } catch (error) {
             this.logger.error('❌ Erreur lors du transfert depuis la modale:', error);
             this.notificationManager.error('Erreur de connexion lors du transfert');
         }
+    }
+
+    /**
+     * Message admin selon le résultat EDI (ssh immédiat vs scheduled).
+     */
+    _formatTransferResultMessage(result, fallbackCount) {
+        const n = result.count || fallbackCount;
+        const edi = result.ediJob;
+        if (!edi) {
+            return `${n} opération(s) validée(s) (statut O)`;
+        }
+        if (edi.skipped) {
+            return `${n} validée(s) (O) — EDI non lancé ici (${edi.message || 'mode planifié'}). Attente tâche Windows.`;
+        }
+        if (edi.success) {
+            const sec = edi.elapsedMs ? ` en ${Math.round(edi.elapsedMs / 1000)}s` : '';
+            return `${n} validée(s) (O) — EDI SILOG déclenché${sec}. Passage en TRANSMIS (T) après intégration.`;
+        }
+        return `${n} validée(s) (O) — EDI en erreur (lignes restent en attente)`;
     }
 
     async deleteOperation(id) {
@@ -2593,8 +2630,8 @@ class AdminPage {
         }
         
         // Convertir l'ID en nombre pour éviter les problèmes de type
-        const tempsId = parseInt(id, 10);
-        if (isNaN(tempsId)) {
+        const tempsId = Number.parseInt(id, 10);
+        if (Number.isNaN(tempsId)) {
             this.logger.error('❌ ID invalide:', id);
             this.notificationManager.error('ID d\'enregistrement invalide');
             return;
@@ -2635,8 +2672,8 @@ class AdminPage {
 
     async editMonitoringRecord(id) {
         // Convertir l'ID en nombre pour éviter les problèmes de type
-        const tempsId = parseInt(id, 10);
-        if (isNaN(tempsId)) {
+        const tempsId = Number.parseInt(id, 10);
+        if (Number.isNaN(tempsId)) {
             this.logger.error('❌ ID invalide:', id);
             this.notificationManager.error('ID d\'enregistrement invalide');
             return;
@@ -2830,10 +2867,10 @@ class AdminPage {
         
         if (parts.length < 2) return null;
         
-        const hours = parseInt(parts[0], 10);
-        const minutes = parseInt(parts[1], 10);
+        const hours = Number.parseInt(parts[0], 10);
+        const minutes = Number.parseInt(parts[1], 10);
         
-        if (isNaN(hours) || isNaN(minutes) || hours < 0 || hours > 23 || minutes < 0 || minutes > 59) {
+        if (Number.isNaN(hours) || Number.isNaN(minutes) || hours < 0 || hours > 23 || minutes < 0 || minutes > 59) {
             return null;
         }
         
@@ -2929,7 +2966,7 @@ class AdminPage {
         this.logger.log('🔧 Édition inline de l\'opération:', id, 'Type:', typeof id);
         
         // Convertir l'ID en nombre si nécessaire pour la comparaison
-        const numericId = typeof id === 'string' ? parseInt(id, 10) : id;
+        const numericId = typeof id === 'string' ? Number.parseInt(id, 10) : id;
         
         // Trouver la ligne correspondante - essayer plusieurs méthodes
         let row = document.querySelector(`tr[data-operation-id="${id}"]`);
@@ -3103,7 +3140,7 @@ class AdminPage {
         // Sinon, essayer de formater comme une date complète avec fuseau horaire Paris
         try {
             const date = new Date(dateString);
-            if (!isNaN(date.getTime())) {
+            if (!Number.isNaN(date.getTime())) {
                 // Utiliser fuseau horaire français (Europe/Paris)
                 const result = date.toLocaleTimeString('fr-FR', {
                     timeZone: 'Europe/Paris',
@@ -3401,7 +3438,7 @@ class AdminPage {
         if (typeof timeString === 'string' && timeString.includes('T')) {
             try {
                 const date = new Date(timeString);
-                if (!isNaN(date.getTime())) {
+                if (!Number.isNaN(date.getTime())) {
                     // Utiliser toLocaleTimeString avec fuseau horaire français
                     const formattedTime = date.toLocaleTimeString('fr-FR', {
                         timeZone: 'Europe/Paris',
@@ -3440,13 +3477,13 @@ class AdminPage {
         if (typeof dateString === 'string' && /^\d{2}:\d{2}$/.test(dateString)) {
             const today = new Date();
             const [hours, minutes] = dateString.split(':');
-            today.setHours(parseInt(hours), parseInt(minutes), 0, 0);
+            today.setHours(Number.parseInt(hours), Number.parseInt(minutes), 0, 0);
             return today.toISOString().slice(0, 16); // Format YYYY-MM-DDTHH:mm
         }
         
         // Sinon, essayer de traiter comme une date complète
         const date = new Date(dateString);
-        if (isNaN(date.getTime())) {
+        if (Number.isNaN(date.getTime())) {
             this.logger.warn('Date invalide reçue:', dateString);
             return '';
         }
@@ -3663,7 +3700,7 @@ class AdminPage {
 
             // Vérifier si c'est un enregistrement de monitoring (ABTEMPS_OPERATEURS) ou historique (ABHISTORIQUE_OPERATEURS)
             // Utiliser la ligne déjà trouvée (row déclarée plus haut)
-            const tempsIdFromRow = row?.dataset?.tempsId ? parseInt(row.dataset.tempsId, 10) : null;
+            const tempsIdFromRow = row?.dataset?.tempsId ? Number.parseInt(row.dataset.tempsId, 10) : null;
             const eventIdFromRow = row?.dataset?.eventId || null;
             const isUnconsolidatedFromRow = row?.dataset?.unconsolidated === 'true';
             
@@ -3892,8 +3929,8 @@ class AdminPage {
         // Vérifier le format HH:mm
         const timeMatch = cleanTime.match(/^(\d{1,2}):(\d{2})$/);
         if (timeMatch) {
-            const hours = parseInt(timeMatch[1]);
-            const minutes = parseInt(timeMatch[2]);
+            const hours = Number.parseInt(timeMatch[1]);
+            const minutes = Number.parseInt(timeMatch[2]);
             
             // Validation des valeurs
             if (hours < 0 || hours > 23) {
@@ -3928,8 +3965,8 @@ class AdminPage {
         const parts = timeString.split(':');
         if (parts.length < 2) return 0;
         
-        const hours = parseInt(parts[0]) || 0;
-        const minutes = parseInt(parts[1]) || 0;
+        const hours = Number.parseInt(parts[0]) || 0;
+        const minutes = Number.parseInt(parts[1]) || 0;
         
         return hours * 60 + minutes;
     }

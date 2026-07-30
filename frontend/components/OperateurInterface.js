@@ -56,10 +56,14 @@ class OperateurInterface {
             this.lancementInput.disabled = false;
             this.lancementInput.value = '';
         }
-        if (this.selectedLancement) this.selectedLancement.textContent = '';
+        if (this.selectedLancement) this.selectedLancement.textContent = '\u00A0';
         if (this.controlsSection) this.controlsSection.style.display = 'none';
-        this.checkCurrentOperation({ promptIfRunning: false });
-        this.loadOperatorHistory();
+
+        // Hors constructeur (Sonar S7059) — appels async différés
+        queueMicrotask(() => {
+            this.checkCurrentOperation({ promptIfRunning: false });
+            this.loadOperatorHistory();
+        });
 
         // Synchronisation périodique UI ↔ DB (toutes les 30s)
         // Détecte les désynchronisations (coupure réseau, refresh partiel, etc.)
@@ -127,7 +131,7 @@ class OperateurInterface {
                 this.lancementInput.disabled = false;
                 this.lancementInput.value = '';
             }
-            if (this.selectedLancement) this.selectedLancement.textContent = '';
+            if (this.selectedLancement) this.selectedLancement.textContent = '\u00A0';
             if (this.controlsSection) this.controlsSection.style.display = 'none';
 
             if (operatorCode) this.apiService.setOperatorSessionActive(operatorCode, false);
@@ -1899,7 +1903,7 @@ class OperateurInterface {
                     this.lancementInput.disabled = false;
                     this.lancementInput.value = '';
                 }
-                if (this.selectedLancement) this.selectedLancement.textContent = '';
+                if (this.selectedLancement) this.selectedLancement.textContent = '\u00A0';
                 if (this.controlsSection) this.controlsSection.style.display = 'none';
             }
         } catch (error) {
@@ -1916,7 +1920,7 @@ class OperateurInterface {
                 this.lancementInput.disabled = false;
                 this.lancementInput.value = '';
             }
-            if (this.selectedLancement) this.selectedLancement.textContent = '';
+            if (this.selectedLancement) this.selectedLancement.textContent = '\u00A0';
             if (this.controlsSection) this.controlsSection.style.display = 'none';
         }
     }
@@ -1935,7 +1939,7 @@ class OperateurInterface {
             const mo = Number(m[2]) - 1;
             const d = Number(m[3]);
             const out = new Date(y, mo, d, 0, 0, 0, 0);
-            return isNaN(out.getTime()) ? null : out;
+            return Number.isNaN(out.getTime()) ? null : out;
         };
         const isTimeLike = (t) => typeof t === 'string' && /^\d{2}:\d{2}(:\d{2})?$/.test(t);
         // Utiliser un timestamp complet si dispo (sinon la date seule donne des heures fantômes comme 01:00)
@@ -2001,7 +2005,7 @@ class OperateurInterface {
             const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(s);
             if (!m) return null;
             const out = new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]), 0, 0, 0, 0);
-            return isNaN(out.getTime()) ? null : out;
+            return Number.isNaN(out.getTime()) ? null : out;
         };
         const pausedAt = operation?.startedAt || operation?.dateCreation || operation?.DateCreation || null;
         const pauseSince = pausedAt
@@ -2689,7 +2693,7 @@ class OperateurInterface {
         // Ajouter les event listeners pour les boutons de suppression
         this.commentsList.querySelectorAll('.btn-delete-comment').forEach(button => {
             button.addEventListener('click', (e) => {
-                const commentId = parseInt(e.target.closest('.btn-delete-comment').dataset.commentId);
+                const commentId = Number.parseInt(e.target.closest('.btn-delete-comment').dataset.commentId);
                 this.deleteComment(commentId);
             });
         });

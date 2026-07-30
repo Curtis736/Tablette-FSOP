@@ -37,13 +37,13 @@ const scriptFileName = process.argv[2] || 'migration_update_silog_views_from_sil
 function splitSqlBatches(sqlContent) {
     return sqlContent
         .replace(/^\uFEFF/, '') // BOM
-        .split(/^\s*GO\s*$/gim)
+        .split(/^[ \t]*GO[ \t]*$/gim)
         .map(b => b.trim());
 }
 
 function isMeaningfulBatch(batch) {
-    const withoutLineComments = batch.replace(/--.*$/gm, '');
-    const withoutBlockComments = withoutLineComments.replace(/\/\*[\s\S]*?\*\//g, '');
+    const withoutLineComments = batch.replace(/--[^\n]*$/gm, '');
+    const withoutBlockComments = withoutLineComments.replace(/\/\*[^*]*(?:\*+(?:[^/*][^*]*)*)?\*\//g, '');
     return withoutBlockComments.trim().length > 0;
 }
 

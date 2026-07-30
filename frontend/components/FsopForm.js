@@ -140,7 +140,7 @@ class FsopForm {
                 }
                 
                 // Pour "Numéro lancement", rendre le champ éditable (pas readonly)
-                const isReadonly = field.key === 'NUMERO_LANCEMENT' ? false : false; // Toujours éditable pour l'instant
+                const isReadonly = false;
                 
                 html += `
                     <div class="fsop-header-box-field">
@@ -238,7 +238,7 @@ class FsopForm {
         const sourceTitleCount = sourceBlocks.reduce((acc, b) => {
             if (b?.type !== 'paragraph') return acc;
             const text = String(b?.text || '').trim();
-            return /^\d{1,2}[a-z]?\s*[-–.]\s*\S+/i.test(text) ? acc + 1 : acc;
+            return /^\d{1,2}(?:[a-z])?[ \t]*[-–.][ \t]*\S+/i.test(text) ? acc + 1 : acc;
         }, 0);
 
         let blankId = 0;
@@ -264,7 +264,7 @@ class FsopForm {
             // Robust to:
             // - punctuation at end: "MO 1114 ind _____:"
             // - spaced MO numbers: "MO 1 114 ind _____"
-            out = out.replace(/\bMO\s*([\d\s]{3,8})\s+ind\s+_{2,}(\s*[:;,.!?)]|\s*$)/gi, (match, moRaw, suffix) => {
+            out = out.replace(/\bMO[ \t]*([\d \t]{3,8})[ \t]+ind[ \t]+_{2,}(?:[ \t]*[:;,.!?)]|[ \t]*$)/gi, (match, moRaw, suffix) => {
                 const moNumber = String(moRaw || '').replace(/\s+/g, '');
                 const placeholderKey = `{{IND_MO${moNumber}}}`;
                 const currentValue = this.formData.placeholders?.[placeholderKey] || '';
@@ -291,7 +291,7 @@ class FsopForm {
 
             // Global fallback for templates that encode blanks without underscores:
             // e.g. "MO 715 ind Nombre d'essai..." or "Brulé au tir numéro" (no trailing "_____").
-            out = out.replace(/\bMO\s*([\d\s]{3,8})\s+ind\b(?!\s*<input)\s*(?=($|[A-ZÀ-Ý]))/gi, (_m, moRaw) => {
+            out = out.replace(/\bMO[ \t]*([\d \t]{3,8})[ \t]+ind\b(?![ \t]*<input)[ \t]*(?=($|[A-ZÀ-Ý]))/gi, (_m, moRaw) => {
                 const moNumber = String(moRaw || '').replace(/\s+/g, '');
                 const placeholderKey = `{{IND_MO${moNumber}}}`;
                 const currentValue = this.formData.placeholders?.[placeholderKey] || '';
@@ -349,7 +349,7 @@ class FsopForm {
 
         const renderCheckboxLine = (text) => {
             // Pattern: "☐ Label" or "[ ] Label"
-            const m = text.match(/^([☐☑✓□]|\[[\sx]\])\s+(.+)$/i);
+            const m = text.match(/^([☐☑✓□]|\[(?:x| )])[ \t]+(\S.*)$/i);
             if (!m) return null;
             const sym = m[1];
             const label = m[2].trim();
@@ -371,9 +371,9 @@ class FsopForm {
             if (!s) return false;
             // Common patterns in FSOP templates
             // - "1. Montage ..." / "1- Montage ..." / "12. Contrôle ..." / "11a. Montage ..."
-            if (/^\d{1,2}\s*[a-z]?\s*[-–.]\s*\S+/i.test(s)) return true;
+            if (/^\d{1,2}(?:[a-z])?[ \t]*[-–.][ \t]*\S+/i.test(s)) return true;
             // - "Général :" etc.
-            if (s.length <= 80 && /:\s*$/.test(s)) return true;
+            if (s.length <= 80 && /:[ \t]*$/.test(s)) return true;
             // - "Mesure ... : MO 776 ind ___" (colon not at end, but it's still a heading-like line)
             if (s.length <= 130 && /\bMO\s*\d{3,5}\b/i.test(s) && /\bind\b/i.test(s)) return true;
             return false;
@@ -385,7 +385,7 @@ class FsopForm {
             const isBareSectionNumber = (t) => {
                 const s = normalizeCellText(t);
                 if (!s) return false;
-                return /^\d{1,2}[a-z]?\s*\.?\s*$/i.test(s);
+                return /^\d{1,2}(?:[a-z])?[ \t]*\.?[ \t]*$/i.test(s);
             };
             const normalizeSectionNumber = (t) => normalizeCellText(t).replace(/\s+/g, '').replace(/\.$/, '');
             const looksLikeStandaloneTitle = (t) => {
@@ -449,7 +449,7 @@ class FsopForm {
             const s = String(explicit || '').trim();
             const m = s.match(/^(\d{1,2})/);
             if (!m) return;
-            const n = parseInt(m[1], 10);
+            const n = Number.parseInt(m[1], 10);
             if (Number.isFinite(n) && n > autoTitleCounter) autoTitleCounter = n;
         };
 
@@ -459,7 +459,7 @@ class FsopForm {
             // Must look like a heading-ish line and include MO marker
             if (!looksLikeTitleText(s)) return false;
             // If it already starts with a number, not our case
-            if (/^\d{1,2}\s*[a-z]?\s*[-–.]/i.test(s)) return false;
+            if (/^\d{1,2}(?:[a-z])?[ \t]*[-–.]/i.test(s)) return false;
             // Heuristic: real main steps in this FSOP contain "MO xxxx ind ___"
             if (/\bMO\s*\d{3,5}\b/i.test(s) && /\bind\b/i.test(s)) return true;
             return false;
@@ -554,7 +554,7 @@ class FsopForm {
             const extractParenHints = (s) => {
                 const text = String(s || '');
                 const hints = [];
-                const re = /\(([^)]+)\)/g;
+                const re = /\(([^)]*)\)/g;
                 let m;
                 while ((m = re.exec(text)) !== null) {
                     const inside = (m[1] || '').trim();
@@ -670,15 +670,15 @@ class FsopForm {
                 // HH:MM
                 const m1 = v.match(/^(\d{1,2}):(\d{2})$/);
                 if (m1) {
-                    const hh = String(Math.min(23, Math.max(0, parseInt(m1[1], 10)))).padStart(2, '0');
-                    const mm = String(Math.min(59, Math.max(0, parseInt(m1[2], 10)))).padStart(2, '0');
+                    const hh = String(Math.min(23, Math.max(0, Number.parseInt(m1[1], 10)))).padStart(2, '0');
+                    const mm = String(Math.min(59, Math.max(0, Number.parseInt(m1[2], 10)))).padStart(2, '0');
                     return `${hh}:${mm}`;
                 }
                 // HHhMM
                 const m2 = v.match(/^(\d{1,2})\s*h\s*(\d{2})$/i);
                 if (m2) {
-                    const hh = String(Math.min(23, Math.max(0, parseInt(m2[1], 10)))).padStart(2, '0');
-                    const mm = String(Math.min(59, Math.max(0, parseInt(m2[2], 10)))).padStart(2, '0');
+                    const hh = String(Math.min(23, Math.max(0, Number.parseInt(m2[1], 10)))).padStart(2, '0');
+                    const mm = String(Math.min(59, Math.max(0, Number.parseInt(m2[2], 10)))).padStart(2, '0');
                     return `${hh}:${mm}`;
                 }
                 return v;
@@ -691,9 +691,9 @@ class FsopForm {
                 // DD/MM/YYYY or DD-MM-YYYY
                 const m = v.match(/^(\d{1,2})[\/-](\d{1,2})[\/-](\d{4})$/);
                 if (m) {
-                    const dd = String(Math.min(31, Math.max(1, parseInt(m[1], 10)))).padStart(2, '0');
-                    const mm = String(Math.min(12, Math.max(1, parseInt(m[2], 10)))).padStart(2, '0');
-                    const yyyy = String(parseInt(m[3], 10));
+                    const dd = String(Math.min(31, Math.max(1, Number.parseInt(m[1], 10)))).padStart(2, '0');
+                    const mm = String(Math.min(12, Math.max(1, Number.parseInt(m[2], 10)))).padStart(2, '0');
+                    const yyyy = String(Number.parseInt(m[3], 10));
                     return `${yyyy}-${mm}-${dd}`;
                 }
                 return '';
@@ -763,8 +763,8 @@ class FsopForm {
                         if (colIdx === 0 && isBlank) {
                             const bannerText = String((banners && banners.length > 0) ? banners[banners.length - 1] : '').trim();
                             const cleanBanner = bannerText
-                                .replace(/^\d{1,2}[a-z]?\s*[-–.]\s*/i, '')
-                                .replace(/\s*:\s*MO\s*\d{3,5}\s*ind.*$/i, '')
+                                .replace(/^\d{1,2}(?:[a-z])?[ \t]*[-–.][ \t]*/i, '')
+                                .replace(/[ \t]*:[ \t]*MO[ \t]*\d{3,5}[ \t]*ind[^\n]*$/i, '')
                                 .trim();
                             if (cleanBanner) return renderTextWithInputs(cleanBanner);
 
@@ -897,7 +897,7 @@ class FsopForm {
                     if (isBlank && !isHeader && rowIdx >= 0 && body[rowIdx] && colIdx > 0) {
                         const prevCell = body[rowIdx][colIdx - 1];
                         const prevText = String(prevCell?.text || '').trim().toLowerCase();
-                        if (prevCell && (/numéro\s*lancement\s*:?\s*$/i.test(prevText) || /numéro\s*de\s*c[oô]eur/i.test(prevText))) {
+                        if (prevCell && (/numéro[ \t]*lancement[ \t]*:?[ \t]*$/i.test(prevText) || /numéro[ \t]*de[ \t]*c[oô]eur/i.test(prevText))) {
                             // This is the cell right after "Numéro lancement:" or "Numéro de cœur + Numéro de lancement" - make it an input
                             const launchValue = saved || this.formData.placeholders?.['{{LT}}'] || '';
                             console.log(`🔍 Rendering launch number input (detected from prev cell: "${prevText}") at row ${rowIdx}, col ${colIdx} with value: "${launchValue}"`);
@@ -1056,7 +1056,8 @@ class FsopForm {
                                 }
                             }
                             
-                            let lotsArray = [...allLots].filter(Boolean).sort();
+                            const sortLots = (a, b) => String(a).localeCompare(String(b));
+                            let lotsArray = [...allLots].filter(Boolean).sort(sortLots);
 
                             // Fallback: try grouped `items` (codeRubrique -> lots)
                             if (lotsArray.length === 0) {
@@ -1083,7 +1084,7 @@ class FsopForm {
                                         lots.forEach(l => allLots.add(String(l || '').trim()));
                                     }
                                 }
-                                lotsArray = [...allLots].filter(Boolean).sort();
+                                lotsArray = [...allLots].filter(Boolean).sort(sortLots);
                             }
 
                             // Last resort: use uniqueLots so operator can at least pick something
@@ -1097,9 +1098,9 @@ class FsopForm {
                             if (savedLot) {
                                 const lines = savedLot.split(/\n/);
                                 for (const line of lines) {
-                                    const m940 = line.match(/voie\s*940\s*:?\s*(.+)/i);
-                                    const mLigne = line.match(/voie\s*ligne\s*:?\s*(.+)/i);
-                                    const m1310 = line.match(/voie\s*1310\s*:?\s*(.+)/i);
+                                    const m940 = line.match(/voie[ \t]*940[ \t]*:?[ \t]*(\S.*)/i);
+                                    const mLigne = line.match(/voie[ \t]*ligne[ \t]*:?[ \t]*(\S.*)/i);
+                                    const m1310 = line.match(/voie[ \t]*1310[ \t]*:?[ \t]*(\S.*)/i);
                                     if (m940) savedVoies['940'] = m940[1].trim();
                                     if (mLigne) savedVoies['Ligne'] = mLigne[1].trim();
                                     if (m1310) savedVoies['1310'] = m1310[1].trim();
@@ -1335,7 +1336,7 @@ class FsopForm {
                 banners.forEach((bannerText) => {
                     const mo = extractMoFromText(bannerText);
                     if (mo) currentCodeOperation = mo;
-                    const m = bannerText.match(/^(\d{1,2}[a-z]?)\s*[-–.]\s*(.+)$/i);
+                    const m = bannerText.match(/^(\d{1,2}(?:[a-z])?)[ \t]*[-–.][ \t]*(\S.*)$/i);
                     if (m) {
                         bumpCounterFromExplicit(m[1]);
                         t += `
@@ -1395,7 +1396,7 @@ class FsopForm {
                 // Examples:
                 // - "1- Préparation ..." -> main section title
                 // - "Général :" -> sub title
-                const sectionTitleMatch = text.match(/^(\d{1,2}[a-z]?)\s*[-–.]\s*(.+)$/i);
+                const sectionTitleMatch = text.match(/^(\d{1,2}(?:[a-z])?)[ \t]*[-–.][ \t]*(\S.*)$/i);
                 if (sectionTitleMatch) {
                     const n = sectionTitleMatch[1];
                     const title = sectionTitleMatch[2];
@@ -1670,7 +1671,7 @@ class FsopForm {
                              cellValue.match(/^\d+[^\d]*[a-z]/i))) {
                             // This looks like a label, not a value - clear it
                             cellValue = '';
-                        } else if (isNaN(parseFloat(cellValue))) {
+                        } else if (Number.isNaN(Number.parseFloat(cellValue))) {
                             cellValue = '';
                         }
                     }
@@ -1722,7 +1723,7 @@ class FsopForm {
         
         // Patterns for fixed labels:
         // 1. Contains colon followed by specifications (e.g., "1ère polymérisation: 1h / 80°C")
-        if (value.includes(':') && (value.includes('/') || value.match(/\d+\s*(h|min|°C|°F)/i))) {
+        if (value.includes(':') && (value.includes('/') || value.match(/\d+[ \t]+(?:h|min|°C|°F)/i))) {
             return true;
         }
         
@@ -1837,8 +1838,8 @@ class FsopForm {
         this.container.querySelectorAll('.fsop-table-input').forEach(input => {
             input.addEventListener('input', (e) => {
                 const tableId = e.target.getAttribute('data-table-id');
-                const rowId = parseInt(e.target.getAttribute('data-row-id'), 10);
-                const colIdx = parseInt(e.target.getAttribute('data-column-idx'), 10);
+                const rowId = Number.parseInt(e.target.getAttribute('data-row-id'), 10);
+                const colIdx = Number.parseInt(e.target.getAttribute('data-column-idx'), 10);
                 
                 if (!this.formData.tables[tableId]) {
                     this.formData.tables[tableId] = {};
@@ -1862,7 +1863,7 @@ class FsopForm {
         this.container.querySelectorAll('.fsop-text-field input').forEach(input => {
             input.addEventListener('input', (e) => {
                 const sectionId = e.target.getAttribute('data-section-id');
-                const fieldIndex = parseInt(e.target.getAttribute('data-field-index'), 10);
+                const fieldIndex = Number.parseInt(e.target.getAttribute('data-field-index'), 10);
                 
                 if (!this.formData.textFields[sectionId]) {
                     this.formData.textFields[sectionId] = {};
@@ -1887,8 +1888,8 @@ class FsopForm {
         // Operator select/input handling
         this.container.querySelectorAll('.fsop-operator-select').forEach(select => {
             select.addEventListener('change', (e) => {
-                const rowIdx = parseInt(e.target.getAttribute('data-row'), 10);
-                const colIdx = parseInt(e.target.getAttribute('data-col'), 10);
+                const rowIdx = Number.parseInt(e.target.getAttribute('data-row'), 10);
+                const colIdx = Number.parseInt(e.target.getAttribute('data-col'), 10);
                 const value = e.target.value;
                 const cell = e.target.closest('.fsop-operator-cell');
                 const otherInput = cell?.querySelector('.fsop-operator-other-input');
@@ -1922,8 +1923,8 @@ class FsopForm {
         // Operator "other" input handling
         this.container.querySelectorAll('.fsop-operator-other-input').forEach(input => {
             input.addEventListener('input', (e) => {
-                const rowIdx = parseInt(e.target.getAttribute('data-row'), 10);
-                const colIdx = parseInt(e.target.getAttribute('data-col'), 10);
+                const rowIdx = Number.parseInt(e.target.getAttribute('data-row'), 10);
+                const colIdx = Number.parseInt(e.target.getAttribute('data-col'), 10);
                 const value = e.target.value.trim().toUpperCase();
                 
                 // Save to wordlikeTables
@@ -1979,8 +1980,8 @@ class FsopForm {
 
                 const table = input.closest('table.fsop-word-table[data-table-idx]');
                 if (!table) return;
-                const col = parseInt(input.getAttribute('data-col') || '0', 10);
-                const startRow = parseInt(input.getAttribute('data-row') || '0', 10);
+                const col = Number.parseInt(input.getAttribute('data-col') || '0', 10);
+                const startRow = Number.parseInt(input.getAttribute('data-row') || '0', 10);
                 if (!Number.isFinite(col) || !Number.isFinite(startRow)) return;
 
                 // Fill current + next rows (same column)
@@ -2112,8 +2113,8 @@ class FsopForm {
         // Re-attach event listeners for new inputs
         newRow.querySelectorAll('.fsop-table-input').forEach(input => {
             input.addEventListener('input', (e) => {
-                const rowId = parseInt(e.target.getAttribute('data-row-id'), 10);
-                const colIdx = parseInt(e.target.getAttribute('data-column-idx'), 10);
+                const rowId = Number.parseInt(e.target.getAttribute('data-row-id'), 10);
+                const colIdx = Number.parseInt(e.target.getAttribute('data-column-idx'), 10);
                 
                 if (!this.formData.tables[tableId]) {
                     this.formData.tables[tableId] = {};
@@ -2136,10 +2137,10 @@ class FsopForm {
         let tag = columnHeader.trim();
         
         // Convert "1er" -> "1", "2ème" -> "2", etc.
-        tag = tag.replace(/(\d+)(er|ème|e)/gi, '$1');
+        tag = tag.replace(/(\d+)(?:er|ème|e)/gi, '$1');
         
         // Remove parentheses and their content, but keep units
-        tag = tag.replace(/\(([^)]+)\)/g, (match, content) => {
+        tag = tag.replace(/\(([^)]*)\)/g, (match, content) => {
             // Keep common units (mm, dB, etc.)
             if (/mm|db|°c|°f|°|kg|g|m|cm/i.test(content)) {
                 return '_' + content.toUpperCase().trim();
@@ -2160,7 +2161,7 @@ class FsopForm {
         tag = tag.replace(/\s+/g, '_').replace(/_+/g, '_');
         
         // Remove leading/trailing underscores
-        tag = tag.replace(/^_+|_+$/g, '');
+        tag = tag.replace(/^_+/, '').replace(/_+$/, '');
         
         return tag;
     }
@@ -2186,7 +2187,7 @@ class FsopForm {
     isNumericValue(value) {
         if (!value) return false;
         const cleaned = this.cleanValueForWord(value);
-        return !isNaN(parseFloat(cleaned)) && isFinite(cleaned);
+        return !Number.isNaN(Number.parseFloat(cleaned)) && Number.isFinite(cleaned);
     }
 
     /**
@@ -2198,7 +2199,7 @@ class FsopForm {
         const wordlikeTables = {};
         if (this.container) {
             this.container.querySelectorAll('.fsop-word-table[data-table-idx]').forEach((tableEl) => {
-                const tableIdx = parseInt(tableEl.getAttribute('data-table-idx') || '0', 10);
+                const tableIdx = Number.parseInt(tableEl.getAttribute('data-table-idx') || '0', 10);
                 if (!Number.isFinite(tableIdx)) return;
                 if (!wordlikeTables[tableIdx]) wordlikeTables[tableIdx] = {};
 
@@ -2209,7 +2210,7 @@ class FsopForm {
                     if (cellEdits.length === 0 && cellInputs.length === 0) return;
                     if (!wordlikeTables[tableIdx][rowIdx]) wordlikeTables[tableIdx][rowIdx] = {};
                     cellEdits.forEach((cellEl) => {
-                        const colIdx = parseInt(cellEl.getAttribute('data-col') || '0', 10);
+                        const colIdx = Number.parseInt(cellEl.getAttribute('data-col') || '0', 10);
                         if (!Number.isFinite(colIdx)) return;
                         const value = (cellEl.textContent || '').trim();
                         if (value) {
@@ -2217,7 +2218,7 @@ class FsopForm {
                         }
                     });
                     cellInputs.forEach((cellEl) => {
-                        const colIdx = parseInt(cellEl.getAttribute('data-col') || '0', 10);
+                        const colIdx = Number.parseInt(cellEl.getAttribute('data-col') || '0', 10);
                         if (!Number.isFinite(colIdx)) return;
                         let value = String(cellEl.value || '').trim();
                         if (value) {
@@ -2233,7 +2234,7 @@ class FsopForm {
                     const operatorSelects = Array.from(tr.querySelectorAll('.fsop-operator-select[data-col]'));
                     const operatorOtherInputs = Array.from(tr.querySelectorAll('.fsop-operator-other-input[data-col]'));
                     operatorSelects.forEach((selectEl) => {
-                        const colIdx = parseInt(selectEl.getAttribute('data-col') || '0', 10);
+                        const colIdx = Number.parseInt(selectEl.getAttribute('data-col') || '0', 10);
                         if (!Number.isFinite(colIdx)) return;
                         const value = String(selectEl.value || '').trim();
                         // Only save if not "__OTHER__" (that case is handled by the input)
@@ -2242,7 +2243,7 @@ class FsopForm {
                         }
                     });
                     operatorOtherInputs.forEach((inputEl) => {
-                        const colIdx = parseInt(inputEl.getAttribute('data-col') || '0', 10);
+                        const colIdx = Number.parseInt(inputEl.getAttribute('data-col') || '0', 10);
                         if (!Number.isFinite(colIdx)) return;
                         const value = String(inputEl.value || '').trim().toUpperCase();
                         if (value) {
@@ -2279,7 +2280,7 @@ class FsopForm {
                 let columnHeaders = headers;
                 const sectionIdMatch = tableId.match(/^table_(\d+)$/);
                 if (sectionIdMatch && this.structure && this.structure.sections) {
-                    const sectionId = parseInt(sectionIdMatch[1], 10);
+                    const sectionId = Number.parseInt(sectionIdMatch[1], 10);
                     const section = this.structure.sections.find(s => s.id === sectionId);
                     if (section && section.table && section.table.headers) {
                         columnHeaders = section.table.headers;
@@ -2293,7 +2294,7 @@ class FsopForm {
                 
                 // Process each row
                 table.querySelectorAll('tbody tr').forEach(row => {
-                    const rowId = parseInt(row.querySelector('.fsop-table-input')?.getAttribute('data-row-id') || '0', 10);
+                    const rowId = Number.parseInt(row.querySelector('.fsop-table-input')?.getAttribute('data-row-id') || '0', 10);
                     
                     if (!cleanedTables[tableId][rowId]) {
                         cleanedTables[tableId][rowId] = {};
@@ -2301,7 +2302,7 @@ class FsopForm {
                     
                     // Process each cell in the row
                     row.querySelectorAll('.fsop-table-input').forEach(input => {
-                        const colIdx = parseInt(input.getAttribute('data-column-idx') || '0', 10);
+                        const colIdx = Number.parseInt(input.getAttribute('data-column-idx') || '0', 10);
                         const columnName = input.getAttribute('data-column-name') || columnHeaders[colIdx] || '';
                         const rawValue = input.value || '';
                         

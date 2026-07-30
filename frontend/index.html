@@ -24,8 +24,9 @@
                 </div>
                 <form id="loginForm">
                     <div class="input-group">
-                        <i class="fas fa-user"></i>
-                        <input type="text" id="operatorCode" placeholder="Code Opérateur" required>
+                        <i class="fas fa-user" aria-hidden="true"></i>
+                        <label class="visually-hidden" for="operatorCode">Code Opérateur</label>
+                        <input type="text" id="operatorCode" name="operatorCode" placeholder="Code Opérateur" aria-label="Code Opérateur" required>
                     </div>
                     <button type="submit" class="btn-primary">
                         <i class="fas fa-sign-in-alt"></i>
@@ -50,12 +51,14 @@
                 </div>
                 <form id="adminLoginForm">
                     <div class="input-group">
-                        <i class="fas fa-user-shield"></i>
-                        <input type="text" id="adminUsername" placeholder="Nom d'utilisateur" required>
+                        <i class="fas fa-user-shield" aria-hidden="true"></i>
+                        <label class="visually-hidden" for="adminUsername">Nom d'utilisateur</label>
+                        <input type="text" id="adminUsername" name="adminUsername" placeholder="Nom d'utilisateur" aria-label="Nom d'utilisateur" required>
                     </div>
                     <div class="input-group">
-                        <i class="fas fa-lock"></i>
-                        <input type="password" id="adminPassword" placeholder="Mot de passe" required>
+                        <i class="fas fa-lock" aria-hidden="true"></i>
+                        <label class="visually-hidden" for="adminPassword">Mot de passe</label>
+                        <input type="password" id="adminPassword" name="adminPassword" placeholder="Mot de passe" aria-label="Mot de passe" required>
                     </div>
                     <button type="submit" class="btn-primary">
                         <i class="fas fa-sign-in-alt"></i>
@@ -89,10 +92,12 @@
                 <div class="section">
                     <h2><i class="fas fa-keyboard"></i> Code de Lancement</h2>
                     <div class="input-group with-scanner with-fsop">
-                        <i class="fas fa-barcode"></i>
+                        <i class="fas fa-barcode" aria-hidden="true"></i>
+                        <label class="visually-hidden" for="lancementSearch">Code de lancement</label>
                         <input
                             type="text"
                             id="lancementSearch"
+                            name="lancementSearch"
                             placeholder="Saisir ou scanner le code..."
                             autocomplete="off"
                             value="LT"
@@ -132,12 +137,13 @@
                 <div class="section" id="controlsSection" style="display: none;">
                     <h2><i class="fas fa-cogs"></i> Contrôles</h2>
                     <div class="lancement-info">
-                        <h3 id="selectedLancement"></h3>
+                        <h3 id="selectedLancement">Lancement sélectionné</h3>
                         <p id="lancementDetails"></p>
                     </div>
                     <div class="input-group" id="operationStepGroup" style="display:none; margin-top:10px;">
-                        <i class="fas fa-list-ol"></i>
-                        <select id="operationStepSelect" style="width:100%; padding:10px; border-radius:10px; border:1px solid #ddd;">
+                        <i class="fas fa-list-ol" aria-hidden="true"></i>
+                        <label class="visually-hidden" for="operationStepSelect">Choisir une étape (CodeOperation)</label>
+                        <select id="operationStepSelect" aria-label="Choisir une étape (CodeOperation)" style="width:100%; padding:10px; border-radius:10px; border:1px solid #ddd;">
                             <option value="">Choisir une étape (CodeOperation)</option>
                         </select>
                     </div>
@@ -202,8 +208,9 @@
                     <h2><i class="fas fa-comments"></i> Commentaires</h2>
                     <div class="comment-form">
                         <div class="input-group">
-                            <i class="fas fa-edit"></i>
-                            <textarea id="commentInput" placeholder="Ajouter un commentaire sur cette opération..." rows="3" maxlength="2000"></textarea>
+                            <i class="fas fa-edit" aria-hidden="true"></i>
+                            <label class="visually-hidden" for="commentInput">Ajouter un commentaire</label>
+                            <textarea id="commentInput" name="commentInput" placeholder="Ajouter un commentaire sur cette opération..." aria-label="Ajouter un commentaire sur cette opération" rows="3" maxlength="2000"></textarea>
                         </div>
                         <div class="comment-actions">
                             <button id="addCommentBtn" class="btn-primary" disabled>
@@ -464,12 +471,14 @@
             <div class="scanner-modal-body">
                 <div class="fsop-form">
                     <div class="input-group">
-                        <i class="fas fa-file-signature"></i>
-                        <input type="text" id="fsopTemplateCode" placeholder="Numéro de formulaire (ex: F469)" autocomplete="off" />
+                        <i class="fas fa-file-signature" aria-hidden="true"></i>
+                        <label class="visually-hidden" for="fsopTemplateCode">Numéro de formulaire</label>
+                        <input type="text" id="fsopTemplateCode" name="fsopTemplateCode" placeholder="Numéro de formulaire (ex: F469)" aria-label="Numéro de formulaire" autocomplete="off" />
                     </div>
                     <div class="input-group">
-                        <i class="fas fa-hashtag"></i>
-                        <input type="text" id="fsopSerialNumber" placeholder="Numéro de série (SN)" autocomplete="off" />
+                        <i class="fas fa-hashtag" aria-hidden="true"></i>
+                        <label class="visually-hidden" for="fsopSerialNumber">Numéro de série</label>
+                        <input type="text" id="fsopSerialNumber" name="fsopSerialNumber" placeholder="Numéro de série (SN)" aria-label="Numéro de série" autocomplete="off" />
                     </div>
                     <div class="input-group" id="fsopLotGroup" style="display:none;">
                         <i class="fas fa-box"></i>

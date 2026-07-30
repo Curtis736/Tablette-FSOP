@@ -9,7 +9,7 @@ class Comment {
         this.comment = data.comment;
         this.timestamp = data.timestamp;
         this.createdAt = data.createdAt;
-        this.qteNonConforme = data.qteNonConforme !== undefined ? parseFloat(data.qteNonConforme) : null;
+        this.qteNonConforme = data.qteNonConforme !== undefined ? Number.parseFloat(data.qteNonConforme) : null;
         this.statut = data.statut || null;
     }
 
@@ -34,7 +34,7 @@ class Comment {
             if (qteNonConforme !== undefined && qteNonConforme !== null) {
                 columns.push('QteNonConforme');
                 values.push('@qteNonConforme');
-                params.qteNonConforme = parseFloat(qteNonConforme);
+                params.qteNonConforme = Number.parseFloat(qteNonConforme);
             }
             
             // Ajouter Statut si fourni

@@ -53,7 +53,7 @@ async function requireFsopSession(req, res, next) {
             });
         }
 
-        const ttlHoursRaw = parseInt(process.env.OPERATOR_SESSION_TTL_HOURS || '12', 10);
+        const ttlHoursRaw = Number.parseInt(process.env.OPERATOR_SESSION_TTL_HOURS || '12', 10);
         const ttlHours = Number.isFinite(ttlHoursRaw) && ttlHoursRaw > 0 ? Math.min(ttlHoursRaw, 72) : 12;
 
         const sessions = await db.executeQuery(
@@ -100,7 +100,7 @@ function dedupeNonEmpty(values) {
 function withServicesPathFallbacks(rawPath) {
     const p = String(rawPath || '').trim();
     if (!p) return [];
-    const normalized = p.replace(/\\/g, '/');
+    const normalized = p.replaceAll('\\', '/');
     const out = [p];
     if (normalized.includes('/Services/')) {
         out.push(normalized.replace('/Services/', '/'));
@@ -312,8 +312,8 @@ router.get('/lots/:launchNumber', async (req, res) => {
             .map(([codeRubrique, entry]) => ({
                 designation: codeRubrique, // faute de désignation détaillée par ligne dans ce contexte
                 codeRubrique,
-                phases: [...entry.phases].sort(),
-                lots: [...entry.lots].sort()
+                phases: [...entry.phases].sort((a, b) => String(a).localeCompare(String(b))),
+                lots: [...entry.lots].sort((a, b) => String(a).localeCompare(String(b)))
             }));
 
         const lines = [...byOperationRubrique.values()]
@@ -326,8 +326,8 @@ router.get('/lots/:launchNumber', async (req, res) => {
             .map((e) => ({
                 codeOperation: e.codeOperation,
                 codeRubrique: e.codeRubrique,
-                phases: [...e.phases].sort(),
-                lots: [...e.lots].sort(),
+                phases: [...e.phases].sort((a, b) => String(a).localeCompare(String(b))),
+                lots: [...e.lots].sort((a, b) => String(a).localeCompare(String(b))),
                 // safe autofill hint: only autofill when unique
                 uniqueLot: [...e.lots].size === 1 ? [...e.lots][0] : null
             }));
@@ -335,7 +335,7 @@ router.get('/lots/:launchNumber', async (req, res) => {
         return res.json({
             success: true,
             launchNumber,
-            uniqueLots: [...uniqueLots].sort(),
+            uniqueLots: [...uniqueLots].sort((a, b) => String(a).localeCompare(String(b))),
             items,
             lines,
             count: uniqueLots.size

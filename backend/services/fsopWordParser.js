@@ -189,7 +189,7 @@ function extractBlocks(xmlContent) {
                 /<w:lastRenderedPageBreak\b/i.test(paraXml);
 
             const trimmed = (text || '').trim();
-            const hasCheckbox = /^([☐☑✓□]|\[[\sx]\])\s+/i.test(trimmed);
+            const hasCheckbox = /^([☐☑✓□]|\[(?:x| )])[ \t]+/i.test(trimmed);
             const hasPassFail = /PASS\s*FAIL/i.test(trimmed) && /:/i.test(trimmed);
 
             blocks.push({
@@ -261,10 +261,10 @@ function extractTextFromParagraphXml(paraXml) {
     let m;
     while ((m = textRegex.exec(paraXml)) !== null) {
         const attrs = m[1] || '';
-        let raw = (m[2] || '').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&');
+        let raw = (m[2] || '').replaceAll('&lt;', '<').replaceAll('&gt;', '>').replaceAll('&amp;', '&');
         // Safety: some templates contain literal Word XML tags embedded in text (e.g. w14:checkbox).
         // Strip any XML-like tags that include a namespace prefix (something:tag), but keep comparisons like "< 0,5 dB".
-        raw = raw.replace(/<\/?[A-Za-z0-9._-]+:[^>]*?>/g, '');
+        raw = raw.replaceAll(/<\/?[A-Za-z0-9._-]+:[^>]*>/, '');
         const preserve = /xml:space="preserve"/i.test(attrs);
 
         if (preserve) {
@@ -372,9 +372,9 @@ function extractTextFromCellXml(tcXml) {
     let m;
     while ((m = textRegex.exec(tcXml)) !== null) {
         const attrs = m[1] || '';
-        let raw = (m[2] || '').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&');
+        let raw = (m[2] || '').replaceAll('&lt;', '<').replaceAll('&gt;', '>').replaceAll('&amp;', '&');
         // Same protection as paragraphs: strip namespaced XML tags embedded as literal text.
-        raw = raw.replace(/<\/?[A-Za-z0-9._-]+:[^>]*?>/g, '');
+        raw = raw.replaceAll(/<\/?[A-Za-z0-9._-]+:[^>]*>/, '');
         const preserve = /xml:space="preserve"/i.test(attrs);
 
         if (preserve) {
@@ -407,7 +407,7 @@ function extractTextFromCellXml(tcXml) {
 
 function getGridSpan(tcXml) {
     const m = tcXml.match(/<w:gridSpan\b[^>]*w:val="(\d+)"/i);
-    const n = m ? parseInt(m[1], 10) : 1;
+    const n = m ? Number.parseInt(m[1], 10) : 1;
     return Number.isFinite(n) && n > 0 ? n : 1;
 }
 
@@ -434,7 +434,7 @@ function extractPlaceholders(xmlContent) {
         placeholders.add(match[0]); // Full placeholder: {{TAG}}
     }
     
-    return Array.from(placeholders).sort();
+    return Array.from(placeholders).sort((a, b) => String(a).localeCompare(String(b)));
 }
 
 /**
@@ -457,7 +457,7 @@ function extractHeaderFields(xmlContent) {
     
     headerPatterns.forEach(pattern => {
         // Look for the label followed by colon (more flexible pattern)
-        const regex = new RegExp(`${pattern.label.replace(/[°]/g, '[°º]')}[\\s:]+([^\\n\\r]*)`, 'i');
+        const regex = new RegExp(`${pattern.label.replaceAll('°', '[°º]')}[\\s:]+([^\\n\\r]*)`, 'i');
         const match = textContent.match(regex);
         
         if (match) {
@@ -634,10 +634,10 @@ function extractCheckboxes(xmlContent) {
         
         // Check if this paragraph contains a checkbox symbol
         // Try both strict (start of line) and flexible matching
-        let checkboxMatch = textContent.match(/^([☐☑✓□]|\[[\sx]\])\s*(.+)$/);
+        let checkboxMatch = textContent.match(/^([☐☑✓□]|\[(?:x| )\])[ \t]*(\S.*)$/);
         if (!checkboxMatch) {
             // Fallback: match checkbox anywhere in the line
-            checkboxMatch = textContent.match(/([☐☑✓□]|\[[\sx]\])\s*(.+?)(?:\s*$|\s*[☐☑✓□]|$)/);
+            checkboxMatch = textContent.match(/([☐☑✓□]|\[(?:x| )])[ \t]*([^\n☐☑✓□\[]*)/);
         }
         
         if (checkboxMatch) {
@@ -645,7 +645,7 @@ function extractCheckboxes(xmlContent) {
             let label = checkboxMatch[2].trim();
             
             // Only add if label is not empty and doesn't contain XML-like content
-            if (label && label.length > 0 && !label.match(/^<[^>]+>/)) {
+            if (label && label.length > 0 && !label.match(/^<[^>]*>/)) {
                 checkboxes.push({
                     id: `checkbox_${checkboxIndex++}`,
                     label: label,
@@ -695,13 +695,13 @@ function extractAllSectionTitles(xmlContent, paragraphs) {
         let titleText = null;
         
         // First, try to find numbered titles (existing logic)
-        let match = text.match(/^(\d+)[-\s\.]+\s*(.+)$/);
+        let match = text.match(/^(\d+)[ \t.\-]+(\S.*)$/);
         if (!match) {
-            match = text.match(/^(\d+)\s+(.+)$/);
+            match = text.match(/^(\d+)[ \t]+(\S.*)$/);
         }
         
         if (match) {
-            sectionNumber = parseInt(match[1], 10);
+            sectionNumber = Number.parseInt(match[1], 10);
             titleText = match[2].trim();
         } else {
             // If no number, check if it starts with known section words (even without number)
@@ -744,7 +744,7 @@ function extractAllSectionTitles(xmlContent, paragraphs) {
                 const nextText = paragraphs[j].text.trim();
                 
                 // Skip empty paragraphs or PASS/FAIL lines
-                if (!nextText || nextText.match(/Connecteur.*PASS.*FAIL/i)) {
+                if (!nextText || nextText.match(/Connecteur[^\n]*(?:PASS|FAIL)/i)) {
                     break;
                 }
                 
@@ -952,20 +952,20 @@ function extractSections(xmlObj, xmlContent, textFields = [], checkboxes = []) {
         // Match patterns like "1- Contrôle", "2- Contrôle", etc.
         // Use more flexible pattern to catch all variations
         // Also handle cases where there might be whitespace or formatting issues
-        let sectionMatch = text.match(/^(\d+)[-\s\.]+\s*(.+)$/);
+        let sectionMatch = text.match(/^(\d+)[ \t.\-]+(\S.*)$/);
         
         // If no match, try a more flexible pattern (number at start, then any separator, then text)
         if (!sectionMatch) {
-            sectionMatch = text.match(/^(\d+)[\s\-\.]+(.+)$/);
+            sectionMatch = text.match(/^(\d+)[ \t.\-]+(\S.*)$/);
         }
         
         // If still no match, try to find number followed by text (very flexible)
         if (!sectionMatch && /^\d+/.test(text) && /[A-Za-zÀ-ÿ]/.test(text)) {
-            sectionMatch = text.match(/^(\d+)\s*(.+)$/);
+            sectionMatch = text.match(/^(\d+)[ \t]*(\S.*)$/);
         }
         
         if (sectionMatch) {
-            const number = parseInt(sectionMatch[1], 10);
+            const number = Number.parseInt(sectionMatch[1], 10);
             let title = sectionMatch[2].trim();
             
             if (!isLargeFile) {
@@ -984,7 +984,7 @@ function extractSections(xmlObj, xmlContent, textFields = [], checkboxes = []) {
             // Reject measurement values that start with numbers and units
             // But be more careful - only reject if it's clearly a measurement, not a title
             // Pattern: "65 mm ± 2 mm" or "0.5 dB" at the start
-            if (/^\d+[\.,]?\d*\s*(mm|dB|°C|°F|°)\s*[±≤≥]/.test(title)) {
+            if (/^\d+[\.,]?\d*[ \t]+(?:mm|dB|°C|°F|°)[ \t]*[±≤≥]/.test(title)) {
                 if (!isLargeFile) {
                     console.log(`  ❌ Rejected: Looks like measurement value`);
                 }
@@ -1044,7 +1044,7 @@ function extractSections(xmlObj, xmlContent, textFields = [], checkboxes = []) {
                 const nextText = nextPara.text.trim();
                 
                 // Stop if we hit another numbered section
-                if (nextText.match(/^\d+[-\s\.]+/)) {
+                if (nextText.match(/^\d+[ \t.\-]+/)) {
                     break;
                 }
                 
@@ -1070,7 +1070,7 @@ function extractSections(xmlObj, xmlContent, textFields = [], checkboxes = []) {
                 }
                 
                 // Stop if we hit PASS/FAIL or table indicators (but not if it's part of title continuation)
-                if (nextText.match(/Connecteur\s+\d+.*PASS|FAIL/i)) {
+                if (nextText.match(/Connecteur[ \t]+\d+[^\n]*(?:PASS|FAIL)/i)) {
                     // This is content, not title continuation
                     break;
                 }
@@ -1166,9 +1166,9 @@ function extractSections(xmlObj, xmlContent, textFields = [], checkboxes = []) {
                 // Look for patterns like "1- Contrôle" or "Contrôle" with a number nearby
                 if (/Contrôle/i.test(text)) {
                     // First try numbered pattern
-                    const altMatch = text.match(/^(\d+)[-\s\.]+\s*(.+)$/);
+                    const altMatch = text.match(/^(\d+)[ \t.\-]+(\S.*)$/);
                     if (altMatch) {
-                        const number = parseInt(altMatch[1], 10);
+                        const number = Number.parseInt(altMatch[1], 10);
                         let title = altMatch[2].trim();
                         
                         console.log(`🔍 Alternative: Found potential section ${number}: "${title}"`);
@@ -1261,7 +1261,7 @@ function extractSections(xmlObj, xmlContent, textFields = [], checkboxes = []) {
                     if (!paragraphs[i] || !paragraphs[i].text) continue;
                     const paraText = paragraphs[i].text.trim();
                     // Stop if we hit a new numbered section
-                    if (paraText.match(/^\d+[-\s\.]+\s*(Contrôle|Montage|Cyclage|Tir|Emballage)/i)) {
+                    if (paraText.match(/^\d+[ \t.\-]+(?:Contrôle|Montage|Cyclage|Tir|Emballage)/i)) {
                         break;
                     }
                     sectionParaText += ' ' + paraText;
@@ -1289,7 +1289,7 @@ function extractSections(xmlObj, xmlContent, textFields = [], checkboxes = []) {
                 
                 // Pattern 2: Other PASS/FAIL fields (e.g., "Max pendant CIT <0,2 dB : PASS FAIL")
                 // Look for text followed by "PASS" and "FAIL" on the same line
-                const passFailPattern = /([^:]+):\s*PASS\s*FAIL/gi;
+                const passFailPattern = /([^:\n]+):[ \t]*PASS[ \t]*FAIL/gi;
                 let pfMatch;
                 while ((pfMatch = passFailPattern.exec(sectionParaText)) !== null) {
                     const fieldName = pfMatch[1].trim();
@@ -1565,7 +1565,7 @@ function extractSections(xmlObj, xmlContent, textFields = [], checkboxes = []) {
                 if (!paragraphs[p] || !paragraphs[p].text) continue;
                 const paraText = paragraphs[p].text;
                 // Pattern: "Label : _______" or "Label : ______"
-                const textFieldPattern = /([^:]+):\s*_{3,}/;
+                const textFieldPattern = /([^:\n]+):[ \t]*_{3,}/;
                 const match = paraText.match(textFieldPattern);
                 if (match) {
                     const fieldLabel = match[1].trim();
@@ -1743,18 +1743,15 @@ function extractSections(xmlObj, xmlContent, textFields = [], checkboxes = []) {
                     const paraText = precedingParagraphs[i];
                     
                     // Try multiple patterns to match section titles
-                    let titleMatch = paraText.match(/^(\d+)[-\s\.]+\s*(.+)$/);
+                    let titleMatch = paraText.match(/^(\d+)[ \t.\-]+(\S.*)$/);
                     
                     // If no match, try more flexible patterns
                     if (!titleMatch) {
-                        titleMatch = paraText.match(/^(\d+)[\s\-\.]+(.+)$/);
-                    }
-                    if (!titleMatch) {
-                        titleMatch = paraText.match(/^(\d+)\s+(.+)$/);
+                        titleMatch = paraText.match(/^(\d+)[ \t]+(\S.*)$/);
                     }
                     
                     if (titleMatch) {
-                        const number = parseInt(titleMatch[1], 10);
+                        const number = Number.parseInt(titleMatch[1], 10);
                         let title = titleMatch[2].trim();
                         
                         // Check if this looks like a valid section title
@@ -1835,16 +1832,13 @@ function extractSections(xmlObj, xmlContent, textFields = [], checkboxes = []) {
                         const paraText = para.text;
                         
                         // Try multiple patterns
-                        let titleMatch = paraText.match(/^(\d+)[-\s\.]+\s*(.+)$/);
+                        let titleMatch = paraText.match(/^(\d+)[ \t.\-]+(\S.*)$/);
                         if (!titleMatch) {
-                            titleMatch = paraText.match(/^(\d+)[\s\-\.]+(.+)$/);
-                        }
-                        if (!titleMatch) {
-                            titleMatch = paraText.match(/^(\d+)\s+(.+)$/);
+                            titleMatch = paraText.match(/^(\d+)[ \t]+(\S.*)$/);
                         }
                         
                         if (titleMatch) {
-                            const number = parseInt(titleMatch[1], 10);
+                            const number = Number.parseInt(titleMatch[1], 10);
                             const title = titleMatch[2].trim();
                             
                             // Accept if it contains "Contrôle" or looks like a valid title
@@ -1864,9 +1858,9 @@ function extractSections(xmlObj, xmlContent, textFields = [], checkboxes = []) {
                             const paraText = para.text;
                             
                             // Check if paragraph starts with expected section number
-                            if (paraText.match(new RegExp(`^${expectedNumber}[-\s\.]`))) {
-                                const titleMatch = paraText.match(/^(\d+)[-\s\.]+\s*(.+)$/) || 
-                                                  paraText.match(/^(\d+)\s+(.+)$/);
+                            if (paraText.match(new RegExp(`^${expectedNumber}[ \t.\-]`))) {
+                                const titleMatch = paraText.match(/^(\d+)[ \t.\-]+(\S.*)$/) || 
+                                                  paraText.match(/^(\d+)[ \t]+(\S.*)$/);
                                 if (titleMatch) {
                                     const title = titleMatch[2].trim();
                                     if (title.length > 5) {
@@ -2117,11 +2111,11 @@ function extractTables(xmlContent) {
                     type = 'numeric';
                 }
                 // Check if column contains numeric values
-                else if (columnData.some(val => /^-?\d+\.?\d*$/.test(val))) {
+                else if (columnData.some(val => /^-?\d+(?:\.\d+)?$/.test(val))) {
                     type = 'numeric';
                 }
                 // Check if column contains dates
-                else if (columnData.some(val => /\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4}/.test(val))) {
+                else if (columnData.some(val => /\d{1,2}(?:\/|-)\d{1,2}(?:\/|-)\d{2,4}/.test(val))) {
                     type = 'date';
                 }
                 
@@ -2171,7 +2165,7 @@ function findTableForSection(sectionText, tables, sectionIndex) {
     // Simple heuristic: return first table if any
     // In a more sophisticated implementation, we could match by keywords or position
     // For now, match tables to sections by order
-    const sectionNumber = parseInt(sectionText.match(/^(\d+)/)?.[1] || '0', 10);
+    const sectionNumber = Number.parseInt(sectionText.match(/^(\d+)/)?.[1] || '0', 10);
     if (sectionNumber > 0 && sectionNumber <= tables.length) {
         return tables[sectionNumber - 1];
     }
@@ -2189,7 +2183,7 @@ function extractTextContent(xmlContent) {
         .replace(/<w:t[^>]*>([^<]*)<\/w:t>/g, '$1 ')
         .replace(/<w:br[^>]*\/>/g, '\n')
         .replace(/<w:tab[^>]*\/>/g, '\t')
-        .replace(/<[^>]+>/g, ' ')
+        .replace(/<[^>]*>/g, ' ')
         .replace(/\s+/g, ' ')
         .trim();
     

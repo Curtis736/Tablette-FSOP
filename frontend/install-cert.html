@@ -206,7 +206,7 @@ function placeFormat(m,ecl,mask){
 function encode(text){
   var bytes=[];
   for(var i=0;i<text.length;i++){
-    var c=text.charCodeAt(i);
+    var c=text.codePointAt(i);
     if(c<128)bytes.push(c);
     else if(c<2048){bytes.push(0xC0|(c>>6));bytes.push(0x80|(c&63));}
     else{bytes.push(0xE0|(c>>12));bytes.push(0x80|((c>>6)&63));bytes.push(0x80|(c&63));}
@@ -254,7 +254,7 @@ function encode(text){
     for(var upward=0;upward<2;upward++){
       for(var row=0;row<size;row++){
         var r=upward?(size-1-row):row;
-        var c=col-(upward?0:0); // will fix below
+        var c = col;
         for(var dc2=0;dc2<2;dc2++){
           var cc=col-dc2;
           if(matrix[r][cc]>=0)continue;

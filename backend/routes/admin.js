@@ -14,7 +14,7 @@ router.use(authenticateAdmin);
 
 // Bundle GET /api/admin : éviter la troncature historique (ex. 25 lignes) alors que le front fusionne avec le monitoring.
 const ADMIN_DASHBOARD_OPERATIONS_CAP = Math.min(
-    Math.max(parseInt(process.env.ADMIN_DASHBOARD_OPERATIONS_LIMIT || '10000', 10) || 10000, 500),
+    Math.max(Number.parseInt(process.env.ADMIN_DASHBOARD_OPERATIONS_LIMIT || '10000', 10) || 10000, 500),
     20000
 );
 
@@ -197,8 +197,8 @@ function timeToMinutes(timeString) {
     const parts = timeString.split(':');
     if (parts.length < 2) return 0;
     
-    const hours = parseInt(parts[0]) || 0;
-    const minutes = parseInt(parts[1]) || 0;
+    const hours = Number.parseInt(parts[0]) || 0;
+    const minutes = Number.parseInt(parts[1]) || 0;
     
     return hours * 60 + minutes;
 }
@@ -208,8 +208,8 @@ function validateSuspiciousTime(timeString, context = '') {
     if (!timeString) return { isValid: true, warning: null };
     
     const time = timeString.split(':');
-    const hour = parseInt(time[0]);
-    const minute = parseInt(time[1]);
+    const hour = Number.parseInt(time[0]);
+    const minute = Number.parseInt(time[1]);
     
     // Détecter les heures suspectes
     if (hour === 2 && minute === 0) {
@@ -283,7 +283,7 @@ function formatDateTime(dateTime) {
         
         // Sinon, essayer de créer un objet Date
         const date = new Date(dateTime);
-        if (isNaN(date.getTime())) {
+        if (Number.isNaN(date.getTime())) {
             console.warn('🔍 formatDateTime: Date invalide:', dateTime);
             return null;
         }
@@ -318,7 +318,7 @@ function calculateDuration(startDate, endDate) {
         const start = new Date(startDate);
         const end = new Date(endDate);
         
-        if (isNaN(start.getTime()) || isNaN(end.getTime())) return null;
+        if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime())) return null;
         
         const diffMs = end.getTime() - start.getTime();
         const diffMinutes = Math.floor(diffMs / (1000 * 60));
@@ -1009,7 +1009,7 @@ function processLancementEvents(events) {
         for (let i = 0; i < Math.min(pauseEvents.length, repriseEvents.length); i++) {
             const pauseStart = new Date(pauseEvents[i].CreatedAt || pauseEvents[i].DateCreation);
             const pauseEnd = new Date(repriseEvents[i].CreatedAt || repriseEvents[i].DateCreation);
-            if (!isNaN(pauseStart.getTime()) && !isNaN(pauseEnd.getTime())) {
+            if (!Number.isNaN(pauseStart.getTime()) && !Number.isNaN(pauseEnd.getTime())) {
                 totalPauseTime += pauseEnd.getTime() - pauseStart.getTime();
             }
         }
@@ -1089,7 +1089,7 @@ router.get('/operations', async (req, res) => {
         res.setHeader('Pragma', 'no-cache');
         res.setHeader('Expires', '0');
         
-        const result = await getAdminOperations(targetDate, parseInt(page), parseInt(limit), dateStart, dateEnd);
+        const result = await getAdminOperations(targetDate, Number.parseInt(page), Number.parseInt(limit), dateStart, dateEnd);
         console.log('🎯 Envoi des opérations admin:', result.operations?.length || 0, 'éléments');
         res.json(result);
         
@@ -1178,7 +1178,7 @@ router.get('/export/:format', async (req, res) => {
 // Fonction pour récupérer les statistiques avec les vraies tables
 async function getAdminStats(date) {
     try {
-        const ttlHours = Math.max(1, Math.min(parseInt(process.env.OPERATOR_SESSION_TTL_HOURS || '12', 10) || 12, 72));
+        const ttlHours = Math.max(1, Math.min(Number.parseInt(process.env.OPERATOR_SESSION_TTL_HOURS || '12', 10) || 12, 72));
         // Opérateurs "en ligne" = dernier événement du jour = travail EN_COURS/EN_PAUSE
         // OU session tablette encore ACTIVE (ABSESSIONS) même entre deux lancements / après veille.
         const operatorsQuery = `
@@ -1643,7 +1643,7 @@ router.put('/operations/:id', async (req, res) => {
         
         // Construire la requête de mise à jour dynamiquement
         const updateFields = [];
-        const params = { id: parseInt(id) };
+        const params = { id: Number.parseInt(id) };
         let formattedEndTimeForFinEvent = null;
         let requestedLancementCode = lancementCode;
         
@@ -1735,7 +1735,7 @@ router.put('/operations/:id', async (req, res) => {
             FROM [SEDI_APP_INDEPENDANTE].[dbo].[ABHISTORIQUE_OPERATEURS]
             WHERE NoEnreg = @id
         `;
-        const existing = await executeQuery(checkQuery, { id: parseInt(id) });
+        const existing = await executeQuery(checkQuery, { id: Number.parseInt(id) });
         
         if (existing.length === 0) {
             return res.status(404).json({
@@ -1984,7 +1984,7 @@ router.put('/operations/:id', async (req, res) => {
                     UPDATE [SEDI_APP_INDEPENDANTE].[dbo].[ABHISTORIQUE_OPERATEURS]
                     SET Statut = 'TERMINE'
                     WHERE NoEnreg = @id
-                `, { id: parseInt(id) });
+                `, { id: Number.parseInt(id) });
             } catch (e) {
                 // non bloquant
             }
@@ -2248,7 +2248,7 @@ router.delete('/operations/:id', async (req, res) => {
             WHERE NoEnreg = @id
         `;
         
-        const lancementInfo = await executeQuery(getLancementQuery, { id: parseInt(id) });
+        const lancementInfo = await executeQuery(getLancementQuery, { id: Number.parseInt(id) });
         
         console.log(`🔍 Résultat de la requête pour ID ${id}:`, lancementInfo);
         
@@ -2365,7 +2365,7 @@ router.delete('/operations/:id', async (req, res) => {
 // Route pour récupérer les opérateurs en ligne (historique du jour + sessions ABSESSIONS actives)
 router.get('/operators', async (req, res) => {
     try {
-        const ttlHours = Math.max(1, Math.min(parseInt(process.env.OPERATOR_SESSION_TTL_HOURS || '12', 10) || 12, 72));
+        const ttlHours = Math.max(1, Math.min(Number.parseInt(process.env.OPERATOR_SESSION_TTL_HOURS || '12', 10) || 12, 72));
         // Éviter le cache (sinon le navigateur peut recevoir 304 sans body JSON)
         res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
         res.setHeader('Pragma', 'no-cache');
@@ -2483,7 +2483,7 @@ router.get('/operators/all', async (req, res) => {
 
         console.log('🔍 Récupération de tous les opérateurs depuis RESSOURC...');
 
-        const ttlHours = Math.max(1, Math.min(parseInt(process.env.OPERATOR_SESSION_TTL_HOURS || '12', 10) || 12, 72));
+        const ttlHours = Math.max(1, Math.min(Number.parseInt(process.env.OPERATOR_SESSION_TTL_HOURS || '12', 10) || 12, 72));
 
         const allOperatorsQuery = `
             WITH last_per_operator AS (
@@ -3284,71 +3284,6 @@ router.post('/transfer', async (req, res) => {
             message: 'Fonction de transfert temporairement désactivée - Fonctionnalités principales opérationnelles',
             note: 'Cette fonction sera réactivée après résolution du problème de colonnes'
         });
-        return;
-
-        // Récupérer toutes les opérations terminées (statut FIN) de la table abetemps
-        const getCompletedOperationsQuery = `
-            SELECT 
-                a.NoEnreg,
-                a.CodeOperateur,
-                a.CodeLanctImprod,
-                a.Phase,
-                a.CodePoste,
-                a.Ident,
-                'TERMINE' as Statut,
-                a.DateTravail
-            FROM [SEDI_ERP].[GPSQL].[abetemps] a
-            WHERE a.Ident = 'FIN'
-            AND CAST(a.DateTravail AS DATE) = CAST(GETDATE() AS DATE)
-        `;
-
-        const completedOperations = await executeQuery(getCompletedOperationsQuery);
-        console.log(` ${completedOperations.length} opérations terminées trouvées`);
-
-        let transferredCount = 0;
-
-        // Transférer chaque opération vers SEDI_APP_INDEPENDANTE
-        for (const operation of completedOperations) {
-            try {
-                const requestId = req.audit?.requestId || generateRequestId();
-                const insertQuery = `
-                    INSERT INTO [SEDI_APP_INDEPENDANTE].[dbo].[ABHISTORIQUE_OPERATEURS]
-                    (OperatorCode, CodeLanctImprod, CodeRubrique, Ident, Phase, Statut, HeureDebut, HeureFin, DateCreation, SessionId, RequestId, CreatedAt)
-                    VALUES (
-                        '${operation.CodeOperateur}',
-                        '${operation.CodeLanctImprod}',
-                        '${operation.CodePoste || '929'}',
-                        '${operation.Ident}',
-                        '${operation.Phase || 'PRODUCTION'}',
-                        '${operation.Statut}',
-                        GETDATE(),
-                        GETDATE(),
-                        GETDATE(),
-                        NULL,
-                        '${requestId}',
-                        GETDATE()
-                    )
-                `;
-
-                await executeQuery(insertQuery);
-                transferredCount++;
-                console.log(` Opération ${operation.CodeLanctImprod} transférée`);
-
-            } catch (insertError) {
-                console.error(` Erreur lors du transfert de l'opération ${operation.CodeLanctImprod}:`, insertError);
-            }
-        }
-
-        console.log(` Transfert terminé: ${transferredCount}/${completedOperations.length} opérations transférées`);
-
-        res.json({
-            success: true,
-            message: 'Transfert terminé avec succès',
-            totalFound: completedOperations.length,
-            transferredCount: transferredCount,
-            errors: completedOperations.length - transferredCount,
-            testColumns: Object.keys(testResult[0] || {})
-        });
 
     } catch (error) {
         console.error(' Erreur lors du transfert:', error);
@@ -3894,7 +3829,7 @@ router.get('/lcte', async (req, res) => {
         
         console.log(`🔍 Récupération de ${limit} lancements depuis LCTE...`);
         
-        const limitNum = Math.max(1, Math.min(parseInt(limit, 10) || 10, 500));
+        const limitNum = Math.max(1, Math.min(Number.parseInt(limit, 10) || 10, 500));
         const query = `
             SELECT TOP (@limitNum) 
                 [CodeLancement],
@@ -3941,7 +3876,7 @@ router.get('/lancements/search', async (req, res) => {
         console.log(`🔍 Recherche de lancements avec le terme: ${term}`);
         
         const searchTerm = `%${term}%`;
-        const limitNum = Math.max(1, Math.min(parseInt(limit, 10) || 10, 500));
+        const limitNum = Math.max(1, Math.min(Number.parseInt(limit, 10) || 10, 500));
         const query = `
             SELECT TOP (@limitNum) 
                 [CodeLancement],
@@ -4483,8 +4418,8 @@ router.put('/monitoring/:tempsId', async (req, res) => {
         const corrections = req.body;
         
         // Convertir tempsId en nombre
-        const tempsIdNum = parseInt(tempsId, 10);
-        if (isNaN(tempsIdNum)) {
+        const tempsIdNum = Number.parseInt(tempsId, 10);
+        if (Number.isNaN(tempsIdNum)) {
             console.error(`❌ TempsId invalide reçu: ${tempsId}`);
             return res.status(400).json({
                 success: false,
@@ -4559,7 +4494,7 @@ router.put('/monitoring/:tempsId', async (req, res) => {
             });
         }
         
-        const result = await MonitoringService.correctRecord(parseInt(tempsId), corrections);
+        const result = await MonitoringService.correctRecord(Number.parseInt(tempsId), corrections);
         
         if (result.success) {
             res.json({
@@ -4587,7 +4522,7 @@ router.put('/monitoring/:tempsId', async (req, res) => {
 router.delete('/monitoring/:tempsId', async (req, res) => {
     try {
         const { tempsId } = req.params;
-        const tempsIdNum = parseInt(tempsId, 10);
+        const tempsIdNum = Number.parseInt(tempsId, 10);
 
         if (!Number.isFinite(tempsIdNum)) {
             return res.status(400).json({
@@ -4650,7 +4585,7 @@ router.post('/monitoring/:tempsId/validate', async (req, res) => {
     try {
         const { tempsId } = req.params;
         
-        const result = await MonitoringService.validateRecord(parseInt(tempsId));
+        const result = await MonitoringService.validateRecord(Number.parseInt(tempsId));
         
         if (result.success) {
             res.json({
@@ -4679,7 +4614,7 @@ router.post('/monitoring/:tempsId/on-hold', async (req, res) => {
     try {
         const { tempsId } = req.params;
         
-        const result = await MonitoringService.setOnHold(parseInt(tempsId));
+        const result = await MonitoringService.setOnHold(Number.parseInt(tempsId));
         
         if (result.success) {
             res.json({
@@ -4716,7 +4651,7 @@ router.post('/monitoring/:tempsId/transmit', async (req, res) => {
         // 1) Valider en 'O' (si nécessaire)
         // 2) Exécuter EDI_JOB (si demandé)
         // 3) Marquer en 'T' uniquement si EDI_JOB OK (sinon laisser en 'O' pour retry)
-        const idNum = parseInt(tempsId, 10);
+        const idNum = Number.parseInt(tempsId, 10);
         const validate = await MonitoringService.validateRecord(idNum);
         if (!validate.success) {
             return res.status(400).json({ success: false, error: validate.error });
@@ -4912,7 +4847,7 @@ router.post('/monitoring/repair-times-batch', async (req, res) => {
 
         const results = { success: [], errors: [] };
         for (const id of tempsIds) {
-            const tempsId = parseInt(id, 10);
+            const tempsId = Number.parseInt(id, 10);
             if (!Number.isFinite(tempsId)) {
                 results.errors.push({ tempsId: id, error: 'TempsId invalide' });
                 continue;

@@ -41,13 +41,31 @@ Installer (Manage Plugins) :
 - Credentials Binding
 - Pipeline Utility Steps
 
-## Credentials Jenkins (IDs attendus par le Jenkinsfile)
+## Credentials Jenkins (IDs attendus)
 
 | ID | Type | Usage |
 |----|------|--------|
-| `sonar-token` | Secret text | Token utilisateur Sonar (Generate Tokens) |
-| `git-creds` | Username/password ou SSH | Clone repo si privé |
-| `test-deploy-ssh` | SSH private key | Deploy distant (optionnel si Docker local) |
+| `sonar-token` | Secret text | Token utilisateur Sonar |
+| `github-pat` | Secret text **ou** Username/Password | Scan Multibranch GitHub (évite rate-limit anonyme) |
+| `git-creds` | Username/password ou SSH | Clone repo si privé (optionnel) |
+| `test-deploy-ssh` | SSH private key | Deploy distant (optionnel) |
+
+### Brancher le PAT GitHub (Multibranch)
+
+1. GitHub → **Settings → Developer settings → Personal access tokens**  
+   - Classic : scope `public_repo` (repo public) ou `repo` (privé)  
+   - Ou Fine-grained : Lecture Contents + Metadata sur `Tablette-FSOP`
+2. Jenkins → **Credentials** → Add → **Secret text**  
+   - ID : `github-pat`  
+   - Secret : le token
+3. **FSOP → Configure** → Branch Sources → GitHub  
+   - **Credentials** : `github-pat` (ou Username = ton login GitHub + Password = le PAT)  
+   - Save → **Scan Repository Now**
+4. **Administrer Jenkins → System → GitHub API usage**  
+   - Stratégie : throttle seulement près de la limite (pas sleep dès « 1 over budget »)
+
+Sans credential, Jenkins reste en anonyme (~60 req/h) et dort plusieurs minutes à chaque scan.
+
 
 ## Configurer Sonar dans Jenkins
 

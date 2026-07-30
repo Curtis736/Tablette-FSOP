@@ -27,8 +27,11 @@ class App {
         // Rendre notificationManager accessible globalement
         window.notificationManager = notificationManager;
         
-        this.initializeApp();
-        this.setupEventListeners();
+        // Hors constructeur (Sonar S7059) — init async différée
+        queueMicrotask(() => {
+            this.initializeApp();
+            this.setupEventListeners();
+        });
     }
 
     _scheduleMidnightLogout() {

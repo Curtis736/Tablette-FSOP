@@ -62,7 +62,7 @@ router.post('/login', async (req, res) => {
 router.post('/logout', async (req, res) => {
     try {
         const auth = req.headers.authorization || '';
-        const m = String(auth).match(/^Bearer\s+(.+)$/i);
+        const m = String(auth).match(/^Bearer[ \t]+(\S+)$/i);
         const token = m ? m[1].trim() : '';
         if (token) revokeToken(token);
         res.json({
@@ -90,7 +90,7 @@ router.get('/verify', async (req, res) => {
         }
 
         const auth = req.headers.authorization || '';
-        const m = String(auth).match(/^Bearer\s+(.+)$/i);
+        const m = String(auth).match(/^Bearer[ \t]+(\S+)$/i);
         const token = m ? m[1].trim() : '';
         const entry = verifyToken(token);
         if (!entry) {

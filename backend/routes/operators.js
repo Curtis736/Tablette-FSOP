@@ -36,7 +36,7 @@ function sendDbTimeout(res, context) {
 }
 
 function getOperatorHistoryDays() {
-    const raw = parseInt(process.env.OPERATOR_HISTORY_DAYS || '1', 10);
+    const raw = Number.parseInt(process.env.OPERATOR_HISTORY_DAYS || '1', 10);
     if (!Number.isFinite(raw) || raw <= 0) return 1;
     return Math.min(raw, 7);
 }
@@ -50,7 +50,7 @@ function getOperatorCurrentLookbackDays() {
 function getCurrentStateMaxAgeHours() {
     // Anti-ghost guard: if last non-finished event is too old, ignore it.
     // Must remain permissive enough to allow logout/reconnect resume on same shift.
-    const raw = parseInt(process.env.OPERATOR_CURRENT_MAX_AGE_HOURS || '16', 10);
+    const raw = Number.parseInt(process.env.OPERATOR_CURRENT_MAX_AGE_HOURS || '16', 10);
     if (!Number.isFinite(raw) || raw <= 0) return 16;
     return Math.min(raw, 72);
 }
@@ -79,7 +79,7 @@ function formatDateTime(dateTime) {
         
         // Sinon, traiter comme une date complète
         const date = new Date(dateTime);
-        if (isNaN(date.getTime())) return null;
+        if (Number.isNaN(date.getTime())) return null;
         
         return date.toLocaleTimeString('fr-FR', {
             timeZone: 'Europe/Paris',
@@ -308,7 +308,7 @@ router.get('/:code', async (req, res) => {
 router.get('/', async (req, res) => {
     try {
         const { search, limit = 100 } = req.query;
-        const limitNum = Math.max(1, Math.min(parseInt(limit, 10) || 100, 500));
+        const limitNum = Math.max(1, Math.min(Number.parseInt(limit, 10) || 100, 500));
         
         // Utiliser la vue V_RESSOURC au lieu d'accéder directement à RESSOURC
         let query = `
@@ -550,7 +550,7 @@ router.get('/lancements/search', async (req, res) => {
         console.log(`🔍 Recherche de lancements avec le terme: ${term}`);
         
         const searchTerm = `%${term}%`;
-        const rawLimit = parseInt(limit, 10);
+        const rawLimit = Number.parseInt(limit, 10);
         const limitNum = Number.isFinite(rawLimit)
             ? Math.min(Math.max(rawLimit, 1), 100)
             : 10;
@@ -1602,8 +1602,8 @@ router.get('/:operatorCode/operations',
     try {
         const { operatorCode } = req.params;
         const { page = 1, limit = 50 } = req.query; // ⚡ OPTIMISATION : Pagination
-        const pageNum = parseInt(page, 10);
-        const limitNum = Math.min(parseInt(limit, 10), 100); // Max 100 par page
+        const pageNum = Number.parseInt(page, 10);
+        const limitNum = Math.min(Number.parseInt(limit, 10), 100); // Max 100 par page
         const historyDays = getOperatorHistoryDays();
         
         console.log(`🔍 Récupération de l'historique pour l'opérateur ${operatorCode} (page ${pageNum}, limit ${limitNum}, historyDays=${historyDays})...`);

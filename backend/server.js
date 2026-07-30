@@ -488,8 +488,8 @@ function scheduleMidnightTransmitDashboard() {
         return;
     }
 
-    const hour = Math.min(Math.max(parseInt(process.env.MIDNIGHT_TRANSMIT_HOUR || '0', 10) || 0, 0), 23);
-    const minute = Math.min(Math.max(parseInt(process.env.MIDNIGHT_TRANSMIT_MINUTE || '5', 10) || 5, 0), 59);
+    const hour = Math.min(Math.max(Number.parseInt(process.env.MIDNIGHT_TRANSMIT_HOUR || '0', 10) || 0, 0), 23);
+    const minute = Math.min(Math.max(Number.parseInt(process.env.MIDNIGHT_TRANSMIT_MINUTE || '5', 10) || 5, 0), 59);
 
     const scheduleNextRun = () => {
         const now = new Date();

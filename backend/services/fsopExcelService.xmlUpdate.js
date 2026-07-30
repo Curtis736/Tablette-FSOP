@@ -13,7 +13,7 @@ function columnNumberToLetter(colNum) {
     let result = '';
     while (colNum > 0) {
         colNum--;
-        result = String.fromCharCode(65 + (colNum % 26)) + result;
+        result = String.fromCodePoint(65 + (colNum % 26)) + result;
         colNum = Math.floor(colNum / 26);
     }
     return result;
@@ -65,9 +65,9 @@ function updateCellInSheetXml(sheetXml, rowNum, colNum, newValue) {
             const rowAttrs = Array.isArray(row) ? row.find(item => item['@_r']) : row;
             if (Array.isArray(rowAttrs)) {
                 const rAttr = rowAttrs.find(item => item['@_r']);
-                return rAttr && parseInt(rAttr['@_r']) === rowNum;
+                return rAttr && Number.parseInt(rAttr['@_r']) === rowNum;
             }
-            return rowAttrs && parseInt(rowAttrs['@_r']) === rowNum;
+            return rowAttrs && Number.parseInt(rowAttrs['@_r']) === rowNum;
         });
 
         if (!targetRow) {

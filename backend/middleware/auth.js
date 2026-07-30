@@ -110,7 +110,7 @@ async function authenticateAdmin(req, res, next) {
         }
 
         const auth = req.headers.authorization || '';
-        const m = String(auth).match(/^Bearer\s+(.+)$/i);
+        const m = String(auth).match(/^Bearer[ \t]+(\S+)$/i);
         const token = m ? m[1].trim() : '';
         const entry = verifyToken(token);
         if (!entry) {

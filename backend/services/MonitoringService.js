@@ -10,7 +10,7 @@ class MonitoringService {
         if (!value) return null;
         // SQL DATE often comes back as JS Date via mssql
         if (value instanceof Date) {
-            if (isNaN(value.getTime())) return null;
+            if (Number.isNaN(value.getTime())) return null;
             return value.toISOString().slice(0, 10); // YYYY-MM-DD
         }
         const s = String(value).trim();
@@ -34,9 +34,9 @@ class MonitoringService {
         if (!s) return null;
         const m = s.match(/^(\d{1,2}):(\d{1,2})(?::(\d{2}))?$/);
         if (!m) return null;
-        const hh = parseInt(m[1], 10);
-        const mm = parseInt(m[2], 10);
-        const ss = m[3] ? parseInt(m[3], 10) : 0;
+        const hh = Number.parseInt(m[1], 10);
+        const mm = Number.parseInt(m[2], 10);
+        const ss = m[3] ? Number.parseInt(m[3], 10) : 0;
         if (!Number.isFinite(hh) || !Number.isFinite(mm) || !Number.isFinite(ss)) return null;
         if (hh < 0 || hh > 23 || mm < 0 || mm > 59 || ss < 0 || ss > 59) return null;
         return { hh, mm, ss };
@@ -113,11 +113,11 @@ class MonitoringService {
                 if (!timeValue) return null;
                 if (typeof timeValue === 'string') {
                     const m = timeValue.trim().match(/^(\d{1,2}):(\d{2})(?::(\d{2}))?$/);
-                    if (m) return { hour: parseInt(m[1], 10), minute: parseInt(m[2], 10) };
+                    if (m) return { hour: Number.parseInt(m[1], 10), minute: Number.parseInt(m[2], 10) };
                 }
                 if (timeValue instanceof Date) return { hour: timeValue.getHours(), minute: timeValue.getMinutes() };
                 if (typeof timeValue === 'object' && timeValue.hour !== undefined && timeValue.minute !== undefined) {
-                    return { hour: parseInt(timeValue.hour, 10), minute: parseInt(timeValue.minute, 10) };
+                    return { hour: Number.parseInt(timeValue.hour, 10), minute: Number.parseInt(timeValue.minute, 10) };
                 }
                 return null;
             };
@@ -126,10 +126,10 @@ class MonitoringService {
                 const createdAt = event.CreatedAt;
                 if (createdAt) {
                     const d = new Date(createdAt);
-                    if (!isNaN(d.getTime())) return d;
+                    if (!Number.isNaN(d.getTime())) return d;
                 }
                 const base = new Date(event.DateCreation);
-                if (!isNaN(base.getTime())) {
+                if (!Number.isNaN(base.getTime())) {
                     const t = extractTime(kind === 'start' ? event.HeureDebut : event.HeureFin);
                     if (t) base.setHours(t.hour, t.minute, 0, 0);
                     return base;
@@ -378,28 +378,28 @@ class MonitoringService {
             
             if (corrections.TotalDuration !== undefined) {
                 updateFields.push('TotalDuration = @totalDuration');
-                updateParams.totalDuration = parseInt(corrections.TotalDuration);
+                updateParams.totalDuration = Number.parseInt(corrections.TotalDuration);
                 shouldRecalculateProductive = true;
             }
             
             if (corrections.PauseDuration !== undefined) {
                 updateFields.push('PauseDuration = @pauseDuration');
-                updateParams.pauseDuration = parseInt(corrections.PauseDuration);
+                updateParams.pauseDuration = Number.parseInt(corrections.PauseDuration);
                 shouldRecalculateProductive = true;
             }
             
             if (corrections.ProductiveDuration !== undefined && !shouldRecalculateProductive) {
                 // Si ProductiveDuration est modifié directement (sans modifier TotalDuration/PauseDuration)
                 updateFields.push('ProductiveDuration = @productiveDuration');
-                updateParams.productiveDuration = parseInt(corrections.ProductiveDuration);
+                updateParams.productiveDuration = Number.parseInt(corrections.ProductiveDuration);
             } else if (shouldRecalculateProductive) {
                 // Recalculer ProductiveDuration = TotalDuration - PauseDuration
                 // Utiliser les nouvelles valeurs si fournies, sinon récupérer depuis la base
                 const newTotalDuration = corrections.TotalDuration !== undefined 
-                    ? parseInt(corrections.TotalDuration) 
+                    ? Number.parseInt(corrections.TotalDuration) 
                     : null;
                 const newPauseDuration = corrections.PauseDuration !== undefined 
-                    ? parseInt(corrections.PauseDuration) 
+                    ? Number.parseInt(corrections.PauseDuration) 
                     : null;
                 
                 if (newTotalDuration !== null && newPauseDuration !== null) {
@@ -882,7 +882,7 @@ class MonitoringService {
                 try {
                     const st = new Date(record.StartTime);
                     const et = new Date(record.EndTime);
-                    const isMidnight = (d) => !isNaN(d.getTime()) && d.getHours() === 0 && d.getMinutes() === 0 && d.getSeconds() === 0;
+                    const isMidnight = (d) => !Number.isNaN(d.getTime()) && d.getHours() === 0 && d.getMinutes() === 0 && d.getSeconds() === 0;
                     if (isMidnight(st) && isMidnight(et)) {
                         console.log(`🛠️ Repair heures (00:00) pour TempsId=${tempsId}...`);
                         await this.repairRecordTimes(tempsId);
@@ -1143,7 +1143,7 @@ class MonitoringService {
             };
         }
 
-        const ids = (tempsIds || []).map(Number).filter((n) => !isNaN(n));
+        const ids = (tempsIds || []).map(Number).filter((n) => !Number.isNaN(n));
         if (ids.length === 0) {
             return { success: false, error: 'Aucun TempsId valide', validated: 0 };
         }

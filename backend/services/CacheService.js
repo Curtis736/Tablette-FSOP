@@ -8,9 +8,12 @@ class CacheService {
         this.redisClient = null;
         this.memoryCache = new Map();
         this.isRedisAvailable = false;
-        this.defaultTTL = parseInt(process.env.CACHE_TTL) || 300000; // 5 minutes par défaut
+        this.defaultTTL = Number.parseInt(process.env.CACHE_TTL) || 300000; // 5 minutes par défaut
         
-        this.initializeRedis();
+        // Hors constructeur (Sonar S7059) — init Redis async différée
+        queueMicrotask(() => {
+            this.initializeRedis();
+        });
     }
 
     /**
