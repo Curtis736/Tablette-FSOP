@@ -621,6 +621,11 @@ describe('OperateurInterface', () => {
         beforeEach(() => {
             operInterface = new OperateurInterface(mockOperator, mockApp);
             operInterface.scannerManager.start = vi.fn().mockResolvedValue();
+            // openScanner exige un contexte sécurisé (HTTPS) — mock CI/happy-dom
+            Object.defineProperty(window, 'isSecureContext', {
+                configurable: true,
+                get: () => true
+            });
         });
 
         it('devrait ouvrir le scanner et démarrer la caméra', async () => {
@@ -638,6 +643,18 @@ describe('OperateurInterface', () => {
             await operInterface.openScanner();
             
             expect(mockNotificationManager.error).toHaveBeenCalled();
+        });
+
+        it('devrait refuser le scan hors contexte sécurisé', async () => {
+            Object.defineProperty(window, 'isSecureContext', {
+                configurable: true,
+                get: () => false
+            });
+
+            await operInterface.openScanner();
+
+            expect(mockNotificationManager.error).toHaveBeenCalled();
+            expect(operInterface.scannerManager.start).not.toHaveBeenCalled();
         });
     });
 
