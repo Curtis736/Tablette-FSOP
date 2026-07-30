@@ -1,0 +1,130 @@
+# Environnement TEST FSOP — ne pas utiliser en production
+# Ports hôte: 8088 (HTTP), 8444 (HTTPS) — évite conflit avec prod 80/443
+# Images: docker-sedi-backend:test / docker-sedi-frontend:test
+# Env file: docker/.env.test
+
+services:
+  backend:
+    image: docker-sedi-backend:test
+    pull_policy: never
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.backend
+    container_name: sedi-tablette-test-backend
+    user: ${BACKEND_USER:-node}
+    expose:
+      - "3001"
+    extra_hosts:
+      - "SERVEURERP:${DB_SERVER_IP:-172.17.0.1}"
+      - "serveurerp:${DB_SERVER_IP:-172.17.0.1}"
+    environment:
+      - NODE_ENV=production
+      - TZ=Europe/Paris
+      - DISABLE_STARTUP_CLEANUP=true
+      - ADMIN_USERNAME=${ADMIN_USERNAME:-admin}
+      - ADMIN_PASSWORD=${ADMIN_PASSWORD}
+      - JWT_SECRET=${JWT_SECRET}
+      - SESSION_SECRET=${SESSION_SECRET:-${JWT_SECRET}}
+      - DB_SERVER=${DB_SERVER:-SERVEURERP}
+      - DB_DATABASE=${DB_DATABASE:-SEDI_APP_INDEPENDANTE}
+      - DB_USER=${DB_USER:-QUALITE}
+      - DB_PASSWORD=${DB_PASSWORD}
+      - DB_ENCRYPT=${DB_ENCRYPT:-false}
+      - DB_TRUST_CERT=${DB_TRUST_CERT:-true}
+      - DB_ERP_SERVER=${DB_ERP_SERVER:-SERVEURERP}
+      - DB_ERP_DATABASE=${DB_ERP_DATABASE:-SEDI_TESTS}
+      - DB_ERP_USER=${DB_ERP_USER:-QUALITE}
+      - DB_ERP_PASSWORD=${DB_ERP_PASSWORD}
+      - DB_ERP_ENCRYPT=${DB_ERP_ENCRYPT:-false}
+      - DB_ERP_TRUST_CERT=${DB_ERP_TRUST_CERT:-true}
+      - DB_REQUEST_TIMEOUT_MS=${DB_REQUEST_TIMEOUT_MS:-60000}
+      - DB_CONNECTION_TIMEOUT_MS=${DB_CONNECTION_TIMEOUT_MS:-60000}
+      - DB_QUERY_RETRIES=${DB_QUERY_RETRIES:-2}
+      - TRACEABILITY_DIR=${TRACEABILITY_DIR:-/mnt/services/Tracabilite}
+      - FSOP_SEARCH_DEPTH=${FSOP_SEARCH_DEPTH:-3}
+      - FSOP_TEMPLATES_DIR=${FSOP_TEMPLATES_DIR:-}
+      - FSOP_TEMPLATES_XLSX_PATH=${FSOP_TEMPLATES_XLSX_PATH:-}
+      - REDIS_URL=${REDIS_URL:-redis://redis:6379}
+      - REDIS_PASSWORD=${REDIS_PASSWORD:-}
+      - REDIS_DB=${REDIS_DB:-0}
+      - ENABLE_FACTORIAL_AUTOCLOSE=${ENABLE_FACTORIAL_AUTOCLOSE:-false}
+      - FACTORIAL_API_BASE_URL=${FACTORIAL_API_BASE_URL:-https://api.factorialhr.com}
+      - FACTORIAL_API_TOKEN=${FACTORIAL_API_TOKEN:-}
+      - SILOG_REMOTE_MODE=${SILOG_REMOTE_MODE:-scheduled}
+      - ENABLE_AUTO_VALIDATE_TEMPS=${ENABLE_AUTO_VALIDATE_TEMPS:-false}
+      - AUTO_VALIDATE_TEMPS_HOUR=${AUTO_VALIDATE_TEMPS_HOUR:-20}
+      - AUTO_VALIDATE_ON_FIN=false
+      - SILOG_DB=${SILOG_DB:-SEDI_TESTS}
+      - SILOG_USER=${SILOG_USER:-Production8}
+      - SILOG_TASK_CODE=${SILOG_TASK_CODE:-SEDI_ETDIFF}
+      - SILOG_STALE_THRESHOLD_HOURS=${SILOG_STALE_THRESHOLD_HOURS:-24}
+      - ALERTS_ENABLED=${ALERTS_ENABLED:-false}
+    volumes:
+      - ${SERVICES_HOST_PATH:-/srv/services}:${SERVICES_CONTAINER_PATH:-/mnt/services}:rw
+      - ${TEMPLATES_HOST_PATH:-/srv/services}:${TEMPLATES_CONTAINER_PATH:-/mnt/templates}:rw
+      - ../backend/logs-test:/app/logs
+    networks:
+      - sedi-test-network
+    restart: unless-stopped
+    mem_limit: ${BACKEND_MEM_LIMIT:-1536m}
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3001/api/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+  frontend:
+    image: docker-sedi-frontend:test
+    pull_policy: never
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.frontend
+      args:
+        SSL_EXTRA_IP: ${SSL_EXTRA_IP:-}
+    container_name: sedi-tablette-test-frontend
+    volumes:
+      - ./ssl-runtime-test/nginx-ssl:/etc/nginx/ssl:ro
+      - ./ssl-runtime-test/tablet:/usr/share/nginx/html/ssl:ro
+    ports:
+      - "${TEST_HTTP_PORT:-8088}:80"
+      - "${TEST_HTTPS_PORT:-8444}:443"
+    environment:
+      - TZ=Europe/Paris
+    mem_limit: ${FRONTEND_MEM_LIMIT:-256m}
+    networks:
+      - sedi-test-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:80"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+  redis:
+    image: redis:7-alpine
+    container_name: sedi-tablette-test-redis
+    expose:
+      - "6379"
+    volumes:
+      - redis-test-data:/data
+    networks:
+      - sedi-test-network
+    restart: unless-stopped
+    mem_limit: ${REDIS_MEM_LIMIT:-384m}
+    command: redis-server --appendonly yes --maxmemory 256mb --maxmemory-policy allkeys-lru
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+
+networks:
+  sedi-test-network:
+    name: sedi-tablette-test-network
+    external: true
+
+volumes:
+  redis-test-data:
+    name: sedi-tablette-test-redis-data

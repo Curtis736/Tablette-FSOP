@@ -2,7 +2,26 @@
 
 Objectif: permettre a l'equipe de diagnostiquer et corriger rapidement les incidents critiques sans dependre d'une personne.
 
+## 0) CI interne / environnement test
+
+Voir [`jenkins/ci/README.md`](../../jenkins/ci/README.md) (Jenkins + SonarQube).
+
+Déploiement **test** (jamais la prod) :
+
+```bash
+cp docker/.env.test.example docker/.env.test
+# éditer secrets + SEDI_TESTS
+chmod +x docker/scripts/deploy-test.sh
+./docker/scripts/deploy-test.sh
+```
+
+- UI test : `http://<host-test>:8088`
+- Health : `http://<host-test>:8088/api/health` (ou via container backend)
+
+La prod (`docker-compose.production.yml` / ports 80-443) n’est **pas** déployée par Jenkins.
+
 ## 1) Verifier etat backend / watchdog
+
 
 ```bash
 docker ps --format "table {{.Names}}\t{{.Status}}"

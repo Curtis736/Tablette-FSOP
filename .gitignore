@@ -107,6 +107,9 @@ docker-compose.override.yml
 docker/ssl-runtime/nginx-ssl/
 docker/ssl-runtime/tablet/
 docker/ssl-runtime/export-admin/
+docker/ssl-runtime-test/
+docker/.env.test
+backend/logs-test/
 docker/*.pem
 docker/*.crt
 docker/*.cer
@@ -142,9 +145,8 @@ backend/config-production.js
 eslint-report.json
 backend/eslint-report.json
 
-# SonarQube
+# SonarQube (artefacts locaux uniquement — sonar-project.properties est versionné)
 .sonar/
-sonar-project.properties
 
 # Fichiers de test
 test-association.sh
