@@ -1403,7 +1403,7 @@ async function validateSerialNumberInMesure(launchNumber, serialNumber, traceRoo
             serialNumberNormalized,
             serialNumberNormalized.replaceAll('-', ' '),
             serialNumberNormalized.replaceAll('-', '.'),
-            serialNumberNormalized.replaceAll(/\s+/, '-')
+            serialNumberNormalized.replaceAll(/\s+/g, '-')
         ];
 
         let found = false;

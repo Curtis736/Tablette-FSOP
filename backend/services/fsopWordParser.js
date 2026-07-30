@@ -264,7 +264,7 @@ function extractTextFromParagraphXml(paraXml) {
         let raw = (m[2] || '').replaceAll('&lt;', '<').replaceAll('&gt;', '>').replaceAll('&amp;', '&');
         // Safety: some templates contain literal Word XML tags embedded in text (e.g. w14:checkbox).
         // Strip any XML-like tags that include a namespace prefix (something:tag), but keep comparisons like "< 0,5 dB".
-        raw = raw.replaceAll(/<\/?[A-Za-z0-9._-]+:[^>]*>/, '');
+        raw = raw.replaceAll(/<\/?[A-Za-z0-9._-]+:[^>]*>/g, '');
         const preserve = /xml:space="preserve"/i.test(attrs);
 
         if (preserve) {
@@ -374,7 +374,7 @@ function extractTextFromCellXml(tcXml) {
         const attrs = m[1] || '';
         let raw = (m[2] || '').replaceAll('&lt;', '<').replaceAll('&gt;', '>').replaceAll('&amp;', '&');
         // Same protection as paragraphs: strip namespaced XML tags embedded as literal text.
-        raw = raw.replaceAll(/<\/?[A-Za-z0-9._-]+:[^>]*>/, '');
+        raw = raw.replaceAll(/<\/?[A-Za-z0-9._-]+:[^>]*>/g, '');
         const preserve = /xml:space="preserve"/i.test(attrs);
 
         if (preserve) {

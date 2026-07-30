@@ -715,7 +715,7 @@ function injectCheckboxData(xml, checkboxData) {
                 // Replace ☐ with ☑ (checked)
                 xml = xml.replaceAll('☐', '☑');
                 // Also handle [ ] -> [x]
-                xml = xml.replaceAll(/\[\s*\]/, '[x]');
+                xml = xml.replaceAll(/\[\s*\]/g, '[x]');
             } else {
                 // Replace ☑ with ☐ (unchecked)
                 xml = xml.replaceAll('☑', '☐');
