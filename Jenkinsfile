@@ -63,34 +63,44 @@ pipeline {
         expression { return !params.SKIP_SONAR }
       }
       steps {
-        script {
-          try {
-            withCredentials([string(credentialsId: 'sonar-token', variable: 'SONAR_TOKEN')]) {
-              withSonarQubeEnv("${SONAR_SERVER}") {
-                sh '''
-                  set -e
-                  echo "SONAR_HOST_URL=${SONAR_HOST_URL}"
-                  if command -v sonar-scanner >/dev/null 2>&1; then
-                    sonar-scanner -Dsonar.login="$SONAR_TOKEN" -Dsonar.host.url="$SONAR_HOST_URL"
-                  elif [ -x /opt/sonar-scanner/bin/sonar-scanner ]; then
-                    /opt/sonar-scanner/bin/sonar-scanner -Dsonar.login="$SONAR_TOKEN" -Dsonar.host.url="$SONAR_HOST_URL"
-                  else
-                    docker run --rm \
-                      --network sedi-ci-network \
-                      -e SONAR_HOST_URL="$SONAR_HOST_URL" \
-                      -e SONAR_TOKEN="$SONAR_TOKEN" \
-                      -v "$PWD:/usr/src" \
-                      sonarsource/sonar-scanner-cli:11 \
-                      -Dsonar.projectBaseDir=/usr/src
-                  fi
-                '''
-              }
+        withSonarQubeEnv("${SONAR_SERVER}") {
+          sh '''
+            set -e
+            echo "SONAR_HOST_URL=${SONAR_HOST_URL}"
+            if [ -z "${SONAR_AUTH_TOKEN:-}" ] && [ -z "${SONAR_TOKEN:-}" ]; then
+              echo "ERREUR: aucun token Sonar (SONAR_AUTH_TOKEN / SONAR_TOKEN)"
+              exit 1
+            fi
+            TOKEN="${SONAR_AUTH_TOKEN:-$SONAR_TOKEN}"
+            echo "Token présent: oui (${#TOKEN} caractères)"
+            echo "Preflight Sonar..."
+            curl -fsS -u "${TOKEN}:" "${SONAR_HOST_URL%/}/api/system/status" || {
+              echo "ERREUR: Sonar injoignable ou token invalide sur ${SONAR_HOST_URL}"
+              exit 1
             }
-          } catch (err) {
-            echo "SonarQube stage failed: ${err}"
-            echo "Vérifier: plugin SonarQube Scanner, serveur nommé '${SONAR_SERVER}', credential 'sonar-token', URL http://sonarqube:9000"
-            error("SonarQube non configuré ou analyse en échec — voir message ci-dessus")
-          }
+            echo
+            SCANNER=""
+            if command -v sonar-scanner >/dev/null 2>&1; then
+              SCANNER="sonar-scanner"
+            elif [ -x /opt/sonar-scanner/bin/sonar-scanner ]; then
+              SCANNER="/opt/sonar-scanner/bin/sonar-scanner"
+            fi
+            if [ -n "$SCANNER" ]; then
+              "$SCANNER" \
+                -Dsonar.host.url="$SONAR_HOST_URL" \
+                -Dsonar.token="$TOKEN" \
+                -Dsonar.qualitygate.wait=false
+            else
+              docker run --rm \
+                --network sedi-ci-network \
+                -e SONAR_HOST_URL="$SONAR_HOST_URL" \
+                -e SONAR_TOKEN="$TOKEN" \
+                -v "$PWD:/usr/src" \
+                sonarsource/sonar-scanner-cli:11 \
+                -Dsonar.projectBaseDir=/usr/src \
+                -Dsonar.qualitygate.wait=false
+            fi
+          '''
         }
       }
     }
