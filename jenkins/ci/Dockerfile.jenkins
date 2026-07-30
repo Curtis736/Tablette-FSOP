@@ -1,4 +1,5 @@
-FROM jenkins/jenkins:lts-jdk17
+# Jenkins LTS récent exige Java 21+ (Java 17 → crash loop au démarrage)
+FROM jenkins/jenkins:lts-jdk21
 
 USER root
 

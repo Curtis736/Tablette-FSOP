@@ -19,7 +19,7 @@ docker compose --env-file .env up -d
 docker compose ps
 ```
 
-L’image Jenkins custom (`Dockerfile.jenkins`) inclut Docker CLI, Node 22 et sonar-scanner.
+L’image Jenkins custom (`Dockerfile.jenkins`) est basée sur **JDK 21**, avec Docker CLI, Node 22 et sonar-scanner.
 - Jenkins : `http://<ci-host>:8085`
 - SonarQube : `http://<ci-host>:9000` (admin / admin au 1er login → changer le mot de passe)
 
