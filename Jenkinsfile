@@ -67,6 +67,7 @@ pipeline {
           sh '''
             set -e
             echo "SONAR_HOST_URL=${SONAR_HOST_URL}"
+            echo "SONAR_CI_MARKER=disjoint-sources-tests-v2"
             if [ -z "${SONAR_AUTH_TOKEN:-}" ] && [ -z "${SONAR_TOKEN:-}" ]; then
               echo "ERREUR: aucun token Sonar (SONAR_AUTH_TOKEN / SONAR_TOKEN)"
               exit 1
