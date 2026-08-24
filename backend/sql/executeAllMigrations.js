@@ -55,11 +55,29 @@ function splitSqlBatches(sqlContent) {
         .map(b => b.trim());
 }
 
+function stripSqlBlockComments(sqlText) {
+    let out = '';
+    let i = 0;
+    while (i < sqlText.length) {
+        const start = sqlText.indexOf('/*', i);
+        if (start === -1) {
+            out += sqlText.slice(i);
+            break;
+        }
+        out += sqlText.slice(i, start);
+        const end = sqlText.indexOf('*/', start + 2);
+        if (end === -1) {
+            break;
+        }
+        i = end + 2;
+    }
+    return out;
+}
+
 function isMeaningfulBatch(batch) {
     // Considérer un batch "vide" s'il ne contient que des commentaires/espaces
     const withoutLineComments = batch.replace(/--[^\n]*$/gm, '');
-    const withoutBlockComments = withoutLineComments.replace(/\/\*[^*]*(?:\*+(?:[^/*][^*]*)*)?\*\//g, '');
-    return withoutBlockComments.trim().length > 0;
+    return stripSqlBlockComments(withoutLineComments).trim().length > 0;
 }
 
 async function executeScript(pool, scriptPath, scriptName) {

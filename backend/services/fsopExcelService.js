@@ -169,7 +169,7 @@ function normalizeHeaderToTagLike(text) {
     tag = tag.replace(/\s+/g, '_').replace(/_+/g, '_');
 
     // Trim underscores
-    tag = tag.replace(/^[_]+/, '').replace(/[_]+$/, '');
+    tag = tag.replace(/^_+/, '').replace(/_+$/, '');
 
     return tag;
 }

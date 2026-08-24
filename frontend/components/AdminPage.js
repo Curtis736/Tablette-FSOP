@@ -939,7 +939,7 @@ class AdminPage {
             }
             
             // Mettre à jour le menu déroulant des opérateurs avec les deux listes
-            const connectedOps = (operatorsData && operatorsData.operators) || [];
+            const connectedOps = operatorsData?.operators || [];
             // Utiliser une cache locale pour la liste complète (évite de re-télécharger pendant les refresh)
             const cachedAll = this._allOperatorsCache || [];
             if (connectedOps.length > 0 || cachedAll.length > 0) {
@@ -953,7 +953,7 @@ class AdminPage {
             if (shouldRefreshAll) {
                 this.apiService.getAllOperators()
                     .then((allOperatorsData) => {
-                        const allOps = (allOperatorsData && allOperatorsData.operators) || [];
+                        const allOps = allOperatorsData?.operators || [];
                         this._allOperatorsCache = allOps;
                         this._allOperatorsCacheAt = Date.now();
                         if (connectedOps.length > 0 || allOps.length > 0) {
@@ -1444,8 +1444,8 @@ class AdminPage {
                 this.apiService.getAllOperators()
             ]);
             
-            const connectedOps = (connectedResponse && connectedResponse.operators) || [];
-            const allOps = (allOperatorsResponse && allOperatorsResponse.operators) || [];
+            const connectedOps = connectedResponse?.operators || [];
+            const allOps = allOperatorsResponse?.operators || [];
             
             if (connectedOps.length > 0 || allOps.length > 0) {
                 this.updateOperatorSelect(connectedOps, allOps);
@@ -2419,7 +2419,7 @@ class AdminPage {
                     this.notificationManager.success(
                         this._formatTransferResultMessage(result, ids.length)
                     );
-                    if (result.ediJob && result.ediJob.success === false) {
+                    if (result.ediJob?.success === false) {
                         this.notificationManager.warning(
                             result.ediJob.error || result.ediJob.message || 'EDI_JOB a échoué — lignes en O, retry possible'
                         );
@@ -2568,7 +2568,7 @@ class AdminPage {
                 this.notificationManager.success(
                     this._formatTransferResultMessage(result, ids.length)
                 );
-                if (result.ediJob && result.ediJob.success === false) {
+                if (result.ediJob?.success === false) {
                     this.notificationManager.warning(
                         result.ediJob.error || result.ediJob.message || 'EDI_JOB a échoué — lignes en O'
                     );
