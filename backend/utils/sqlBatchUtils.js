@@ -29,13 +29,24 @@ function stripSqlBlockComments(sqlText) {
     return out;
 }
 
+function stripSqlLineComments(sqlText) {
+    return String(sqlText || '')
+        .split('\n')
+        .map((line) => {
+            const idx = line.indexOf('--');
+            return idx === -1 ? line : line.slice(0, idx);
+        })
+        .join('\n');
+}
+
 function isMeaningfulBatch(batch) {
-    const withoutLineComments = String(batch || '').replace(/--[^\n]*$/gm, '');
+    const withoutLineComments = stripSqlLineComments(batch);
     return stripSqlBlockComments(withoutLineComments).trim().length > 0;
 }
 
 module.exports = {
     splitSqlBatches,
     stripSqlBlockComments,
+    stripSqlLineComments,
     isMeaningfulBatch
 };

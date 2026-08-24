@@ -4,7 +4,7 @@
 import { loadStructure } from './fsopForm/loadStructure.js?v=20260512.1';
 import { collectLotsForVoieCell, normalizeFsopLotKey, parseSavedVoies } from './fsopForm/lotMatching.js';
 
-const CHECKBOX_LINE_RE = /^([☐☑✓□]|\[[ x]\])[\t ]+([^\s\n][^\n]{0,300})$/i;
+const CHECKBOX_LINE_RE = /^([☐☑✓□]|\[[ x]\])[\t ]+(\S[^\n]{0,300})$/i;
 const UNIT_SPEC_RE = /\d{1,8}[\t ](?:h|min|°C|°F)/i;
 
 class FsopForm {

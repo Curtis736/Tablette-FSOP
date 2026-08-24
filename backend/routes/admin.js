@@ -2029,9 +2029,10 @@ router.put('/operations/:id', async (req, res) => {
         if (formattedEndTimeForFinEvent) {
             try {
                 const ConsolidationService = require('../services/ConsolidationService');
-                const baseDateStr = base.DateCreation
-                    ? (typeof base.DateCreation === 'string' ? base.DateCreation.split('T')[0] : null)
-                    : null;
+                let baseDateStr = null;
+                if (typeof base.DateCreation === 'string') {
+                    baseDateStr = base.DateCreation.split('T')[0];
+                }
                 await ConsolidationService.consolidateOperation(baseOperatorCode, baseLancementCode, {
                     autoFix: true,
                     phase: base.Phase || 'ADMIN',

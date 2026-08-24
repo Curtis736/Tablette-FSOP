@@ -998,10 +998,11 @@ router.post('/save', requireFsopSession, async (req, res) => {
         }
 
         // Prepare replacements
-        const replacements = Object.assign(
-            { '{{LT}}': launchNumber, '{{SN}}': serialNumber },
-            formData.placeholders
-        );
+        const replacements = {
+            '{{LT}}': launchNumber,
+            '{{SN}}': serialNumber,
+            ...formData.placeholders
+        };
 
         // Sanitize table data: remove ** markers from values before injecting into Word
         const sanitizedTables = sanitizeFormTables(formData.tables);

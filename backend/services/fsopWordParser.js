@@ -3,11 +3,11 @@ const { XMLParser } = require('fast-xml-parser');
 const path = require('path');
 const fsp = require('fs/promises');
 
-const NUMBERED_TITLE_RE = /^(\d+)[- \t.]+([^\s\n][^\n]{0,500})$/;
-const NUMBERED_SPACES_TITLE_RE = /^(\d+)[ \t]+([^\s\n][^\n]{0,500})$/;
+const NUMBERED_TITLE_RE = /^(\d+)[- \t.]+(\S[^\n]{0,500})$/;
+const NUMBERED_SPACES_TITLE_RE = /^(\d+)[ \t]+(\S[^\n]{0,500})$/;
 const NUMBERED_PREFIX_RE = /^\d+[- \t.]+/;
 const CHECKBOX_START_RE = /^(?:[☐☑✓□]|\[[ x]\])[ \t]+/i;
-const CHECKBOX_CAPTURE_RE = /^([☐☑✓□]|\[[ x]\])[ \t]*([^\s\n][^\n]{0,500})$/;
+const CHECKBOX_CAPTURE_RE = /^([☐☑✓□]|\[[ x]\])[ \t]*(\S[^\n]{0,500})$/;
 const CHECKBOX_ANYWHERE_RE = /([☐☑✓□]|\[[ x]\])[ \t]*([^\n☐☑✓□\u005B]*)/;
 const DATE_CELL_RE = /\d{1,2}[-/]\d{1,2}[-/]\d{2,4}/;
 
