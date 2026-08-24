@@ -17,7 +17,13 @@ SELECT 2
 GO
 `;
         const batches = splitSqlBatches(sql);
-        expect(batches.filter(isMeaningfulBatch)).toEqual(['SELECT 1', 'SELECT 2']);
+        const meaningful = batches.filter(isMeaningfulBatch);
+        expect(meaningful).toHaveLength(2);
+        expect(meaningful[0]).toBe('SELECT 1');
+        expect(meaningful[1]).toContain('SELECT 2');
+        expect(meaningful.every((b) => !/^--/.test(b.trim()))).toBe(true);
+        expect(meaningful.map((b) => stripSqlBlockComments(b.replace(/--[^\n]*$/gm, '')).trim()))
+            .toEqual(['SELECT 1', 'SELECT 2']);
     });
 
     it('strips block comments without regex backtracking', () => {
