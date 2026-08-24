@@ -1,8 +1,10 @@
 // Routes d'authentification
 const express = require('express');
-const crypto = require('crypto');
+const crypto = require('node:crypto');
 const router = express.Router();
 const { getAdminCredentials, issueToken, revokeToken, verifyToken } = require('../services/adminAuthService');
+
+const BEARER_RE = /^Bearer[ \t]+(\S+)$/i;
 
 function timingSafeEqual(a, b) {
     const ba = Buffer.from(String(a));
@@ -62,7 +64,7 @@ router.post('/login', async (req, res) => {
 router.post('/logout', async (req, res) => {
     try {
         const auth = req.headers.authorization || '';
-        const m = String(auth).match(/^Bearer[ \t]+(\S+)$/i);
+        const m = BEARER_RE.exec(String(auth));
         const token = m ? m[1].trim() : '';
         if (token) revokeToken(token);
         res.json({
@@ -90,7 +92,7 @@ router.get('/verify', async (req, res) => {
         }
 
         const auth = req.headers.authorization || '';
-        const m = String(auth).match(/^Bearer[ \t]+(\S+)$/i);
+        const m = BEARER_RE.exec(String(auth));
         const token = m ? m[1].trim() : '';
         const entry = verifyToken(token);
         if (!entry) {

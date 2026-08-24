@@ -3,6 +3,7 @@
  * Usage: node execute_single_migration.js <nom_du_fichier.sql>
  */
 
+const { splitSqlBatches, isMeaningfulBatch } = require('../utils/sqlBatchUtils');
 const fs = require('fs');
 const path = require('path');
 const sql = require('mssql');
@@ -13,12 +14,15 @@ try {
     productionConfig = require('../config-production');
     console.log('✅ Configuration de production chargée');
 } catch (error) {
+    if (error.code !== 'MODULE_NOT_FOUND') {
+        throw error;
+    }
     console.log('📝 Utilisation des variables d\'environnement');
 }
 
 // Configuration de la base de données
 const config = {
-    server: productionConfig?.DB_SERVER || process.env.DB_SERVER || '192.168.1.14',
+    server: productionConfig?.DB_SERVER || process.env.DB_SERVER,
     database: productionConfig?.DB_DATABASE || process.env.DB_DATABASE || 'SEDI_APP_INDEPENDANTE',
     user: productionConfig?.DB_USER || process.env.DB_USER || 'QUALITE',
     password: productionConfig?.DB_PASSWORD || process.env.DB_PASSWORD || 'QUALITE',
@@ -33,37 +37,6 @@ const config = {
 
 // Obtenir le nom du fichier depuis les arguments
 const scriptFileName = process.argv[2] || 'migration_update_silog_views_from_silog.sql';
-
-function splitSqlBatches(sqlContent) {
-    return sqlContent
-        .replace(/^\uFEFF/, '') // BOM
-        .split(/^[ \t]*GO[ \t]*$/gim)
-        .map(b => b.trim());
-}
-
-function stripSqlBlockComments(sqlText) {
-    let out = '';
-    let i = 0;
-    while (i < sqlText.length) {
-        const start = sqlText.indexOf('/*', i);
-        if (start === -1) {
-            out += sqlText.slice(i);
-            break;
-        }
-        out += sqlText.slice(i, start);
-        const end = sqlText.indexOf('*/', start + 2);
-        if (end === -1) {
-            break;
-        }
-        i = end + 2;
-    }
-    return out;
-}
-
-function isMeaningfulBatch(batch) {
-    const withoutLineComments = batch.replace(/--[^\n]*$/gm, '');
-    return stripSqlBlockComments(withoutLineComments).trim().length > 0;
-}
 
 async function executeScript(pool, scriptPath, scriptName) {
     console.log(`\n${'='.repeat(50)}`);

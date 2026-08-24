@@ -2,83 +2,10 @@
  * Composant pour afficher et remplir un formulaire FSOP de manière interactive
  */
 import { loadStructure } from './fsopForm/loadStructure.js?v=20260512.1';
+import { collectLotsForVoieCell, normalizeFsopLotKey, parseSavedVoies } from './fsopForm/lotMatching.js';
 
-function normalizeFsopLotKey(s) {
-    if (!s) return '';
-    return String(s)
-        .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
-        .toUpperCase()
-        .replace(/[^A-Z0-9]/g, '');
-}
-
-function matchLotByParenRef(refRaw, codeRubrique) {
-    if (!refRaw || !codeRubrique) return false;
-    const refNorm = normalizeFsopLotKey(refRaw);
-    const rubNorm = normalizeFsopLotKey(codeRubrique);
-    if (refNorm === rubNorm) return true;
-    if (refNorm.length >= 6 && (rubNorm.includes(refNorm) || refNorm.includes(rubNorm))) return true;
-    const refFlex = String(refRaw).replace(/[\s-]/g, '');
-    const rubFlex = String(codeRubrique).replace(/[\s-]/g, '');
-    return Boolean(refFlex && rubFlex && refFlex === rubFlex);
-}
-
-function sourceMatchesComponent(source, hints, compText, currentCodeOperation) {
-    const op = String(source?.codeOperation || '').trim().toUpperCase();
-    const rub = String(source?.codeRubrique || '').trim();
-    if (currentCodeOperation && op !== currentCodeOperation.toUpperCase()) return false;
-    if (hints.length > 0) {
-        return hints.some((h) => matchLotByParenRef(h.raw, rub));
-    }
-    const compNk = normalizeFsopLotKey(compText);
-    const rubNk = normalizeFsopLotKey(rub);
-    return Boolean(compNk && rubNk && (rubNk.includes(compNk) || compNk.includes(rubNk)));
-}
-
-function compareLotStrings(a, b) {
-    return String(a).localeCompare(String(b));
-}
-
-function collectLotsForVoieCell(lines, items, uniqueLotsFallback, hints, compText, currentCodeOperation) {
-    const allLots = new Set();
-    for (const ln of lines) {
-        if (!sourceMatchesComponent(ln, hints, compText, currentCodeOperation)) continue;
-        const lots = Array.isArray(ln?.lots) ? ln.lots : [];
-        for (const l of lots) allLots.add(String(l || '').trim());
-    }
-    let lotsArray = [...allLots].filter(Boolean).sort(compareLotStrings);
-    if (lotsArray.length === 0) {
-        for (const it of items) {
-            if (!sourceMatchesComponent(it, hints, compText, '')) continue;
-            const lots = Array.isArray(it?.lots) ? it.lots : [];
-            for (const l of lots) allLots.add(String(l || '').trim());
-        }
-        lotsArray = [...allLots].filter(Boolean).sort(compareLotStrings);
-    }
-    if (lotsArray.length === 0) {
-        lotsArray = uniqueLotsFallback;
-    }
-    return lotsArray;
-}
-
-const VOIE_940_RE = /voie[ \t]*940[ \t]*:?[ \t]*(\S[^\n]{0,200})/i;
-const VOIE_LIGNE_RE = /voie[ \t]*ligne[ \t]*:?[ \t]*(\S[^\n]{0,200})/i;
-const VOIE_1310_RE = /voie[ \t]*1310[ \t]*:?[ \t]*(\S[^\n]{0,200})/i;
-const CHECKBOX_LINE_RE = /^([☐☑✓□]|\[[ x]\])[ \t]+(\S[^\n]{0,300})$/i;
-const UNIT_SPEC_RE = /\d+[ \t]+(?:h|min|°C|°F)/i;
-
-function parseSavedVoies(savedLot) {
-    const savedVoies = {};
-    if (!savedLot) return savedVoies;
-    for (const line of savedLot.split('\n')) {
-        const m940 = VOIE_940_RE.exec(line);
-        const mLigne = VOIE_LIGNE_RE.exec(line);
-        const m1310 = VOIE_1310_RE.exec(line);
-        if (m940) savedVoies['940'] = m940[1].trim();
-        if (mLigne) savedVoies['Ligne'] = mLigne[1].trim();
-        if (m1310) savedVoies['1310'] = m1310[1].trim();
-    }
-    return savedVoies;
-}
+const CHECKBOX_LINE_RE = /^([☐☑✓□]|\[[ x]\])[\t ]+([^\s\n][^\n]{0,300})$/i;
+const UNIT_SPEC_RE = /\d{1,8}[\t ](?:h|min|°C|°F)/i;
 
 class FsopForm {
     constructor(apiService, notificationManager) {
@@ -620,13 +547,7 @@ class FsopForm {
             const isCollageTable = tableHeadersText.includes('collage');
             const isComposantLotTable = tableHeadersText.includes('composant') && tableHeadersText.includes('lot');
 
-            const normalizeKey = (s) => {
-                if (!s) return '';
-                return String(s)
-                    .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
-                    .toUpperCase()
-                    .replace(/[^A-Z0-9]/g, '');
-            };
+            const normalizeKey = normalizeFsopLotKey;
 
             const extractParenHints = (s) => {
                 const text = String(s || '');
@@ -2086,7 +2007,6 @@ class FsopForm {
         
         // Update data attributes
         newRow.querySelectorAll('input').forEach(input => {
-            const colIdx = input.dataset.columnIdx;
             input.dataset.rowId = String(rowCount);
             input.value = '';
             input.removeAttribute('value');

@@ -3,11 +3,11 @@ const { XMLParser } = require('fast-xml-parser');
 const path = require('path');
 const fsp = require('fs/promises');
 
-const NUMBERED_TITLE_RE = /^(\d+)[- \t.]+(\S[^\n]*)$/;
-const NUMBERED_SPACES_TITLE_RE = /^(\d+)[ \t]+(\S[^\n]*)$/;
+const NUMBERED_TITLE_RE = /^(\d+)[- \t.]+([^\s\n][^\n]{0,500})$/;
+const NUMBERED_SPACES_TITLE_RE = /^(\d+)[ \t]+([^\s\n][^\n]{0,500})$/;
 const NUMBERED_PREFIX_RE = /^\d+[- \t.]+/;
 const CHECKBOX_START_RE = /^(?:[☐☑✓□]|\[[ x]\])[ \t]+/i;
-const CHECKBOX_CAPTURE_RE = /^([☐☑✓□]|\[[ x]\])[ \t]*(\S[^\n]*)$/;
+const CHECKBOX_CAPTURE_RE = /^([☐☑✓□]|\[[ x]\])[ \t]*([^\s\n][^\n]{0,500})$/;
 const CHECKBOX_ANYWHERE_RE = /([☐☑✓□]|\[[ x]\])[ \t]*([^\n☐☑✓□\u005B]*)/;
 const DATE_CELL_RE = /\d{1,2}[-/]\d{1,2}[-/]\d{2,4}/;
 
@@ -961,11 +961,6 @@ function extractSections(xmlObj, xmlContent, textFields = [], checkboxes = []) {
         // Use more flexible pattern to catch all variations
         // Also handle cases where there might be whitespace or formatting issues
         let sectionMatch = NUMBERED_TITLE_RE.exec(text);
-        
-        // If no match, try a more flexible pattern (number at start, then any separator, then text)
-        if (!sectionMatch) {
-            sectionMatch = NUMBERED_TITLE_RE.exec(text);
-        }
         
         // If still no match, try to find number followed by text (very flexible)
         if (!sectionMatch && /^\d+/.test(text) && /[A-Za-zÀ-ÿ]/.test(text)) {
@@ -2318,7 +2313,9 @@ module.exports = {
     // Expose a tiny surface for unit tests (does not affect runtime behavior)
     __test: {
         extractTextFromParagraphXml,
-        extractTextFromCellXml
+        extractTextFromCellXml,
+        extractTextContent,
+        stripXmlMarkup
     }
 };
 

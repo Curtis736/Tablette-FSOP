@@ -8,6 +8,7 @@
     "test": "vitest",
     "test:run": "vitest run",
     "test:coverage": "vitest run --coverage",
+    "test:coverage:sonar": "vitest run --config vitest.sonar.mjs --coverage",
     "test:ui": "vitest --ui",
     "test:watch": "vitest --watch"
   },

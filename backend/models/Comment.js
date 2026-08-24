@@ -222,20 +222,19 @@ class Comment {
     getFormattedTimestamp() {
         if (!this.timestamp) return 'N/A';
         
-        try {
-            const date = new Date(this.timestamp);
-            return date.toLocaleString('fr-FR', {
-                timeZone: 'Europe/Paris',
-                year: 'numeric',
-                month: '2-digit',
-                day: '2-digit',
-                hour: '2-digit',
-                minute: '2-digit',
-                second: '2-digit'
-            });
-        } catch (error) {
+        const date = new Date(this.timestamp);
+        if (Number.isNaN(date.getTime())) {
             return this.timestamp;
         }
+        return date.toLocaleString('fr-FR', {
+            timeZone: 'Europe/Paris',
+            year: 'numeric',
+            month: '2-digit',
+            day: '2-digit',
+            hour: '2-digit',
+            minute: '2-digit',
+            second: '2-digit'
+        });
     }
 }
 

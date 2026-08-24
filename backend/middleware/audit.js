@@ -4,6 +4,7 @@
  */
 
 const { executeQuery, executeNonQuery } = require('../config/database');
+const crypto = require('node:crypto');
 
 // Cache for audit table existence (checked once at startup, refreshed every 10 min)
 let _auditTableExists = null;
@@ -11,7 +12,8 @@ async function _checkAuditTable() {
     try {
         const r = await executeQuery(`SELECT COUNT(*) as c FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_SCHEMA='dbo' AND TABLE_NAME='AB_AUDIT_EVENTS'`);
         _auditTableExists = r && r.length > 0 && r[0].c > 0;
-    } catch (_) {
+    } catch (error) {
+        console.warn('Audit table check failed:', error.message);
         _auditTableExists = false;
     }
 }
@@ -62,14 +64,14 @@ async function getSessionInfo(operatorCode) {
  * Générer un ID de corrélation unique
  */
 function generateCorrelationId() {
-    return `corr_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`;
+    return `corr_${Date.now()}_${crypto.randomBytes(4).toString('hex')}`;
 }
 
 /**
  * Générer un RequestId unique
  */
 function generateRequestId() {
-    return `req_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`;
+    return `req_${Date.now()}_${crypto.randomBytes(4).toString('hex')}`;
 }
 
 /**
@@ -103,6 +105,38 @@ function auditMiddleware(req, res, next) {
     next();
 }
 
+function resolveAuditAction(endpoint) {
+    if (endpoint.includes('/login')) return 'OperatorLogin';
+    if (endpoint.includes('/logout')) return 'OperatorLogout';
+    if (endpoint.includes('/start')) return 'StartLancement';
+    if (endpoint.includes('/pause')) return 'PauseLancement';
+    if (endpoint.includes('/resume')) return 'ResumeLancement';
+    if (endpoint.includes('/stop')) return 'StopLancement';
+    if (endpoint.includes('/heartbeat')) return 'Heartbeat';
+    return 'HttpRequest';
+}
+
+function resolveAuditSeverity(statusCode) {
+    if (statusCode >= 500) return 'ERROR';
+    if (statusCode >= 400) return 'WARNING';
+    return 'INFO';
+}
+
+function buildAuditPayload(req) {
+    const payload = {
+        body: req.body ? Object.keys(req.body).reduce((acc, key) => {
+            if (key !== 'password' && key !== 'token' && typeof req.body[key] !== 'object') {
+                acc[key] = req.body[key];
+            }
+            return acc;
+        }, {}) : null,
+        query: Object.keys(req.query).length > 0 ? req.query : null,
+        params: Object.keys(req.params).length > 0 ? req.params : null
+    };
+    const payloadStr = JSON.stringify(payload);
+    return payloadStr.length < 8000 ? payloadStr : null;
+}
+
 /**
  * Logger un événement d'audit
  */
@@ -119,20 +153,10 @@ async function logAuditEvent(req, res, startTime, correlationId, requestId, resp
         const ipAddress = req.ip || req.connection?.remoteAddress || req.headers['x-forwarded-for'] || null;
         const userAgent = req.headers['user-agent'] || null;
         
-        // Déterminer l'action basée sur l'endpoint
-        let action = 'HttpRequest';
-        if (endpoint.includes('/login')) action = 'OperatorLogin';
-        else if (endpoint.includes('/logout')) action = 'OperatorLogout';
-        else if (endpoint.includes('/start')) action = 'StartLancement';
-        else if (endpoint.includes('/pause')) action = 'PauseLancement';
-        else if (endpoint.includes('/resume')) action = 'ResumeLancement';
-        else if (endpoint.includes('/stop')) action = 'StopLancement';
-        else if (endpoint.includes('/heartbeat')) action = 'Heartbeat';
+        let action = resolveAuditAction(endpoint);
         
         // Déterminer la sévérité
-        let severity = 'INFO';
-        if (statusCode >= 500) severity = 'ERROR';
-        else if (statusCode >= 400) severity = 'WARNING';
+        let severity = resolveAuditSeverity(statusCode);
         
         // Récupérer les informations de session si opérateur présent
         let sessionId = null;
@@ -149,25 +173,9 @@ async function logAuditEvent(req, res, startTime, correlationId, requestId, resp
         // Préparer le payload JSON (limité pour éviter les données trop volumineuses)
         let payloadJson = null;
         try {
-            const payload = {
-                body: req.body ? Object.keys(req.body).reduce((acc, key) => {
-                    // Exclure les champs sensibles ou volumineux
-                    if (key !== 'password' && key !== 'token' && typeof req.body[key] !== 'object') {
-                        acc[key] = req.body[key];
-                    }
-                    return acc;
-                }, {}) : null,
-                query: Object.keys(req.query).length > 0 ? req.query : null,
-                params: Object.keys(req.params).length > 0 ? req.params : null
-            };
-            
-            // Limiter la taille du payload
-            const payloadStr = JSON.stringify(payload);
-            if (payloadStr.length < 8000) {
-                payloadJson = payloadStr;
-            }
+            payloadJson = buildAuditPayload(req);
         } catch (error) {
-            // Ignorer les erreurs de sérialisation
+            console.warn('Audit payload serialization skipped:', error.message);
         }
         
         // Message d'erreur si applicable
@@ -180,7 +188,7 @@ async function logAuditEvent(req, res, startTime, correlationId, requestId, resp
                     errorMessage = errorMessage.substring(0, 1000);
                 }
             } catch (error) {
-                // Ignorer
+                console.warn('Audit error message parse skipped:', error.message);
             }
         }
         
@@ -219,7 +227,7 @@ async function logAuditEvent(req, res, startTime, correlationId, requestId, resp
             } catch (error) {
                 // Logger l'erreur mais ne pas faire échouer la requête
                 // Ne logger que si ce n'est pas une erreur de table inexistante
-                if (!error.message || !error.message.includes('Invalid object name')) {
+                if (!error?.message?.includes('Invalid object name')) {
                     console.error('❌ Erreur lors de l\'écriture de l\'audit:', error);
                 }
             }
@@ -274,7 +282,7 @@ async function logCustomAuditEvent(eventData) {
         });
     } catch (error) {
         // Ne logger que si ce n'est pas une erreur de table inexistante
-        if (!error.message || !error.message.includes('Invalid object name')) {
+        if (!error?.message?.includes('Invalid object name')) {
             console.error('❌ Erreur lors de l\'écriture de l\'audit personnalisé:', error);
         }
     }
@@ -294,7 +302,10 @@ module.exports = {
     auditMiddleware,
     logCustomAuditEvent,
     generateCorrelationId,
-    generateRequestId
+    generateRequestId,
+    resolveAuditAction,
+    resolveAuditSeverity,
+    buildAuditPayload
 };
 
 

@@ -54,6 +54,7 @@ pipeline {
         dir('frontend') {
           sh 'npm ci'
           sh 'npm run test:run'
+          sh 'npm run test:coverage:sonar'
         }
       }
     }

@@ -12,6 +12,156 @@ const FactorialOperatorMappingService = require('../services/FactorialOperatorMa
 // IMPORTANT: toutes les routes /api/admin doivent être protégées
 router.use(authenticateAdmin);
 
+const TIME_HM_RE = /^(\d{1,2}):(\d{2})$/;
+const TIME_HMS_RE = /^(\d{1,2}):(\d{2}):(\d{2})$/;
+
+function resolveCycleStatus(lastEvent, lastDebutEvent, finEvent) {
+    let currentStatus = 'EN_COURS';
+    let statusLabel = 'En cours';
+    if (lastEvent?.Ident === 'FIN') {
+        currentStatus = 'TERMINE';
+        statusLabel = 'Terminé';
+    } else if (lastEvent?.Ident === 'PAUSE') {
+        currentStatus = 'EN_PAUSE';
+        statusLabel = 'En pause';
+    } else if (lastEvent?.Ident === 'REPRISE') {
+        currentStatus = 'EN_COURS';
+        statusLabel = 'En cours';
+    } else if (lastDebutEvent?.Statut?.trim()) {
+        const dbStatus = lastDebutEvent.Statut.toUpperCase().trim();
+        const statusMap = {
+            'EN_COURS': 'En cours',
+            'EN_PAUSE': 'En pause',
+            'PAUSE': 'En pause',
+            'TERMINE': 'Terminé',
+            'TERMINÉ': 'Terminé',
+            'PAUSE_TERMINEE': 'Pause terminée',
+            'PAUSE_TERMINÉE': 'Pause terminée',
+            'FORCE_STOP': 'Arrêt forcé'
+        };
+        if (statusMap[dbStatus] || dbStatus === 'TERMINE' || dbStatus === 'TERMINÉ') {
+            currentStatus = dbStatus;
+            statusLabel = statusMap[dbStatus] || 'Terminé';
+        }
+    }
+    const statusUpper = String(currentStatus || '').toUpperCase();
+    if ((statusUpper === 'TERMINE' || statusUpper === 'TERMINÉ') && !finEvent) {
+        currentStatus = 'EN_COURS';
+        statusLabel = 'En cours';
+    }
+    return { currentStatus, statusLabel };
+}
+
+function resolveLastUpdate(finEvent, pauseEvent, startEvent) {
+    if (finEvent) return finEvent.CreatedAt || finEvent.DateCreation;
+    if (pauseEvent) return pauseEvent.CreatedAt || pauseEvent.DateCreation;
+    return startEvent.CreatedAt || startEvent.DateCreation;
+}
+
+function formatStartClock(startEvent) {
+    let heureDebut = Array.isArray(startEvent.HeureDebut) ? startEvent.HeureDebut[0] : startEvent.HeureDebut;
+    if (!heureDebut) {
+        return formatDateTime(startEvent.CreatedAt || startEvent.DateCreation);
+    }
+    if (typeof heureDebut === 'string' && /^\d{2}:\d{2}(:\d{2})?$/.test(heureDebut)) {
+        return heureDebut.substring(0, 5);
+    }
+    if (heureDebut instanceof Date) {
+        return heureDebut.toLocaleTimeString('fr-FR', {
+            timeZone: 'Europe/Paris',
+            hour: '2-digit',
+            minute: '2-digit',
+            hour12: false
+        });
+    }
+    return formatDateTime(heureDebut);
+}
+
+function collectOperationTimeUpdates(body) {
+    const updateFields = [];
+    const params = {};
+    let formattedEndTimeForFinEvent = null;
+    let error = null;
+    if (body.startTime !== undefined) {
+        const formattedStartTime = formatTimeForSQL(body.startTime);
+        if (!formattedStartTime) {
+            error = 'Format d\'heure de début invalide';
+            return { updateFields, params, formattedEndTimeForFinEvent, error };
+        }
+        updateFields.push('HeureDebut = @startTime');
+        params.startTime = formattedStartTime;
+    }
+    if (body.endTime !== undefined) {
+        const formattedEndTime = formatTimeForSQL(body.endTime);
+        if (!formattedEndTime) {
+            error = 'Format d\'heure de fin invalide';
+            return { updateFields, params, formattedEndTimeForFinEvent, error };
+        }
+        params.endTime = formattedEndTime;
+        formattedEndTimeForFinEvent = formattedEndTime;
+        updateFields.push('HeureFin = @endTime');
+    }
+    if (body.status !== undefined) {
+        const validStatuses = ['EN_COURS', 'EN_PAUSE', 'TERMINE', 'PAUSE_TERMINEE', 'FORCE_STOP'];
+        if (!validStatuses.includes(body.status)) {
+            error = `Statut invalide. Statuts autorisés: ${validStatuses.join(', ')}`;
+            return { updateFields, params, formattedEndTimeForFinEvent, error };
+        }
+        updateFields.push('Statut = @status');
+        params.status = body.status;
+    }
+    return { updateFields, params, formattedEndTimeForFinEvent, error };
+}
+
+async function getStepsForLaunch(lt) {
+    const rows = await executeQuery(`
+        SELECT DISTINCT
+            LTRIM(RTRIM(C.CodeOperation)) AS CodeOperation,
+            LTRIM(RTRIM(C.Phase)) AS Phase,
+            LTRIM(RTRIM(C.CodeRubrique)) AS CodeRubrique
+        FROM [SEDI_ERP].[dbo].[LCTC] C
+        INNER JOIN [SEDI_ERP].[dbo].[LCTE] E
+            ON E.CodeLancement = C.CodeLancement
+            AND E.LancementSolde = 'N'
+        WHERE C.CodeLancement = @lancementCode
+          AND C.TypeRubrique = 'O'
+          AND C.CodeOperation IS NOT NULL
+          AND LTRIM(RTRIM(C.CodeOperation)) <> ''
+          AND UPPER(LTRIM(RTRIM(C.CodeOperation))) COLLATE Latin1_General_CI_AI NOT IN ('SECHAGE', 'ETUVAGE')
+        ORDER BY LTRIM(RTRIM(C.Phase)), LTRIM(RTRIM(C.CodeOperation)), LTRIM(RTRIM(C.CodeRubrique))
+    `, { lancementCode: lt });
+    const steps = (rows || []).map(s => {
+        const phase = String(s?.Phase || '').trim();
+        const rubrique = String(s?.CodeRubrique || '').trim();
+        const fabrication = String(s?.CodeOperation || '').trim();
+        const rubriquePart = rubrique ? ` (${rubrique})` : '';
+        return {
+            ...s,
+            StepId: `${phase}|${rubrique}`,
+            Label: `${phase}${rubriquePart} — ${fabrication || 'Fabrication'}`
+        };
+    });
+    const uniqueOps = [...new Set(steps.map(s => String(s?.CodeOperation || '').trim()).filter(Boolean))];
+    const uniqueSteps = [...new Set(steps.map(s => String(s?.StepId || '').trim()).filter(Boolean))];
+    return { steps, uniqueOps, uniqueSteps };
+}
+
+async function resolveStep(lt, op) {
+    const { steps, uniqueOps, uniqueSteps } = await getStepsForLaunch(lt);
+    const raw = String(op || '').trim();
+    if (!raw) return { steps, uniqueOps, uniqueSteps, ctx: steps[0] || null };
+    if (raw.includes('|')) {
+        const [ph, rub] = raw.split('|').map(x => String(x || '').trim());
+        const matchByKey = steps.find(s =>
+            String(s?.Phase || '').trim() === ph &&
+            String(s?.CodeRubrique || '').trim() === rub
+        );
+        return { steps, uniqueOps, uniqueSteps, ctx: matchByKey || null };
+    }
+    const ctx = steps.find(s => String(s?.CodeOperation || '').trim() === raw) || null;
+    return { steps, uniqueOps, uniqueSteps, ctx };
+}
+
 // Bundle GET /api/admin : éviter la troncature historique (ex. 25 lignes) alors que le front fusionne avec le monitoring.
 const ADMIN_DASHBOARD_OPERATIONS_CAP = Math.min(
     Math.max(Number.parseInt(process.env.ADMIN_DASHBOARD_OPERATIONS_LIMIT || '10000', 10) || 10000, 500),
@@ -148,7 +298,7 @@ function formatTimeForSQL(timeInput) {
             const cleanTime = timeInput.trim();
             
             // Format HH:mm
-            const timeMatch = cleanTime.match(/^(\d{1,2}):(\d{2})$/);
+            const timeMatch = TIME_HM_RE.exec(cleanTime);
             if (timeMatch) {
                 const hours = timeMatch[1].padStart(2, '0');
                 const minutes = timeMatch[2];
@@ -158,7 +308,7 @@ function formatTimeForSQL(timeInput) {
             }
             
             // Format HH:mm:ss
-            const timeWithSecondsMatch = cleanTime.match(/^(\d{1,2}):(\d{2}):(\d{2})$/);
+            const timeWithSecondsMatch = TIME_HMS_RE.exec(cleanTime);
             if (timeWithSecondsMatch) {
                 const hours = timeWithSecondsMatch[1].padStart(2, '0');
                 const minutes = timeWithSecondsMatch[2];
@@ -432,20 +582,13 @@ function processLancementEventsSingleLine(events) {
                 // DÉMARRÉ → FIN = TERMINÉ
                 status = 'TERMINE';
                 statusLabel = 'Terminé';
-                // Utiliser HeureFin si disponible (déjà converti en VARCHAR(5) par SQL)
-                // Sinon utiliser CreatedAt (DATETIME2) plutôt que DateCreation (DATE) pour éviter les problèmes de timezone
                 endTime = finEvent.HeureFin ? formatDateTime(finEvent.HeureFin) : formatDateTime(finEvent.CreatedAt || finEvent.DateCreation);
             } else if (pauseEvents.length > 0 && pauseEvents.length > repriseEvents.length) {
-                // DÉMARRÉ → PAUSE = EN PAUSE
                 status = 'PAUSE';
                 statusLabel = 'En pause';
-                // Pas d'heure de fin pour une pause en cours
-                endTime = null;
             } else {
-                // DÉMARRÉ seul = EN COURS
                 status = 'EN_COURS';
                 statusLabel = 'En cours';
-                endTime = null;
             }
             
             console.log(`🔍 Ligne unique pour ${key}:`, status);
@@ -695,60 +838,18 @@ function processLancementEventsWithPauses(events, { includePauseRows = false, in
             const pauseEvents = cycleEvents.filter(e => e.Ident === 'PAUSE');
             const repriseEvents = cycleEvents.filter(e => e.Ident === 'REPRISE');
 
-            // Déterminer le statut final pour CE cycle
-            let currentStatus = 'EN_COURS';
-            let statusLabel = 'En cours';
-
             const debutEvents = cycleEvents
                 .filter(e => e.Ident === 'DEBUT')
                 .sort((a, b) => new Date(b.DateCreation) - new Date(a.DateCreation));
             const lastDebutEvent = debutEvents[0];
 
             const lastEvent = cycleEvents[cycleEvents.length - 1];
+            const { currentStatus, statusLabel } = resolveCycleStatus(lastEvent, lastDebutEvent, finEvent);
 
-            if (lastEvent && lastEvent.Ident === 'FIN') {
-                currentStatus = 'TERMINE';
-                statusLabel = 'Terminé';
-            } else if (lastEvent && lastEvent.Ident === 'PAUSE') {
-                currentStatus = 'EN_PAUSE';
-                statusLabel = 'En pause';
+            if (lastEvent?.Ident === 'PAUSE') {
                 console.log(`✅ Statut déterminé depuis dernier événement PAUSE: ${currentStatus}`);
-            } else if (lastEvent && lastEvent.Ident === 'REPRISE') {
-                currentStatus = 'EN_COURS';
-                statusLabel = 'En cours';
+            } else if (lastEvent?.Ident === 'REPRISE') {
                 console.log(`✅ Statut déterminé depuis dernier événement REPRISE: ${currentStatus}`);
-            } else if (lastDebutEvent && lastDebutEvent.Statut && lastDebutEvent.Statut.trim() !== '') {
-                const dbStatus = lastDebutEvent.Statut.toUpperCase().trim();
-                const statusMap = {
-                    'EN_COURS': 'En cours',
-                    'EN_PAUSE': 'En pause',
-                    'PAUSE': 'En pause',
-                    'TERMINE': 'Terminé',
-                    'TERMINÉ': 'Terminé',
-                    'PAUSE_TERMINEE': 'Pause terminée',
-                    'PAUSE_TERMINÉE': 'Pause terminée',
-                    'FORCE_STOP': 'Arrêt forcé'
-                };
-
-                if (statusMap[dbStatus] || dbStatus === 'TERMINE' || dbStatus === 'TERMINÉ') {
-                    currentStatus = dbStatus;
-                    statusLabel = statusMap[dbStatus] || (dbStatus === 'TERMINE' || dbStatus === 'TERMINÉ' ? 'Terminé' : dbStatus);
-                    console.log(`✅ Utilisation du statut de la base de données depuis événement DEBUT: ${currentStatus} (${statusLabel})`);
-                } else {
-                    currentStatus = 'EN_COURS';
-                    statusLabel = 'En cours';
-                }
-            } else {
-                currentStatus = 'EN_COURS';
-                statusLabel = 'En cours';
-            }
-
-            // Règle: jamais "Terminé" sans FIN explicite
-            const statusUpper = String(currentStatus || '').toUpperCase();
-            if ((statusUpper === 'TERMINE' || statusUpper === 'TERMINÉ') && !finEvent) {
-                console.warn(`⚠️ Statut terminé détecté sans FIN pour ${key} (cycle ${idx}) → forcé à EN_COURS.`);
-                currentStatus = 'EN_COURS';
-                statusLabel = 'En cours';
             }
 
             if (debutEvent) {
@@ -827,31 +928,7 @@ function createLancementItem(startEvent, sequence, status, statusLabel, endTime 
         });
     }
     
-    // Traitement sécurisé de l'heure de début
-    let startTime;
-    // Gérer le cas où HeureDebut est un tableau
-    let heureDebut = Array.isArray(startEvent.HeureDebut) ? startEvent.HeureDebut[0] : startEvent.HeureDebut;
-    
-    if (heureDebut) {
-        if (typeof heureDebut === 'string' && /^\d{2}:\d{2}(:\d{2})?$/.test(heureDebut)) {
-            // Format HH:mm ou HH:mm:ss - retourner directement
-            startTime = heureDebut.substring(0, 5);
-        } else if (heureDebut instanceof Date) {
-            // Objet Date - extraire l'heure avec fuseau horaire français
-            startTime = heureDebut.toLocaleTimeString('fr-FR', {
-                timeZone: 'Europe/Paris',
-                hour: '2-digit',
-                minute: '2-digit',
-                hour12: false
-            });
-        } else {
-            // Autre format - utiliser formatDateTime
-            startTime = formatDateTime(heureDebut);
-        }
-    } else {
-        // Pas d'heure de début - utiliser CreatedAt (DATETIME2) plutôt que DateCreation (DATE) pour éviter les problèmes de timezone
-        startTime = formatDateTime(startEvent.CreatedAt || startEvent.DateCreation);
-    }
+    const startTime = formatStartClock(startEvent);
     
     // Debug uniquement si problème détecté
     if (startTime && startTime.includes(':')) {
@@ -946,7 +1023,7 @@ function createLancementItem(startEvent, sequence, status, statusLabel, endTime 
         generalStatus: status,
         events: sequence.length,
         // lastUpdate doit être une datetime fiable pour le tri
-        lastUpdate: finEvent ? (finEvent.CreatedAt || finEvent.DateCreation) : (pauseEvent ? (pauseEvent.CreatedAt || pauseEvent.DateCreation) : (startEvent.CreatedAt || startEvent.DateCreation)),
+        lastUpdate: resolveLastUpdate(finEvent, pauseEvent, startEvent),
         dateCreation: String(startEvent.DateCreation || '').substring(0, 10) || null,
         type: (status === 'PAUSE' || status === 'PAUSE_TERMINEE') ? 'pause' : 'lancement'
     };
@@ -982,18 +1059,8 @@ function processLancementEvents(events) {
         const repriseEvents = groupEvents.filter(e => e.Ident === 'REPRISE');
         
         // Déterminer le statut de la ligne principale (jamais "EN PAUSE")
-        let currentStatus = 'EN_COURS';
-        let statusLabel = 'En cours';
-        
-        if (finEvent) {
-            currentStatus = 'TERMINE';
-            statusLabel = 'Terminé';
-        } else {
-            // La ligne principale ne doit jamais être "EN PAUSE"
-            // Elle reste "EN COURS" même si il y a des pauses
-            currentStatus = 'EN_COURS';
-            statusLabel = 'En cours';
-        }
+        const currentStatus = finEvent ? 'TERMINE' : 'EN_COURS';
+        const statusLabel = finEvent ? 'Terminé' : 'En cours';
         
         // Calculer les temps
         // Utiliser CreatedAt (DATETIME2) plutôt que DateCreation (DATE) pour éviter les problèmes de timezone
@@ -1231,9 +1298,7 @@ async function getAdminStats(date) {
         const validationResult = await dataValidation.getAdminDataSecurely(targetDate);
         
         // Exécuter la requête des opérateurs en parallèle
-        const [operatorStats] = await Promise.all([
-            executeQuery(operatorsQuery, { ttlHours })
-        ]);
+        const operatorStats = await executeQuery(operatorsQuery, { ttlHours });
         
         if (!validationResult.valid) {
             console.error('❌ Erreur de validation des données pour les statistiques:', validationResult.error);
@@ -1290,20 +1355,20 @@ async function getAdminStats(date) {
         
         const activeLancements = processedLancements.filter(l => 
             l.statusCode === 'EN_COURS' || 
-            (l.status && (l.status.toLowerCase() === 'en cours' || l.status === 'En cours')) ||
-            (l.statusLabel && l.statusLabel.toLowerCase() === 'en cours')
+            (l.status?.toLowerCase() === 'en cours' || l.status === 'En cours') ||
+            (l.statusLabel?.toLowerCase() === 'en cours')
         ).length;
         
         const pausedLancements = processedLancements.filter(l => 
             l.statusCode === 'EN_PAUSE' || l.statusCode === 'PAUSE' ||
-            (l.status && (l.status.toLowerCase().includes('pause') || l.status === 'En pause')) ||
-            (l.statusLabel && l.statusLabel.toLowerCase().includes('pause'))
+            (l.status?.toLowerCase().includes('pause') || l.status === 'En pause') ||
+            (l.statusLabel?.toLowerCase().includes('pause'))
         ).length;
         
         const completedLancements = processedLancements.filter(l => 
             l.statusCode === 'TERMINE' ||
-            (l.status && (l.status.toLowerCase().includes('terminé') || l.status.toLowerCase().includes('termine'))) ||
-            (l.statusLabel && (l.statusLabel.toLowerCase().includes('terminé') || l.statusLabel.toLowerCase().includes('termine')))
+            (l.status?.toLowerCase().includes('terminé') || l.status?.toLowerCase().includes('termine')) ||
+            (l.statusLabel?.toLowerCase().includes('terminé') || l.statusLabel?.toLowerCase().includes('termine'))
         ).length;
         
         console.log(`📊 Statistiques calculées:`, {
@@ -1445,10 +1510,10 @@ function applyLctcPhaseFabrication(record, byLaunch) {
         }
     }
 
-    const fabKey = `${lc}_${phase}_${String(record?.CodeRubrique || record?.codeRubrique || '').trim()}`;
+    const fabPhase = String(record?.CodeRubrique || record?.codeRubrique || '').trim();
     let fabrication = '-';
     if (phase) {
-        const exact = steps.filter(s => s.Phase === phase && s.CodeRubrique === String(record?.CodeRubrique || record?.codeRubrique || '').trim());
+        const exact = steps.filter(s => s.Phase === phase && s.CodeRubrique === fabPhase);
         const byPhase = exact.length ? exact : steps.filter(s => s.Phase === phase);
         if (byPhase.length) {
             fabrication = [...new Set(byPhase.map(s => s.CodeOperation))].join(' / ');
@@ -1567,12 +1632,10 @@ async function getAdminOperations(date, page = 1, limit = 25, dateStart = null, 
         
         const formattedOperations = limitedLancements.map(lancement => {
             // Trouver les informations détaillées depuis les événements
-            const relatedEvents = filteredEvents.filter(e => 
-                e.CodeLanctImprod === lancement.lancementCode && 
+            const firstEvent = filteredEvents.find(e =>
+                e.CodeLanctImprod === lancement.lancementCode &&
                 e.OperatorCode === lancement.operatorId
             );
-            
-            const firstEvent = relatedEvents[0];
             // Utiliser le nom depuis lancement si disponible, sinon depuis les événements
             const operatorName = lancement.operatorName || firstEvent?.operatorName || `Opérateur ${lancement.operatorId}` || 'Non assigné';
             
@@ -1637,58 +1700,30 @@ async function getAdminOperations(date, page = 1, limit = 25, dateStart = null, 
 router.put('/operations/:id', async (req, res) => {
     try {
         const { id } = req.params;
-        const { operatorName, lancementCode, article, startTime, endTime } = req.body;
+        const { lancementCode } = req.body;
         
         console.log(`🔧 Modification opération ${id}:`, req.body);
         
-        // Construire la requête de mise à jour dynamiquement
-        const updateFields = [];
-        const params = { id: Number.parseInt(id) };
-        let formattedEndTimeForFinEvent = null;
+        const timeUpdates = collectOperationTimeUpdates(req.body);
+        if (timeUpdates.error) {
+            return res.status(400).json({
+                success: false,
+                error: timeUpdates.error
+            });
+        }
+        const updateFields = timeUpdates.updateFields;
+        const params = { id: Number.parseInt(id), ...timeUpdates.params };
+        let formattedEndTimeForFinEvent = timeUpdates.formattedEndTimeForFinEvent;
         let requestedLancementCode = lancementCode;
         
-        // Heures et statut sont modifiables
-        if (startTime !== undefined) {
-            const formattedStartTime = formatTimeForSQL(startTime);
-            if (!formattedStartTime) {
-                return res.status(400).json({
-                    success: false,
-                    error: 'Format d\'heure de début invalide'
-                });
-            }
-            updateFields.push('HeureDebut = @startTime');
-            params.startTime = formattedStartTime;
-            console.log(`🔧 startTime: ${startTime} -> ${params.startTime}`);
+        if (params.startTime) {
+            console.log(`🔧 startTime -> ${params.startTime}`);
         }
-        
-        if (endTime !== undefined) {
-            const formattedEndTime = formatTimeForSQL(endTime);
-            if (!formattedEndTime) {
-                return res.status(400).json({
-                    success: false,
-                    error: 'Format d\'heure de fin invalide'
-                });
-            }
-            params.endTime = formattedEndTime;
-            formattedEndTimeForFinEvent = formattedEndTime;
-            // Update the current record too (harmless if not FIN),
-            // and we'll also propagate to the FIN event after we load the base record.
-            updateFields.push('HeureFin = @endTime');
-            console.log(`🔧 endTime: ${endTime} -> ${params.endTime}`);
+        if (params.endTime) {
+            console.log(`🔧 endTime -> ${params.endTime}`);
         }
-        
-        // Modification du statut
-        if (req.body.status !== undefined) {
-            const validStatuses = ['EN_COURS', 'EN_PAUSE', 'TERMINE', 'PAUSE_TERMINEE', 'FORCE_STOP'];
-            if (!validStatuses.includes(req.body.status)) {
-                return res.status(400).json({
-                    success: false,
-                    error: `Statut invalide. Statuts autorisés: ${validStatuses.join(', ')}`
-                });
-            }
-            updateFields.push('Statut = @status');
-            params.status = req.body.status;
-            console.log(`🔧 status: ${req.body.status}`);
+        if (params.status) {
+            console.log(`🔧 status: ${params.status}`);
         }
         
         // Validation de cohérence des heures
@@ -1986,7 +2021,7 @@ router.put('/operations/:id', async (req, res) => {
                     WHERE NoEnreg = @id
                 `, { id: Number.parseInt(id) });
             } catch (e) {
-                // non bloquant
+                console.warn('Alignement statut TERMINE non bloquant:', e.message);
             }
 
         }
@@ -1994,7 +2029,9 @@ router.put('/operations/:id', async (req, res) => {
         if (formattedEndTimeForFinEvent) {
             try {
                 const ConsolidationService = require('../services/ConsolidationService');
-                const baseDateStr = base.DateCreation ? (typeof base.DateCreation === 'string' ? base.DateCreation.split('T')[0] : null) : null;
+                const baseDateStr = base.DateCreation
+                    ? (typeof base.DateCreation === 'string' ? base.DateCreation.split('T')[0] : null)
+                    : null;
                 await ConsolidationService.consolidateOperation(baseOperatorCode, baseLancementCode, {
                     autoFix: true,
                     phase: base.Phase || 'ADMIN',
@@ -2027,65 +2064,11 @@ router.put('/operations/:id', async (req, res) => {
 // POST /api/admin/operations - Ajouter une nouvelle opération
 router.post('/operations', async (req, res) => {
     try {
-        const { operatorId, lancementCode, startTime, status = 'DEBUT', phase = '', codeOperation } = req.body;
+        const { operatorId, lancementCode, status = 'DEBUT', phase = '', codeOperation } = req.body;
         
         console.log('=== AJOUT NOUVELLE OPERATION ===');
         console.log('Données reçues:', req.body);
 
-        // Helper: récupérer les étapes ERP pour décider si on doit demander un choix
-        // IMPORTANT: une "étape" = (Phase + CodeRubrique). CodeOperation est le libellé / nom de fabrication.
-        const getStepsForLaunch = async (lt) => {
-            const rows = await executeQuery(`
-                SELECT DISTINCT
-                    LTRIM(RTRIM(C.CodeOperation)) AS CodeOperation,
-                    LTRIM(RTRIM(C.Phase)) AS Phase,
-                    LTRIM(RTRIM(C.CodeRubrique)) AS CodeRubrique
-                FROM [SEDI_ERP].[dbo].[LCTC] C
-                INNER JOIN [SEDI_ERP].[dbo].[LCTE] E
-                    ON E.CodeLancement = C.CodeLancement
-                    AND E.LancementSolde = 'N'
-                WHERE C.CodeLancement = @lancementCode
-                  AND C.TypeRubrique = 'O'
-                  AND C.CodeOperation IS NOT NULL
-                  AND LTRIM(RTRIM(C.CodeOperation)) <> ''
-                  -- Ne jamais proposer "Séchage" / "ÉtuVage" (accents/casse ignorés)
-                  AND UPPER(LTRIM(RTRIM(C.CodeOperation))) COLLATE Latin1_General_CI_AI NOT IN ('SECHAGE', 'ETUVAGE')
-                ORDER BY LTRIM(RTRIM(C.Phase)), LTRIM(RTRIM(C.CodeOperation)), LTRIM(RTRIM(C.CodeRubrique))
-            `, { lancementCode: lt });
-            const steps = (rows || []).map(s => {
-                const phase = String(s?.Phase || '').trim();
-                const rubrique = String(s?.CodeRubrique || '').trim();
-                const fabrication = String(s?.CodeOperation || '').trim();
-                return {
-                    ...s,
-                    StepId: `${phase}|${rubrique}`,
-                    Label: `${phase}${rubrique ? ` (${rubrique})` : ''} — ${fabrication || 'Fabrication'}`
-                };
-            });
-            const uniqueOps = [...new Set(steps.map(s => String(s?.CodeOperation || '').trim()).filter(Boolean))];
-            const uniqueSteps = [...new Set(steps.map(s => String(s?.StepId || '').trim()).filter(Boolean))];
-            return { steps, uniqueOps, uniqueSteps };
-        };
-
-        const resolveStep = async (lt, op) => {
-            const { steps, uniqueOps, uniqueSteps } = await getStepsForLaunch(lt);
-            const raw = String(op || '').trim();
-            if (!raw) return { steps, uniqueOps, uniqueSteps, ctx: steps[0] || null };
-
-            // Support "StepId" = "PHASE|CODERUBRIQUE" (permet de choisir une étape même si CodeOperation est identique)
-            if (raw.includes('|')) {
-                const [ph, rub] = raw.split('|').map(x => String(x || '').trim());
-                const matchByKey = steps.find(s =>
-                    String(s?.Phase || '').trim() === ph &&
-                    String(s?.CodeRubrique || '').trim() === rub
-                );
-                return { steps, uniqueOps, uniqueSteps, ctx: matchByKey || null };
-            }
-
-            const ctx = steps.find(s => String(s?.CodeOperation || '').trim() === raw) || null;
-            return { steps, uniqueOps, uniqueSteps, ctx };
-        };
-        
         // Valider le numéro de lancement dans LCTE (optionnel pour l'admin)
         const validation = await validateLancement(lancementCode);
         let lancementInfo = null;
@@ -2157,7 +2140,12 @@ router.post('/operations', async (req, res) => {
         // Insérer dans ABHISTORIQUE_OPERATEURS
         // Clés ERP: Phase + CodeRubrique (si disponibles via CodeOperation), sinon fallback admin.
         const codeRubrique = erpRubrique || phase || operatorId;
-        const finalStatus = status === 'DEBUT' ? 'EN_COURS' : status === 'FIN' ? 'TERMINE' : status;
+        let finalStatus = status;
+        if (status === 'DEBUT') {
+            finalStatus = 'EN_COURS';
+        } else if (status === 'FIN') {
+            finalStatus = 'TERMINE';
+        }
         const finalPhase = erpPhase || phase || 'ADMIN';
 
         // Corrélation requête/session (peut être NULL côté admin si pas de session active)
@@ -2199,7 +2187,7 @@ router.post('/operations', async (req, res) => {
         console.log('Paramètres:', params);
         
         const insertResult = await executeQuery(insertQuery, params);
-        const insertedId = insertResult && insertResult[0] ? insertResult[0].NoEnreg : null;
+        const insertedId = insertResult?.[0]?.NoEnreg ?? null;
         
         console.log('✅ Opération ajoutée avec succès dans ABHISTORIQUE_OPERATEURS, ID:', insertedId);
         
@@ -2665,7 +2653,7 @@ router.post('/cleanup-sessions', async (req, res) => {
             WHERE DateCreation < DATEADD(hour, -24, GETDATE())
         `;
         
-        const result = await executeQuery(cleanupQuery);
+        await executeQuery(cleanupQuery);
         console.log('✅ Sessions expirées supprimées');
         
         // Compter les sessions restantes
@@ -2905,7 +2893,7 @@ router.post('/testing/purge', requireDangerousRoute('ALLOW_TEST_PURGE'), async (
             return res.status(400).json({
                 success: false,
                 error: 'CONFIRM_REQUIRED',
-                message: 'Pour éviter une suppression accidentelle, envoyez { confirm: \"PURGE\" }.'
+                message: 'Pour éviter une suppression accidentelle, envoyez { confirm: "PURGE" }.'
             });
         }
 
@@ -3456,7 +3444,7 @@ router.post('/delete-all-sedi-tables', async (req, res) => {
                 await executeNonQuery(query);
                 console.log(`✅ Données supprimées: ${query.split('.')[3]}`);
             } catch (error) {
-                console.log(`⚠️ Table peut-être inexistante: ${query.split('.')[3]}`);
+                console.log(`⚠️ Table peut-être inexistante: ${query.split('.')[3]}`, error.message);
             }
         }
         
@@ -3579,8 +3567,8 @@ router.post('/recreate-tables', requireDangerousRoute('ALLOW_RECREATE_TABLES'), 
         try {
             await executeQuery(dropHistoriqueTable);
             console.log('🗑️ Table ABHISTORIQUE_OPERATEURS supprimée (si elle existait)');
-    } catch (error) {
-            console.log('⚠️ Table ABHISTORIQUE_OPERATEURS n\'existait pas');
+        } catch (error) {
+            console.log('⚠️ Table ABHISTORIQUE_OPERATEURS n\'existait pas', error.message);
         }
         
         await executeQuery(createHistoriqueTable);
@@ -3994,24 +3982,21 @@ router.get('/debug/all-lancements-status', async (req, res) => {
         const analysis = [];
         
         Object.keys(lancementGroups).forEach(key => {
-            const groupEvents = lancementGroups[key].sort((a, b) => 
-                new Date(a.DateCreation) - new Date(b.DateCreation)
-            );
+            const groupEvents = lancementGroups[key].slice();
+            groupEvents.sort((a, b) => new Date(a.DateCreation) - new Date(b.DateCreation));
             
             const [lancementCode, operatorCode] = key.split('_');
             const lastEvent = groupEvents[groupEvents.length - 1];
-            const finEvent = groupEvents.find(e => e.Ident === 'FIN');
+            const hasFin = groupEvents.some(e => e.Ident === 'FIN');
             const pauseEvents = groupEvents.filter(e => e.Ident === 'PAUSE');
             const repriseEvents = groupEvents.filter(e => e.Ident === 'REPRISE');
             
             // Déterminer le statut selon la nouvelle logique
             let currentStatus = 'EN_COURS';
-            if (finEvent) {
+            if (hasFin) {
                 currentStatus = 'TERMINE';
             } else if (lastEvent.Ident === 'PAUSE') {
                 currentStatus = 'PAUSE';
-            } else if (lastEvent.Ident === 'REPRISE') {
-                currentStatus = 'EN_COURS';
             }
             
             analysis.push({
@@ -4041,7 +4026,7 @@ router.get('/debug/all-lancements-status', async (req, res) => {
         res.json({
             success: true,
             totalLancements: analysis.length,
-            analysis: analysis.sort((a, b) => a.lancementCode.localeCompare(b.lancementCode))
+            analysis: [...analysis].sort((a, b) => a.lancementCode.localeCompare(b.lancementCode))
         });
         
     } catch (error) {
@@ -4162,9 +4147,8 @@ router.get('/debug/all-pauses', async (req, res) => {
         const analysis = [];
         
         Object.keys(lancementGroups).forEach(key => {
-            const groupEvents = lancementGroups[key].sort((a, b) => 
-                new Date(a.DateCreation) - new Date(b.DateCreation)
-            );
+            const groupEvents = lancementGroups[key].slice();
+            groupEvents.sort((a, b) => new Date(a.DateCreation) - new Date(b.DateCreation));
             
             const [lancementCode, operatorCode] = key.split('_');
             const pauseEvents = groupEvents.filter(e => e.Ident === 'PAUSE');
@@ -4204,7 +4188,7 @@ router.get('/debug/all-pauses', async (req, res) => {
         res.json({
             success: true,
             totalLancements: analysis.length,
-            analysis: analysis.sort((a, b) => a.lancementCode.localeCompare(b.lancementCode))
+            analysis: [...analysis].sort((a, b) => a.lancementCode.localeCompare(b.lancementCode))
         });
         
     } catch (error) {
@@ -4466,7 +4450,7 @@ router.put('/monitoring/:tempsId', async (req, res) => {
                     });
                 }
             } catch (e) {
-                // best-effort uniquement
+                console.warn('Vérification historique best-effort:', e.message);
             }
 
             // Vérifier si l'enregistrement existe avec un autre type de données
@@ -4796,11 +4780,11 @@ router.post('/monitoring/validate-and-transmit-batch', async (req, res) => {
         let markResult = null;
         const idsToMark = result.validatedIds || tempsIds;
         const shouldMarkFromAdmin = adminMarkT && isScheduledMode && Array.isArray(idsToMark) && idsToMark.length > 0;
-        const shouldMarkFromDirect = !isScheduledMode && (!triggerEdiJob || (ediJobResult && ediJobResult.success && !ediJobResult.skipped));
+        const shouldMarkFromDirect = !isScheduledMode && (!triggerEdiJob || (ediJobResult?.success && !ediJobResult?.skipped));
 
         if (shouldMarkFromAdmin || shouldMarkFromDirect) {
             markResult = await MonitoringService.markBatchAsTransmitted(idsToMark);
-            if (shouldMarkFromAdmin && markResult && markResult.success === false) {
+            if (shouldMarkFromAdmin && markResult?.success === false) {
                 return res.status(500).json({
                     success: false,
                     error: markResult.error || 'Impossible de marquer les enregistrements comme transmis (T)',
@@ -4809,9 +4793,9 @@ router.post('/monitoring/validate-and-transmit-batch', async (req, res) => {
             }
         }
 
-        const successCore = !triggerEdiJob || (ediJobResult && ediJobResult.success);
+        const successCore = !triggerEdiJob || ediJobResult?.success;
         const success = shouldMarkFromAdmin
-            ? !!(result.success && markResult && markResult.success !== false)
+            ? !!(result.success && markResult?.success !== false)
             : (isScheduledMode || successCore);
 
         return res.json({

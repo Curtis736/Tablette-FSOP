@@ -3,6 +3,8 @@ const { executeQuery } = require('../config/database');
 const { verifyToken, getAdminCredentials } = require('../services/adminAuthService');
 const SessionService = require('../services/SessionService');
 
+const BEARER_RE = /^Bearer[ \t]+(\S+)$/i;
+
 /**
  * Middleware pour vérifier qu'un opérateur est authentifié et actif
  */
@@ -110,7 +112,7 @@ async function authenticateAdmin(req, res, next) {
         }
 
         const auth = req.headers.authorization || '';
-        const m = String(auth).match(/^Bearer[ \t]+(\S+)$/i);
+        const m = BEARER_RE.exec(String(auth));
         const token = m ? m[1].trim() : '';
         const entry = verifyToken(token);
         if (!entry) {

@@ -1,7 +1,7 @@
 const express = require('express');
-const path = require('path');
-const fs = require('fs/promises');
-const fsNative = require('fs');
+const path = require('node:path');
+const fs = require('node:fs/promises');
+const fsNative = require('node:fs');
 const fsp = fs; // Alias for consistency with other parts of the codebase
 const AdmZip = require('adm-zip');
 
@@ -44,7 +44,7 @@ const router = express.Router();
  */
 async function requireFsopSession(req, res, next) {
     try {
-        const operatorId = (req.body && req.body.operatorId) || req.headers['x-operator-code'];
+        const operatorId = req.body?.operatorId || req.headers['x-operator-code'];
         if (!operatorId) {
             return res.status(401).json({
                 success: false,
@@ -81,8 +81,8 @@ async function requireFsopSession(req, res, next) {
     }
 }
 
-const DEFAULT_TEMPLATES_DIR_WIN = 'X:\\Qualite\\4_Public\\A disposition\\DOSSIER SMI\\Formulaires';
-const DEFAULT_TEMPLATES_XLSX_WIN = 'X:\\Qualite\\4_Public\\A disposition\\DOSSIER SMI\\Formulaires\\Liste des formulaires.xlsx';
+const DEFAULT_TEMPLATES_DIR_WIN = String.raw`X:\Qualite\4_Public\A disposition\DOSSIER SMI\Formulaires`;
+const DEFAULT_TEMPLATES_XLSX_WIN = String.raw`X:\Qualite\4_Public\A disposition\DOSSIER SMI\Formulaires\Liste des formulaires.xlsx`;
 
 // Common Linux/container locations we support out of the box (VM/Docker).
 const DEFAULT_TEMPLATES_DIR_LINUX = '/mnt/templates/Qualite/4_Public/A disposition/DOSSIER SMI/Formulaires';
@@ -249,6 +249,71 @@ function normalizeSerialNumber(value) {
     return cleaned;
 }
 
+function addLotFromRow(r, uniqueLots, byRubrique, byOperationRubrique) {
+    const codeOperation = String(r.CodeOperation || '').trim();
+    const codeRubrique = String(r.CodeRubrique || '').trim();
+    const phase = String(r.Phase || '').trim();
+    const codeLot = String(r.CodeLot || '').trim();
+    if (!codeRubrique || !codeLot) return;
+    uniqueLots.add(codeLot);
+    if (!byRubrique.has(codeRubrique)) byRubrique.set(codeRubrique, { lots: new Set(), phases: new Set() });
+    const entry = byRubrique.get(codeRubrique);
+    entry.lots.add(codeLot);
+    if (phase) entry.phases.add(phase);
+    if (!codeOperation) return;
+    const key = `${codeOperation}|${codeRubrique}`;
+    if (!byOperationRubrique.has(key)) {
+        byOperationRubrique.set(key, { lots: new Set(), phases: new Set(), codeOperation, codeRubrique });
+    }
+    const e2 = byOperationRubrique.get(key);
+    e2.lots.add(codeLot);
+    if (phase) e2.phases.add(phase);
+}
+
+async function copyAndVerifyTemplate(templatePath, destPath, fsopDir) {
+    await fsp.access(fsopDir, fsNative.constants.W_OK);
+    const tmpPath = destPath + '.tmp.' + Date.now();
+    await fs.copyFile(templatePath, tmpPath);
+    try {
+        await fsp.rename(tmpPath, destPath);
+    } catch (renameError) {
+        console.warn('rename fallback copyFile:', renameError.message);
+        await fs.copyFile(tmpPath, destPath);
+        await fsp.unlink(tmpPath).catch(() => {});
+    }
+    const copiedStats = await fsp.stat(destPath);
+    if (copiedStats.size === 0) {
+        throw new Error('Le fichier copié est vide');
+    }
+    const testZip = new AdmZip(destPath);
+    if (!testZip.getEntry('word/document.xml')) {
+        throw new Error('Fichier copié n\'est pas un DOCX valide');
+    }
+}
+
+function sanitizeFormTables(tables) {
+    const sanitizedTables = {};
+    if (!tables) return sanitizedTables;
+    for (const [tableId, rows] of Object.entries(tables)) {
+        sanitizedTables[tableId] = {};
+        for (const [rowId, cells] of Object.entries(rows)) {
+            sanitizedTables[tableId][rowId] = {};
+            for (const [colIdx, value] of Object.entries(cells)) {
+                let cleanedValue = String(value || '');
+                cleanedValue = cleanedValue.replace(/^\*\*|\*\*$/g, '');
+                cleanedValue = cleanedValue.replace(',', '.');
+                sanitizedTables[tableId][rowId][colIdx] = cleanedValue;
+            }
+        }
+    }
+    return sanitizedTables;
+}
+
+function missingExcelMessage(launchNumber, reference) {
+    const refPart = reference ? ` ou la référence ${reference}` : '';
+    return `Fichier Excel mesure non trouvé pour le lancement ${launchNumber}${refPart}`;
+}
+
 function normalizeLaunchNumber(value) {
     const raw = String(value || '').trim().toUpperCase();
     if (!/^LT\d{7,8}$/.test(raw)) {
@@ -287,24 +352,7 @@ router.get('/lots/:launchNumber', async (req, res) => {
         const uniqueLots = new Set();
 
         for (const r of rows || []) {
-            const codeOperation = String(r.CodeOperation || '').trim();
-            const codeRubrique = String(r.CodeRubrique || '').trim();
-            const phase = String(r.Phase || '').trim();
-            const codeLot = String(r.CodeLot || '').trim();
-            if (!codeRubrique || !codeLot) continue;
-            uniqueLots.add(codeLot);
-            if (!byRubrique.has(codeRubrique)) byRubrique.set(codeRubrique, { lots: new Set(), phases: new Set() });
-            const entry = byRubrique.get(codeRubrique);
-            entry.lots.add(codeLot);
-            if (phase) entry.phases.add(phase);
-
-            if (codeOperation) {
-                const key = `${codeOperation}|${codeRubrique}`;
-                if (!byOperationRubrique.has(key)) byOperationRubrique.set(key, { lots: new Set(), phases: new Set(), codeOperation, codeRubrique });
-                const e2 = byOperationRubrique.get(key);
-                e2.lots.add(codeLot);
-                if (phase) e2.phases.add(phase);
-            }
+            addLotFromRow(r, uniqueLots, byRubrique, byOperationRubrique);
         }
 
         const items = [...byRubrique.entries()]
@@ -549,7 +597,7 @@ router.post('/open', requireFsopSession, async (req, res) => {
             return res.status(503).json({ 
                 error: 'TRACEABILITY_UNAVAILABLE',
                 message: 'Répertoire de traçabilité non configuré',
-                hint: 'Définissez TRACEABILITY_DIR dans votre fichier .env (ex: TRACEABILITY_DIR=X:\\Tracabilite)'
+                hint: String.raw`Définissez TRACEABILITY_DIR dans votre fichier .env (ex: TRACEABILITY_DIR=X:\Tracabilite)`
             });
         }
         
@@ -685,8 +733,8 @@ router.post('/open', requireFsopSession, async (req, res) => {
             try {
                 await fsp.unlink(destPath).catch(() => {});
                 console.log(`🧹 Fichier corrompu supprimé: ${destPath}`);
-            } catch (_) {
-                // Ignore cleanup errors
+            } catch (cleanupError) {
+                console.warn('Cleanup after injection failed:', cleanupError.message);
             }
             
             return res.status(500).json({
@@ -695,24 +743,6 @@ router.post('/open', requireFsopSession, async (req, res) => {
                 details: process.env.NODE_ENV === 'development' ? err.message : undefined,
                 hint: 'Le fichier peut être corrompu. Vérifiez les données injectées (caractères spéciaux, structure XML).'
             });
-        }
-
-        // Try to load saved form data from JSON if exists
-        const jsonFileName = `FSOP_${templateCode}_${serialNumber}_${launchNumber}.json`;
-        const jsonPath = path.join(fsopDir, jsonFileName);
-        let savedFormData = null;
-        try {
-            if (await safeIsFile(jsonPath)) {
-                const jsonContent = await fs.readFile(jsonPath, 'utf8');
-                const jsonData = JSON.parse(jsonContent);
-                savedFormData = jsonData.formData || null;
-                console.log(`✅ Données sauvegardées chargées depuis: ${jsonPath}`);
-            } else {
-                console.log(`ℹ️ Aucun fichier JSON trouvé: ${jsonPath}`);
-            }
-        } catch (jsonError) {
-            console.warn(`⚠️ Erreur lors du chargement du JSON (non bloquant):`, jsonError.message);
-            // Don't fail if JSON doesn't exist or is corrupted
         }
 
         console.log(`📥 Envoi du fichier au client...`);
@@ -949,39 +979,9 @@ router.post('/save', requireFsopSession, async (req, res) => {
         // Copy template to destination — protégé par verrou pour éviter les corruptions simultanées
         try {
             await withSaveLock(lockKey, async () => {
-            await fsp.access(fsopDir, fsNative.constants.W_OK);
-            // Écriture atomique : copie vers un fichier temporaire, puis renommage
-            const tmpPath = destPath + '.tmp.' + Date.now();
-            await fs.copyFile(templatePath, tmpPath);
-            try {
-                await fsp.rename(tmpPath, destPath);
-            } catch (_) {
-                // Sur Windows cross-device, rename peut échouer : fallback copyFile + unlink
-                await fs.copyFile(tmpPath, destPath);
-                await fsp.unlink(tmpPath).catch(() => {});
-            }
-            console.log(`✅ Template copié: ${templatePath} -> ${destPath}`);
-            
-            // Verify the copied file exists and has content
-            const copiedStats = await fsp.stat(destPath);
-            if (copiedStats.size === 0) {
-                throw new Error('Le fichier copié est vide');
-            }
-            console.log(`✅ Fichier copié vérifié: ${copiedStats.size} bytes`);
-            
-            // Verify it's a valid DOCX (ZIP file)
-            try {
-                const testZip = new AdmZip(destPath);
-                const testEntry = testZip.getEntry('word/document.xml');
-                if (!testEntry) {
-                    throw new Error('Fichier copié n\'est pas un DOCX valide');
-                }
-                console.log(`✅ Fichier DOCX valide après copie`);
-            } catch (zipError) {
-                console.error(`❌ Fichier copié n'est pas un DOCX valide:`, zipError.message);
-                throw new Error(`Le fichier copié est corrompu: ${zipError.message}`);
-            }
-            }); // fin withSaveLock
+                await copyAndVerifyTemplate(templatePath, destPath, fsopDir);
+                console.log(`✅ Template copié: ${templatePath} -> ${destPath}`);
+            });
         } catch (copyError) {
             console.error(`❌ Erreur lors de la copie du template:`, copyError.message);
             return res.status(500).json({
@@ -998,30 +998,13 @@ router.post('/save', requireFsopSession, async (req, res) => {
         }
 
         // Prepare replacements
-        const replacements = {
-            '{{LT}}': launchNumber,
-            '{{SN}}': serialNumber,
-            ...(formData.placeholders || {})
-        };
+        const replacements = Object.assign(
+            { '{{LT}}': launchNumber, '{{SN}}': serialNumber },
+            formData.placeholders
+        );
 
         // Sanitize table data: remove ** markers from values before injecting into Word
-        const sanitizedTables = {};
-        if (formData.tables) {
-            for (const [tableId, rows] of Object.entries(formData.tables)) {
-                sanitizedTables[tableId] = {};
-                for (const [rowId, cells] of Object.entries(rows)) {
-                    sanitizedTables[tableId][rowId] = {};
-                    for (const [colIdx, value] of Object.entries(cells)) {
-                        // Remove ** markers if present (defense in depth)
-                        let cleanedValue = String(value || '');
-                        cleanedValue = cleanedValue.replace(/^\*\*|\*\*$/g, '');
-                        // Normalize decimal separator (comma to point)
-                        cleanedValue = cleanedValue.replace(',', '.');
-                        sanitizedTables[tableId][rowId][colIdx] = cleanedValue;
-                    }
-                }
-            }
-        }
+        const sanitizedTables = sanitizeFormTables(formData.tables);
 
         // Inject data into document
         try {
@@ -1048,8 +1031,8 @@ router.post('/save', requireFsopSession, async (req, res) => {
             try {
                 await fsp.unlink(destPath).catch(() => {});
                 console.log(`🧹 Fichier corrompu supprimé: ${destPath}`);
-            } catch (_) {
-                // Ignore cleanup errors
+            } catch (cleanupError) {
+                console.warn('Cleanup after injection failed:', cleanupError.message);
             }
             
             return res.status(500).json({
@@ -1091,10 +1074,10 @@ router.post('/save', requireFsopSession, async (req, res) => {
                     });
                     console.log(`✅ ${excelUpdateResult.message}`);
                 } else {
-                    console.warn(`⚠️ Fichier Excel mesure non trouvé pour le lancement ${launchNumber}${reference ? ` ou la référence ${reference}` : ''}`);
+                    console.warn(`⚠️ ${missingExcelMessage(launchNumber, reference)}`);
                     excelUpdateResult = {
                         success: false,
-                        message: `Fichier Excel mesure non trouvé pour le lancement ${launchNumber}${reference ? ` ou la référence ${reference}` : ''}`,
+                        message: missingExcelMessage(launchNumber, reference),
                         updated: 0,
                         missing: []
                     };
