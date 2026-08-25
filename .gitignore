@@ -159,3 +159,13 @@ backend/scripts/maintenance.js
 
 # Crontab
 crontab-*
+
+# Terraform (state / secrets locaux — le dossier terraform/*.tf est versionné)
+terraform/terraform.tfvars
+terraform/*.auto.tfvars
+terraform/backend.local.hcl
+terraform/state/
+terraform/.terraform/
+*.tfstate
+*.tfstate.*
+ansible/inventories/generated/fsop.yml

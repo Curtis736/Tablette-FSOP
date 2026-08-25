@@ -60,6 +60,10 @@ Le backend FSOP continue d’écrire `TempsID` (identité technique SQL) ; **ne 
 
 ## Infrastructure
 
+### Prérequis Ansible (runner SSH)
+
+Voir [`ansible/README.md`](../../ansible/README.md) : playbook pour installer OpenSSH sur `SVC_SILOG`, déployer la clé FSOP, vérifier `SILOG.exe`, créer la tâche filet. Le **déclenchement au clic** reste `SILOG_REMOTE_MODE=ssh` côté backend.
+
 ### Poste d'exécution
 
 - **Poste** : `SVC_SILOG` (et NON `SERVEURERP`)

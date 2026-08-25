@@ -1,0 +1,24 @@
+---
+# Vérification seule (pas de changement) — à lancer en SSH après bootstrap
+
+- name: Vérifier runner SILOG
+  hosts: silog_runners
+  gather_facts: false
+  tasks:
+    - name: OpenSSH Server en cours
+      ansible.windows.win_service_info:
+        name: sshd
+      register: sshd_info
+      failed_when: sshd_info.services | length == 0 or sshd_info.services[0].state != 'started'
+
+    - name: SILOG.exe présent
+      ansible.windows.win_stat:
+        path: "{{ silog_exe_path }}"
+      register: silog_exe
+      failed_when: not silog_exe.stat.exists
+
+    - name: Afficher résumé
+      ansible.builtin.debug:
+        msg: >-
+          OK runner {{ inventory_hostname }} —
+          exe={{ silog_exe_path }} db={{ silog_db }} task={{ silog_task_code }}

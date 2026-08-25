@@ -1,0 +1,40 @@
+# Copier vers terraform.tfvars (non versionné) et adapter test / ci / silog.
+#   cp terraform.tfvars.example terraform.tfvars
+
+ssh_user_default             = "maintenance"
+ssh_private_key_path_default = "/home/maintenance/.ssh/id_ed25519"
+
+hosts = {
+  prod = {
+    hostname = "serveurproduction"
+    address  = "192.168.1.26"
+    os       = "linux"
+    role     = "prod"
+    enabled  = true
+  }
+
+  # Renseigner l’IP ou le DNS réel, puis enabled = true
+  test = {
+    hostname = "serveur-fsop-test"
+    address  = "CHANGE_ME_TEST_IP"
+    os       = "linux"
+    role     = "test"
+    enabled  = false
+  }
+
+  ci = {
+    hostname = "serveur-ci"
+    address  = "CHANGE_ME_CI_IP"
+    os       = "linux"
+    role     = "ci"
+    enabled  = false
+  }
+
+  silog = {
+    hostname = "svc_silog"
+    address  = "CHANGE_ME_SILOG_IP_OR_DNS"
+    os       = "windows"
+    role     = "silog"
+    enabled  = false
+  }
+}

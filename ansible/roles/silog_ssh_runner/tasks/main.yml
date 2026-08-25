@@ -1,0 +1,145 @@
+---
+# Rôle: préparer SVC_SILOG pour que le backend FSOP puisse lancer EDI via SSH
+
+- name: Résoudre la clé publique SSH FSOP
+  ansible.builtin.set_fact:
+    _silog_pubkey: >-
+      {{
+        silog_ssh_public_key
+        if (silog_ssh_public_key | length > 0)
+        else (
+          lookup('file', silog_ssh_public_key_file)
+          if (silog_ssh_public_key_file | length > 0)
+          else ''
+        )
+      }}
+
+- name: Exiger une clé publique
+  ansible.builtin.assert:
+    that:
+      - _silog_pubkey | length > 20
+    fail_msg: >-
+      Définir SILOG_SSH_PUBLIC_KEY ou SILOG_SSH_PUBLIC_KEY_FILE
+      (ex. /home/maintenance/.ssh/id_ed25519.pub sur le serveur tablette).
+
+- name: Installer OpenSSH Server (Windows)
+  when: silog_ensure_openssh | bool
+  block:
+    - name: Capability OpenSSH.Server
+      ansible.windows.win_powershell:
+        script: |
+          $ErrorActionPreference = 'Stop'
+          $cap = Get-WindowsCapability -Online | Where-Object Name -like 'OpenSSH.Server*'
+          if (-not $cap) { throw 'OpenSSH.Server capability introuvable' }
+          if ($cap.State -ne 'Installed') {
+            Add-WindowsCapability -Online -Name $cap.Name | Out-Null
+          }
+          Get-WindowsCapability -Online | Where-Object Name -like 'OpenSSH.Server*' |
+            Select-Object -Property Name, State |
+            ConvertTo-Json -Compress
+      register: openssh_cap
+
+    - name: Service sshd automatique + démarré
+      ansible.windows.win_service:
+        name: sshd
+        start_mode: auto
+        state: started
+
+    - name: Pare-feu OpenSSH (port 22)
+      ansible.windows.win_firewall_rule:
+        name: OpenSSH-Server-In-TCP
+        localport: 22
+        action: allow
+        direction: in
+        protocol: tcp
+        state: present
+        enabled: true
+
+- name: Déployer authorized_keys pour {{ silog_ssh_windows_user }}
+  ansible.windows.win_powershell:
+    script: |
+      $ErrorActionPreference = 'Stop'
+      $user = '{{ silog_ssh_windows_user }}'
+      $pubkey = @'
+      {{ _silog_pubkey | trim }}
+      '@
+      $pubkey = $pubkey.Trim()
+      if ([string]::IsNullOrWhiteSpace($pubkey)) { throw 'clé publique vide' }
+
+      $profile = (Get-LocalUser -Name $user).Sid
+      # Profil standard: C:\Users\<user>\.ssh\authorized_keys
+      $userProfile = Join-Path $env:SystemDrive ("Users\" + $user)
+      if (-not (Test-Path $userProfile)) {
+        throw "Profil utilisateur introuvable: $userProfile"
+      }
+      $sshDir = Join-Path $userProfile '.ssh'
+      New-Item -ItemType Directory -Force -Path $sshDir | Out-Null
+      $auth = Join-Path $sshDir 'authorized_keys'
+      if (-not (Test-Path $auth)) {
+        New-Item -ItemType File -Path $auth | Out-Null
+      }
+      $existing = Get-Content -Path $auth -ErrorAction SilentlyContinue
+      if ($existing -notcontains $pubkey) {
+        Add-Content -Path $auth -Value $pubkey
+      }
+      # ACL recommandées OpenSSH Windows
+      icacls $auth /inheritance:r | Out-Null
+      icacls $auth /grant:r "${user}:R" | Out-Null
+      icacls $auth /grant:r "SYSTEM:F" | Out-Null
+      icacls $auth /remove "BUILTIN\Administrators" 2>$null | Out-Null
+      [pscustomobject]@{ path = $auth; lines = (Get-Content $auth).Count } | ConvertTo-Json -Compress
+  register: auth_keys_result
+
+- name: Vérifier SILOG.exe
+  ansible.windows.win_stat:
+    path: "{{ silog_exe_path }}"
+  register: silog_stat
+
+- name: Échouer si SILOG.exe absent
+  ansible.builtin.assert:
+    that:
+      - silog_stat.stat.exists
+    fail_msg: >-
+      SILOG.exe introuvable: {{ silog_exe_path }}.
+      Ajuster silog_exe_path / silog_workdir (local C:\SILOG8 ou UNC \\SERVEURERP\SILOG8).
+
+- name: Créer tâche planifiée filet {{ silog_scheduled_task_name }}
+  when: silog_ensure_scheduled_task | bool
+  ansible.windows.win_powershell:
+    script: |
+      $ErrorActionPreference = 'Stop'
+      $name = '{{ silog_scheduled_task_name }}'
+      $exe = '{{ silog_exe_path }}'
+      $wd = '{{ silog_workdir }}'
+      $db = '{{ silog_db }}'
+      $user = '{{ silog_user }}'
+      $lang = '{{ silog_lang }}'
+      $entry = '{{ silog_entrypoint }}'
+      $task = '{{ silog_task_code }}'
+      $mode = '{{ silog_mode }}'
+      $pass = '{{ silog_password }}'
+      $hours = [int]'{{ silog_scheduled_task_hours }}'
+
+      $passArg = if ([string]::IsNullOrEmpty($pass)) { '-p' } else { "-p$pass" }
+      $argList = "-b$db -u$user $passArg -d$lang -e$entry -optcodetache=$task -m$mode"
+
+      $action = New-ScheduledTaskAction -Execute $exe -Argument $argList -WorkingDirectory $wd
+      $trigger = New-ScheduledTaskTrigger -Once -At (Get-Date).Date.AddHours(8) `
+        -RepetitionInterval (New-TimeSpan -Hours $hours) `
+        -RepetitionDuration ([TimeSpan]::MaxValue)
+      $principal = New-ScheduledTaskPrincipal -UserId 'SYSTEM' -LogonType ServiceAccount -RunLevel Highest
+      $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable
+
+      Register-ScheduledTask -TaskName $name -Action $action -Trigger $trigger `
+        -Principal $principal -Settings $settings -Force | Out-Null
+
+      Get-ScheduledTask -TaskName $name | Select-Object TaskName, State | ConvertTo-Json -Compress
+
+- name: Résumé prérequis
+  ansible.builtin.debug:
+    msg:
+      - "OpenSSH: {{ 'assuré' if silog_ensure_openssh else 'skip' }}"
+      - "authorized_keys: {{ auth_keys_result.output[0] | default(auth_keys_result) }}"
+      - "SILOG.exe OK: {{ silog_exe_path }}"
+      - "Tâche filet: {{ silog_scheduled_task_name if silog_ensure_scheduled_task else 'skip' }}"
+      - "Ensuite côté FSOP: SILOG_REMOTE_MODE=ssh + SILOG_SSH_HOST={{ ansible_host }}"
