@@ -1,9 +1,8 @@
 /**
  * Composant pour afficher et remplir un formulaire FSOP de manière interactive
  */
-import { loadStructure } from './fsopForm/loadStructure.js?v=20260512.1';
-import { collectLotsForVoieCell, normalizeFsopLotKey, parseSavedVoies } from './fsopForm/lotMatching.js';
-
+import { collectLotsForVoieCell, collectLotsForLotCell, normalizeFsopLotKey, parseSavedVoies } from './fsopForm/lotMatching.js?v=20260826.1';
+import { loadStructure } from './fsopForm/loadStructure.js?v=20260826.1';
 const CHECKBOX_LINE_RE = /^([☐☑✓□]|\[[ x]\])[\t ]+(\S[^\n]{0,300})$/i;
 const UNIT_SPEC_RE = /\d{1,8}[\t ](?:h|min|°C|°F)/i;
 
@@ -998,9 +997,7 @@ class FsopForm {
                             // Multi-voies: render 3 labeled fields with dropdowns if ambiguous
                             const compText = normalizeCellText(body?.[rowIdx]?.[composantColIdx]?.text || '');
                             const hints = extractParenHints(compText);
-                            const uniqueLotsFallback = Array.isArray(this.formData?.fsopLots?.uniqueLots)
-                                ? this.formData.fsopLots.uniqueLots.map(x => String(x || '').trim()).filter(Boolean)
-                                : [];
+                            const uniqueLotsFallback = [];
                             
                             // ⚡ PRIORITÉ: Pour multi-voie, utiliser la référence entre parenthèses pour chercher les lots
                             // Ex: "Queusot (30632-10 14)" -> chercher codeRubrique = "30632-10 14" ou "306321014" ou variations
@@ -1063,7 +1060,56 @@ class FsopForm {
                             return multiVoieHtml;
                         }
                         
-                        // Single lot cell (normal case)
+                        // Single lot cell (normal case) — même menu déroulant que les opérateurs
+                        // Lots liés à la référence composant uniquement.
+                        // Menu déroulant seulement si ≥1 lot ERP matché pour cet article
+                        // (plusieurs références → l'opérateur choisit ; sinon pré-sélection / saisie).
+                        const compTextSingle = normalizeCellText(body?.[rowIdx]?.[composantColIdx]?.text || '');
+                        const hintsSingle = extractParenHints(compTextSingle);
+                        const linesSingle = Array.isArray(this.formData?.fsopLots?.lines) ? this.formData.fsopLots.lines : [];
+                        const itemsSingle = Array.isArray(this.formData?.fsopLots?.items) ? this.formData.fsopLots.items : [];
+                        const lotsForArticle = collectLotsForLotCell(
+                            linesSingle,
+                            itemsSingle,
+                            [],
+                            hintsSingle,
+                            compTextSingle,
+                            currentCodeOperation
+                        );
+
+                        if (lotsForArticle.length >= 1) {
+                            const autoLot = inferLotForRow(rowIdx);
+                            const selectedLot = String(
+                                savedLot || (lotsForArticle.length === 1 ? lotsForArticle[0] : '') || autoLot || ''
+                            ).trim();
+                            const isOtherValue = Boolean(selectedLot && !lotsForArticle.includes(selectedLot));
+                            let optionsHtml = '<option value="">-- Choisir --</option>';
+                            lotsForArticle.forEach((lot) => {
+                                const selected = !isOtherValue && selectedLot === lot ? 'selected' : '';
+                                optionsHtml += `<option value="${this.escapeHtml(lot)}" ${selected}>${this.escapeHtml(lot)}</option>`;
+                            });
+                            optionsHtml += `<option value="__OTHER__" ${isOtherValue ? 'selected' : ''}>Autre…</option>`;
+
+                            if (isOtherValue) {
+                                return `
+                                    <div class="fsop-lot-cell">
+                                        <select class="fsop-lot-select" data-row="${rowIdx}" data-col="${colIdx}" style="display: none;">
+                                            ${optionsHtml}
+                                        </select>
+                                        <input type="text" class="fsop-lot-other-input fsop-cell-input fsop-cell-input-lot" data-row="${rowIdx}" data-col="${colIdx}" value="${this.escapeHtml(selectedLot)}" placeholder="Code lot" />
+                                    </div>
+                                `;
+                            }
+                            return `
+                                <div class="fsop-lot-cell">
+                                    <select class="fsop-lot-select fsop-cell-input fsop-cell-input-lot" data-row="${rowIdx}" data-col="${colIdx}">
+                                        ${optionsHtml}
+                                    </select>
+                                    <input type="text" class="fsop-lot-other-input fsop-cell-input fsop-cell-input-lot" data-row="${rowIdx}" data-col="${colIdx}" style="display: none;" placeholder="Code lot" />
+                                </div>
+                            `;
+                        }
+
                         const autoLot = inferLotForRow(rowIdx);
                         const finalLot = savedLot || autoLot || '';
                         const valueAttr = finalLot ? ` value="${this.escapeHtml(String(finalLot))}"` : '';
@@ -1844,6 +1890,67 @@ class FsopForm {
             });
         });
 
+        // Lot select (2+ codes lot pour le même article) — même logique que opérateurs
+        this.container.querySelectorAll('.fsop-lot-select').forEach(select => {
+            select.addEventListener('change', (e) => {
+                const rowIdx = Number.parseInt(e.target.dataset.row, 10);
+                const colIdx = Number.parseInt(e.target.dataset.col, 10);
+                const value = e.target.value;
+                const cell = e.target.closest('.fsop-lot-cell');
+                const otherInput = cell?.querySelector('.fsop-lot-other-input');
+
+                if (value === '__OTHER__') {
+                    e.target.style.display = 'none';
+                    e.target.classList.remove('fsop-cell-input', 'fsop-cell-input-lot');
+                    if (otherInput) {
+                        otherInput.style.display = 'block';
+                        otherInput.focus();
+                    }
+                    return;
+                }
+
+                if (otherInput) {
+                    otherInput.style.display = 'none';
+                    otherInput.value = '';
+                }
+                e.target.style.display = '';
+                e.target.classList.add('fsop-cell-input', 'fsop-cell-input-lot');
+
+                const table = e.target.closest('table[data-table-idx]');
+                if (table) {
+                    const tableIdx = table.dataset.tableIdx;
+                    if (!this.formData.wordlikeTables) this.formData.wordlikeTables = {};
+                    if (!this.formData.wordlikeTables[tableIdx]) this.formData.wordlikeTables[tableIdx] = {};
+                    if (!this.formData.wordlikeTables[tableIdx][rowIdx]) this.formData.wordlikeTables[tableIdx][rowIdx] = {};
+                    this.formData.wordlikeTables[tableIdx][rowIdx][colIdx] = value;
+                    if (!this.formData.tables) this.formData.tables = {};
+                    if (!this.formData.tables[tableIdx]) this.formData.tables[tableIdx] = {};
+                    if (!this.formData.tables[tableIdx][rowIdx]) this.formData.tables[tableIdx][rowIdx] = {};
+                    this.formData.tables[tableIdx][rowIdx][colIdx] = value;
+                }
+            });
+        });
+
+        this.container.querySelectorAll('.fsop-lot-other-input').forEach(input => {
+            input.addEventListener('input', (e) => {
+                const rowIdx = Number.parseInt(e.target.dataset.row, 10);
+                const colIdx = Number.parseInt(e.target.dataset.col, 10);
+                const value = e.target.value.trim();
+                const table = e.target.closest('table[data-table-idx]');
+                if (table) {
+                    const tableIdx = table.dataset.tableIdx;
+                    if (!this.formData.wordlikeTables) this.formData.wordlikeTables = {};
+                    if (!this.formData.wordlikeTables[tableIdx]) this.formData.wordlikeTables[tableIdx] = {};
+                    if (!this.formData.wordlikeTables[tableIdx][rowIdx]) this.formData.wordlikeTables[tableIdx][rowIdx] = {};
+                    this.formData.wordlikeTables[tableIdx][rowIdx][colIdx] = value;
+                    if (!this.formData.tables) this.formData.tables = {};
+                    if (!this.formData.tables[tableIdx]) this.formData.tables[tableIdx] = {};
+                    if (!this.formData.tables[tableIdx][rowIdx]) this.formData.tables[tableIdx][rowIdx] = {};
+                    this.formData.tables[tableIdx][rowIdx][colIdx] = value;
+                }
+            });
+        });
+
         // Add row buttons
         this.container.querySelectorAll('.fsop-add-row-btn').forEach(btn => {
             btn.addEventListener('click', (e) => {
@@ -2124,8 +2231,10 @@ class FsopForm {
                     cellInputs.forEach((cellEl) => {
                         const colIdx = Number.parseInt(cellEl.dataset.col || '0', 10);
                         if (!Number.isFinite(colIdx)) return;
+                        // Skip hidden "Autre…" companions and placeholder select values
+                        if (cellEl.style.display === 'none') return;
                         let value = String(cellEl.value || '').trim();
-                        if (value) {
+                        if (value && value !== '__OTHER__') {
                             // Normalize <input type="date"> (YYYY-MM-DD) -> DD/MM/YYYY for Word readability
                             if (cellEl.type === 'date' && /^\d{4}-\d{2}-\d{2}$/.test(value)) {
                                 const [yyyy, mm, dd] = value.split('-');
@@ -2149,7 +2258,29 @@ class FsopForm {
                     operatorOtherInputs.forEach((inputEl) => {
                         const colIdx = Number.parseInt(inputEl.dataset.col || '0', 10);
                         if (!Number.isFinite(colIdx)) return;
+                        if (inputEl.style.display === 'none') return;
                         const value = String(inputEl.value || '').trim().toUpperCase();
+                        if (value) {
+                            wordlikeTables[tableIdx][rowIdx][colIdx] = value;
+                        }
+                    });
+                    // Lot select (2+ lots même article) + saisie libre « Autre… »
+                    const lotSelects = Array.from(tr.querySelectorAll('.fsop-lot-select[data-col]'));
+                    const lotOtherInputs = Array.from(tr.querySelectorAll('.fsop-lot-other-input[data-col]'));
+                    lotSelects.forEach((selectEl) => {
+                        const colIdx = Number.parseInt(selectEl.dataset.col || '0', 10);
+                        if (!Number.isFinite(colIdx)) return;
+                        if (selectEl.style.display === 'none') return;
+                        const value = String(selectEl.value || '').trim();
+                        if (value && value !== '__OTHER__') {
+                            wordlikeTables[tableIdx][rowIdx][colIdx] = value;
+                        }
+                    });
+                    lotOtherInputs.forEach((inputEl) => {
+                        const colIdx = Number.parseInt(inputEl.dataset.col || '0', 10);
+                        if (!Number.isFinite(colIdx)) return;
+                        if (inputEl.style.display === 'none') return;
+                        const value = String(inputEl.value || '').trim();
                         if (value) {
                             wordlikeTables[tableIdx][rowIdx][colIdx] = value;
                         }

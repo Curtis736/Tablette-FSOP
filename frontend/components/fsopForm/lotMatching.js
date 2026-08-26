@@ -20,16 +20,19 @@ export function matchLotByParenRef(refRaw, codeRubrique) {
 export function sourceMatchesComponent(source, hints, compText, currentCodeOperation) {
     const op = String(source?.codeOperation || '').trim().toUpperCase();
     const rub = String(source?.codeRubrique || '').trim();
-    if (currentCodeOperation && op !== currentCodeOperation.toUpperCase()) return false;
+    if (currentCodeOperation && op && op !== currentCodeOperation.toUpperCase()) return false;
     if (hints.length > 0) {
         for (const h of hints) {
             if (matchLotByParenRef(h.raw, rub)) return true;
         }
-        return false;
+        // Hints present but no paren match: still try fuzzy on full composant text
     }
     const compNk = normalizeFsopLotKey(compText);
     const rubNk = normalizeFsopLotKey(rub);
-    return Boolean(compNk && rubNk && (rubNk.includes(compNk) || compNk.includes(rubNk)));
+    if (compNk && rubNk && (rubNk.includes(compNk) || compNk.includes(rubNk))) return true;
+    // Code rubrique visible tel quel dans le libellé composant
+    if (rub && String(compText || '').toUpperCase().includes(rub.toUpperCase())) return true;
+    return false;
 }
 
 function compareLotStrings(a, b) {
@@ -48,7 +51,12 @@ function sortedLots(allLots) {
     return [...allLots].filter(Boolean).sort(compareLotStrings);
 }
 
-export function collectLotsForVoieCell(lines, items, uniqueLotsFallback, hints, compText, currentCodeOperation) {
+/**
+ * Lots liés à l'article / référence composant uniquement (pas tous les lots du LT).
+ * uniqueLotsFallback est ignoré : on ne propose un menu que si le matching article
+ * trouve 1+ lots ; sinon la cellule reste en saisie libre.
+ */
+export function collectLotsForVoieCell(lines, items, _uniqueLotsFallback, hints, compText, currentCodeOperation) {
     const allLots = new Set();
     addMatchingLots(lines, hints, compText, currentCodeOperation, allLots);
     let lotsArray = sortedLots(allLots);
@@ -56,10 +64,20 @@ export function collectLotsForVoieCell(lines, items, uniqueLotsFallback, hints, 
         addMatchingLots(items, hints, compText, '', allLots);
         lotsArray = sortedLots(allLots);
     }
-    if (lotsArray.length === 0) {
-        return uniqueLotsFallback;
-    }
     return lotsArray;
+}
+
+/**
+ * Lots pour une cellule Lot simple (tableau Général).
+ * Strictement associés à la référence composant ; si plusieurs lots pour cet article → choix.
+ * Pas de fallback sur tous les lots du LT.
+ */
+export function collectLotsForLotCell(lines, items, _uniqueLotsFallback, hints, compText, currentCodeOperation) {
+    let lots = collectLotsForVoieCell(lines, items, [], hints, compText, currentCodeOperation);
+    if (lots.length === 0 && currentCodeOperation) {
+        lots = collectLotsForVoieCell(lines, items, [], hints, compText, '');
+    }
+    return lots;
 }
 
 function valueAfterVoieLabel(line, label) {

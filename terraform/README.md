@@ -1,5 +1,5 @@
-# Terraform FSOP — phase 1 (inventaire)
-
+# Terraform FSOP — phase 1 (inventaire)
+
 Source de vérité des hôtes FSOP (**prod / test / CI / SILOG**).  
 Ne crée **pas** de VMs (pas d’API hyperviseur en phase 1).  
 Génère l’inventaire Ansible : [`../ansible/inventories/generated/fsop.yml`](../ansible/inventories/generated/fsop.yml).
@@ -72,9 +72,9 @@ Pour le bootstrap WinRM, garder `SILOG_ANSIBLE_PASSWORD` (et éventuellement `SI
 | Clé | Rôle | OS | Défaut exemple |
 |-----|------|-----|----------------|
 | `prod` | FSOP production | linux | `192.168.1.26` / `serveurproduction` |
-| `test` | FSOP test | linux | placeholder, `enabled = false` |
-| `ci` | Jenkins / Sonar | linux | placeholder, `enabled = false` |
-| `silog` | Runner EDI | windows | placeholder, `enabled = false` |
+| `test` | FSOP test (compose `:test`) | linux | même hôte `192.168.1.26` |
+| `ci` | Jenkins / Sonar (`:8085`) | linux | même hôte `192.168.1.26` |
+| `silog` | Runner EDI | windows | DNS `SVC_SILOG` (ou IP réelle) |
 
 Un hôte avec `enabled = false` n’apparaît pas dans l’inventaire généré.
 

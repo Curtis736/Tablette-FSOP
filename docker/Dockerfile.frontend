@@ -11,6 +11,9 @@ RUN addgroup -g 1001 -S nginx-app && \
 # Copier les fichiers du frontend avec optimisation
 COPY --chown=nginx-app:nginx-app frontend/ /usr/share/nginx/html/
 
+# Documentation technique (statique) servie sous /docs/
+COPY --chown=nginx-app:nginx-app docs/web/ /usr/share/nginx/html/docs/
+
 # Copier la configuration nginx optimisée
 COPY --chown=nginx-app:nginx-app docker/nginx.conf /etc/nginx/nginx.conf
 

@@ -139,6 +139,16 @@
                     <div class="lancement-info">
                         <h3 id="selectedLancement">Lancement sélectionné</h3>
                         <p id="lancementDetails"></p>
+                        <div id="tempsRestantBlock" class="temps-restant-block" style="display:none;" aria-live="polite">
+                            <div class="temps-restant-row">
+                                <span class="temps-restant-label">Temps restant étape</span>
+                                <span class="temps-restant-value" id="tempsRestantEtapeDisplay">—</span>
+                            </div>
+                            <div class="temps-restant-row">
+                                <span class="temps-restant-label">Total LT</span>
+                                <span class="temps-restant-value" id="tempsRestantTotalDisplay">—</span>
+                            </div>
+                        </div>
                     </div>
                     <div class="input-group" id="operationStepGroup" style="display:none; margin-top:10px;">
                         <i class="fas fa-list-ol" aria-hidden="true"></i>
@@ -531,6 +541,6 @@
         </div>
     </div>
 
-    <script type="module" src="index.js?v=20260608.1"></script>
+    <script type="module" src="index.js?v=20260826.1"></script>
 </body>
 </html>

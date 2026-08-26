@@ -1,7 +1,7 @@
 // Interface simplifiée pour les opérateurs - v20260309-no-cache-issues
 import TimeUtils from '../utils/TimeUtils.js';
 import ScannerManager from '../utils/ScannerManager.js?v=20260706.1';
-import FsopForm from './FsopForm.js?v=20260512.1';
+import FsopForm from './FsopForm.js?v=20260826.1';
 import Logger from '../utils/Logger.js?v=20260512.1';
 
 class OperateurInterface {
@@ -22,6 +22,7 @@ class OperateurInterface {
         this.startRequestInFlight = false;
         this.shiftTargetSeconds = 8 * 60 * 60; // Objectif opérateur: 8h
         this.dailyWorkedSecondsFromHistory = 0;
+        this.tempsRestantData = null;
 
         // Debouncing pour éviter les clics répétés
         this.lastActionTime = 0;
@@ -256,6 +257,9 @@ class OperateurInterface {
         this.lancementDetails = document.getElementById('lancementDetails');
         this.operationStepGroup = document.getElementById('operationStepGroup');
         this.operationStepSelect = document.getElementById('operationStepSelect');
+        this.tempsRestantBlock = document.getElementById('tempsRestantBlock');
+        this.tempsRestantEtapeDisplay = document.getElementById('tempsRestantEtapeDisplay');
+        this.tempsRestantTotalDisplay = document.getElementById('tempsRestantTotalDisplay');
         this.startBtn = document.getElementById('startBtn');
         this.pauseBtn = document.getElementById('pauseBtn');
         this.stopBtn = document.getElementById('stopBtn');
@@ -394,6 +398,9 @@ class OperateurInterface {
         if (this.startBtn) this.startBtn.addEventListener('click', () => this.handleStart());
         if (this.pauseBtn) this.pauseBtn.addEventListener('click', () => this.handlePause());
         if (this.stopBtn) this.stopBtn.addEventListener('click', () => this.handleStop());
+        if (this.operationStepSelect) {
+            this.operationStepSelect.addEventListener('change', () => this.updateTempsRestantDisplay());
+        }
         
         // Bouton actualiser historique
         if (this.refreshHistoryBtn) this.refreshHistoryBtn.addEventListener('click', () => this.loadOperatorHistory());
@@ -654,11 +661,68 @@ class OperateurInterface {
         if (this.operationStepSelect) {
             this.operationStepSelect.innerHTML = '<option value="">Choisir une étape (Phase)</option>';
         }
+        this.tempsRestantData = null;
+        this.updateTempsRestantDisplay();
+    }
+
+    formatTempsRestantLabel(restantH) {
+        const h = Number(restantH);
+        if (!Number.isFinite(h)) return '—';
+        if (h < 0) {
+            const overrunSeconds = Math.round(Math.abs(h) * 3600);
+            return `dépassé (+${TimeUtils.formatDuration(overrunSeconds)})`;
+        }
+        return TimeUtils.formatDuration(Math.round(h * 3600));
+    }
+
+    updateTempsRestantDisplay() {
+        const data = this.tempsRestantData;
+        if (!this.tempsRestantBlock) return;
+
+        const totalTheo = Number(data?.total?.theoH);
+        const hasTheo = Number.isFinite(totalTheo) && totalTheo > 0;
+        if (!data || !hasTheo) {
+            this.tempsRestantBlock.style.display = 'none';
+            if (this.tempsRestantEtapeDisplay) this.tempsRestantEtapeDisplay.textContent = '—';
+            if (this.tempsRestantTotalDisplay) this.tempsRestantTotalDisplay.textContent = '—';
+            return;
+        }
+
+        this.tempsRestantBlock.style.display = 'block';
+
+        if (this.tempsRestantTotalDisplay) {
+            this.tempsRestantTotalDisplay.textContent = this.formatTempsRestantLabel(data.total?.restantH);
+            this.tempsRestantTotalDisplay.classList.toggle('temps-restant-overrun', Number(data.total?.restantH) < 0);
+        }
+
+        const selectedStep = this.operationStepSelect
+            ? String(this.operationStepSelect.value || '').trim()
+            : '';
+        let etape = selectedStep && data.byStepId ? data.byStepId[selectedStep] : null;
+
+        // Une seule étape visible / auto : prendre la première étape avec theo > 0
+        if (!etape && Array.isArray(data.etapes)) {
+            etape = data.etapes.find(s => Number(s?.theoH) > 0) || data.etapes[0] || null;
+        }
+
+        if (this.tempsRestantEtapeDisplay) {
+            if (etape && Number(etape.theoH) > 0) {
+                this.tempsRestantEtapeDisplay.textContent = this.formatTempsRestantLabel(etape.restantH);
+                this.tempsRestantEtapeDisplay.classList.toggle('temps-restant-overrun', Number(etape.restantH) < 0);
+            } else {
+                this.tempsRestantEtapeDisplay.textContent = 'n/a';
+                this.tempsRestantEtapeDisplay.classList.remove('temps-restant-overrun');
+            }
+        }
     }
 
     renderOperationSteps(payload) {
         const steps = Array.isArray(payload?.steps) ? payload.steps : [];
-        if (!this.operationStepGroup || !this.operationStepSelect) return;
+        this.tempsRestantData = payload?.tempsRestant || null;
+        if (!this.operationStepGroup || !this.operationStepSelect) {
+            this.updateTempsRestantDisplay();
+            return;
+        }
         if (!steps.length) {
             this.hideOperationSteps();
             return;
@@ -676,7 +740,13 @@ class OperateurInterface {
 
         const items = Array.from(byId.values());
         if (items.length <= 1) {
-            this.hideOperationSteps();
+            if (this.operationStepGroup) this.operationStepGroup.style.display = 'none';
+            if (this.operationStepSelect) {
+                this.operationStepSelect.innerHTML = items.length === 1
+                    ? `<option value="${this.escapeHtml(items[0].id)}" selected>${this.escapeHtml(items[0].label)}</option>`
+                    : '<option value="">Choisir une étape (Phase)</option>';
+            }
+            this.updateTempsRestantDisplay();
             return;
         }
 
@@ -693,6 +763,7 @@ class OperateurInterface {
             items.map(it => `<option value="${this.escapeHtml(it.id)}">${this.escapeHtml(it.label)}</option>`).join('');
 
         this.operationStepGroup.style.display = 'block';
+        this.updateTempsRestantDisplay();
     }
 
     async loadOperationStepsForLaunch(lancementCode) {
@@ -1880,6 +1951,7 @@ class OperateurInterface {
                     if (stepId && this.operationStepSelect) {
                         this.operationStepSelect.value = stepId;
                     }
+                    this.updateTempsRestantDisplay();
                 } catch (e) {
                     // Non bloquant
                 }

@@ -12,6 +12,7 @@ const SessionService = require('../services/SessionService');
 const AuditService = require('../services/AuditService');
 const { generateRequestId } = require('../middleware/audit');
 const OperationStopService = require('../services/OperationStopService');
+const LancementTempsRestantService = require('../services/LancementTempsRestantService');
 
 // ⚡ OPTIMISATION : Cache pour les validations de lancement (évite les requêtes répétées)
 const lancementCache = new Map();
@@ -768,6 +769,15 @@ router.get('/steps/:lancementCode', async (req, res) => {
         });
         const uniqueOps = [...new Set((steps || []).map(s => String(s?.CodeOperation || '').trim()).filter(Boolean))];
         const uniqueSteps = [...new Set((stepsWithLabel || []).map(s => String(s?.StepId || '').trim()).filter(Boolean))];
+
+        let tempsRestant = null;
+        try {
+            tempsRestant = await LancementTempsRestantService.getTempsRestant(lancementCode);
+        } catch (tempsErr) {
+            console.warn(`⚠️ Temps restant indisponible pour ${lancementCode}:`, tempsErr?.message || tempsErr);
+            tempsRestant = null;
+        }
+
         return res.json({
             success: true,
             lancementCode,
@@ -776,7 +786,8 @@ router.get('/steps/:lancementCode', async (req, res) => {
             uniqueSteps,
             stepCount: uniqueSteps.length,
             operationCount: uniqueOps.length,
-            count: stepsWithLabel.length
+            count: stepsWithLabel.length,
+            tempsRestant
         });
     } catch (error) {
         console.error('❌ Erreur récupération étapes LCTC:', error);

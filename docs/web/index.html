@@ -1,0 +1,1412 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>SEDI Tablette — guide utilisateur</title>
+  <link rel="stylesheet" href="css/docs.css">
+</head>
+<body>
+  <button type="button" class="menu-toggle" id="menuToggle">Menu</button>
+
+  <div class="layout">
+    <aside class="sidebar">
+      <div class="sidebar-brand">
+        <h1>SEDI Tablette</h1>
+        <p>Guide atelier &amp; bureau</p>
+      </div>
+      <nav>
+        <div class="nav-label">Comprendre</div>
+        <a href="#quoi">À quoi ça sert</a>
+        <a href="#qui">Qui fait quoi</a>
+        <a href="#liens">Adresses</a>
+        <a href="#vocabulaire">Mots à connaître</a>
+
+        <div class="nav-label">Utilisation</div>
+        <a href="#premiere-fois">Ouvrir le site</a>
+        <a href="#operateur">Pointer son temps</a>
+        <a href="#fsop">Remplir un FSOP</a>
+        <a href="#admin">Écran admin</a>
+        <a href="#silog">Envoi vers SILOG</a>
+
+        <div class="nav-label">Autour</div>
+        <a href="#prod-test">Prod ou test ?</a>
+        <a href="#jenkins">Jenkins &amp; Sonar</a>
+        <a href="#pannes">Problèmes fréquents</a>
+      </nav>
+    </aside>
+
+    <main class="main">
+
+      <p class="doc-switch">
+        Vous êtes plutôt maintenance ou développeur et vous cherchez l’architecture,
+        les API ou le déploiement ?
+        → <a href="dev.html">doc technique</a>
+      </p>
+
+      <article id="quoi">
+        <h2>À quoi sert SEDI Tablette ?</h2>
+        <p>
+          SEDI Tablette est le site web utilisé en atelier pour enregistrer le temps passé
+          sur un lancement de production. Ce n’est pas une application à installer sur la tablette :
+          on ouvre simplement une page dans Chrome ou Edge, comme on ouvre n’importe quel site.
+        </p>
+        <p>
+          Chaque lancement est identifié par un code qui commence par <strong>LT</strong>
+          (par exemple <strong>LT2600401</strong>). Dans le champ de saisie, les lettres LT sont
+          déjà présentes : vous n’avez qu’à taper les chiffres du numéro, puis à valider.
+        </p>
+        <p>Concrètement, ce site permet de :</p>
+        <ul>
+          <li>
+            indiquer quand on <strong>commence</strong> à travailler sur un LT, quand on fait une
+            <strong>pause</strong>, et quand on a vraiment <strong>terminé</strong> ;
+          </li>
+          <li>
+            suivre le temps cumulé sur la journée (compteur avec un repère autour de 8 heures) ;
+          </li>
+          <li>
+            ouvrir et remplir certains <strong>formulaires FSOP</strong>, c’est-à-dire les fiches
+            de traçabilité liées au LT (composants, lots, dates, opérateurs) ;
+          </li>
+          <li>
+            côté bureau, contrôler les temps de tous les opérateurs et les faire remonter vers
+            <strong>SILOG</strong>, l’ERP de production.
+          </li>
+        </ul>
+        <p>
+          L’adresse à utiliser en atelier est <strong>https://fsop.sedi-ati.com</strong>.
+          Si cette adresse ne répond pas, vous pouvez essayer en secours
+          <strong>https://192.168.1.26</strong> : c’est le même serveur, accessible directement
+          par son adresse IP.
+        </p>
+        <p class="note">
+          Le site tourne sur le serveur de production usine. La tablette doit donc être
+          connectée au réseau de l’atelier (Wi‑Fi ou câble) pour fonctionner correctement.
+        </p>
+      </article>
+
+      <article id="qui">
+        <h2>Qui fait quoi ?</h2>
+        <p>
+          Plusieurs rôles interviennent autour de SEDI Tablette. Chacun a un accès et des
+          responsabilités différents, et il est important de ne pas mélanger les identifiants.
+        </p>
+        <table>
+          <tr><th>Qui</th><th>Que fait-il / elle ?</th></tr>
+          <tr>
+            <td><strong>Opérateur</strong></td>
+            <td>
+              Se connecte avec son <strong>numéro de matricule</strong> (ce n’est pas le login
+              Windows du PC). Il pointe le temps sur ses LT, et remplit un FSOP lorsqu’on le
+              lui demande pour la traçabilité.
+            </td>
+          </tr>
+          <tr>
+            <td><strong>Responsable atelier / admin</strong></td>
+            <td>
+              Passe en mode Administrateur avec un compte dédié. Il vérifie le tableau des
+              temps, corrige les oublis ou les erreurs, et lance le bouton
+              <strong>Transfert</strong> pour préparer l’envoi vers SILOG.
+            </td>
+          </tr>
+          <tr>
+            <td><strong>Bureau méthodes / qualité</strong></td>
+            <td>
+              Peut consulter l’écran admin pour contrôler un LT, un opérateur ou une durée
+              avant que les temps ne remontent dans l’ERP.
+            </td>
+          </tr>
+          <tr>
+            <td><strong>IT / maintenance</strong></td>
+            <td>
+              S’occupe du serveur, des mises à jour, des bases SQL et des partages réseau
+              (traçabilité). Elle n’intervient pas dans le pointage quotidien, sauf en cas
+              de panne.
+            </td>
+          </tr>
+        </table>
+        <p class="note">
+          Les identifiants du mode <strong>Administrateur SEDI Tablette</strong> ne sont pas
+          les mêmes que ceux de Windows, de Jenkins ou de Sonar. Si un mot de passe ne passe
+          pas, vérifiez d’abord que vous êtes sur le bon écran et le bon type de compte.
+        </p>
+      </article>
+
+      <article id="liens">
+        <h2>Adresses</h2>
+        <p>
+          Voici les adresses utiles. En atelier, seule la première (production) doit être
+          utilisée pour pointer. Les autres sont réservées au secours, aux tests ou à
+          l’équipe technique.
+        </p>
+        <div class="links-box">
+          <ul>
+            <li><strong>Atelier (production)</strong> — <a href="https://fsop.sedi-ati.com">https://fsop.sedi-ati.com</a></li>
+            <li><strong>Secours (même serveur, par IP)</strong> — https://192.168.1.26</li>
+            <li><strong>Environnement test</strong> — http://192.168.1.26:8088 (données de test, réservé aux développeurs et à la maintenance)</li>
+            <li><strong>Jenkins</strong> — <a href="http://192.168.1.26:8085" target="_blank" rel="noopener">http://192.168.1.26:8085</a></li>
+            <li><strong>SonarQube</strong> — <a href="http://192.168.1.26:9000" target="_blank" rel="noopener">http://192.168.1.26:9000</a></li>
+          </ul>
+        </div>
+        <p>
+          Sur les tablettes Windows de l’atelier, utilisez de préférence
+          <strong>Chrome</strong> ou <strong>Edge</strong>, qui sont les navigateurs validés
+          pour cette application.
+        </p>
+      </article>
+
+      <article id="vocabulaire">
+        <h2>Mots à connaître</h2>
+        <p>
+          Sur l’écran opérateur comme dans l’admin, vous verrez souvent les mêmes mots.
+          Voici ce qu’ils veulent dire concrètement.
+        </p>
+        <table>
+          <tr><th>Mot affiché</th><th>Explication</th></tr>
+          <tr>
+            <td><strong>En cours</strong></td>
+            <td>
+              L’opérateur a cliqué sur Démarrer (ou Reprendre après une pause).
+              Le chronomètre tourne et le temps est compté comme du travail de production.
+            </td>
+          </tr>
+          <tr>
+            <td><strong>En pause</strong></td>
+            <td>
+              L’opérateur a interrompu temporairement le travail (réunion, manque de pièce,
+              pause…). Pendant ce statut, le temps de pause n’est pas compté comme de la
+              production.
+            </td>
+          </tr>
+          <tr>
+            <td><strong>Terminé</strong></td>
+            <td>
+              L’opérateur a cliqué sur Terminer : son travail sur ce LT est fini côté tablette.
+              La ligne apparaît alors côté admin et peut être contrôlée puis envoyée vers SILOG.
+            </td>
+          </tr>
+          <tr>
+            <td><strong>Transmis</strong></td>
+            <td>
+              Le temps a déjà été remonté dans SILOG. La ligne devient grisée dans l’admin
+              et on ne la modifie plus depuis SEDI Tablette.
+            </td>
+          </tr>
+          <tr>
+            <td><strong>LT</strong></td>
+            <td>
+              Code du lancement de production (exemple : LT2600401). Il est lié à une affaire
+              / un OF dans l’ERP et sert de référence commune entre la tablette, le FSOP et SILOG.
+            </td>
+          </tr>
+          <tr>
+            <td><strong>Étape</strong></td>
+            <td>
+              Phase de fabrication du LT dans l’ERP, affichée avec son numéro et son libellé
+              (par exemple <strong>010 — Fabrication</strong> ou <strong>040 — Fabrication</strong>).
+              Si un LT a plusieurs phases, il faut en choisir une avant de démarrer, pour que
+              le temps soit pointé sur la bonne étape.
+            </td>
+          </tr>
+          <tr>
+            <td><strong>FSOP</strong></td>
+            <td>
+              Fiche de traçabilité associée au LT et au numéro de série. Elle contient les
+              composants, les codes lot, les dates, les contrôles et les opérateurs qui ont
+              réalisé les opérations.
+            </td>
+          </tr>
+          <tr>
+            <td><strong>Code lot</strong></td>
+            <td>
+              Numéro de lot provenant de l’ERP, toujours lié à un
+              <strong>article / une référence</strong> précise.
+              S’il n’y a qu’un seul lot pour cet article, il peut être prérempli.
+              S’il y en a plusieurs pour la même référence, l’opérateur doit choisir le bon
+              dans la liste. On ne propose jamais « tous les lots du LT » sans lien avec l’article.
+            </td>
+          </tr>
+          <tr>
+            <td><strong>Opérateur (dans le FSOP)</strong></td>
+            <td>
+              Les initiales ou le nom de la personne qui a réellement fait l’opération.
+              Il faut toujours mettre <strong>ses propres</strong> initiales / son propre nom,
+              et jamais ceux d’un collègue, car la fiche sert de preuve de traçabilité qualité.
+            </td>
+          </tr>
+        </table>
+        <p class="note">
+          Plusieurs opérateurs peuvent travailler en même temps sur le <strong>même LT</strong> :
+          chacun a sa propre ligne de pointage dans l’historique et dans l’admin.
+        </p>
+      </article>
+
+      <article id="premiere-fois">
+        <h2>Ouvrir le site</h2>
+        <p>
+          Sur la tablette atelier, le plus simple est d’utiliser le raccourci déjà présent
+          sur le bureau. Si le raccourci manque ou ne répond pas, vous pouvez aussi ouvrir
+          le navigateur à la main.
+        </p>
+        <ol>
+          <li>
+            Sur le bureau de la tablette, double-cliquez sur le raccourci
+            <strong>SEDI Tablette</strong>.
+          </li>
+          <li>
+            Si besoin, ouvrez Chrome ou Edge et allez sur
+            <strong>https://fsop.sedi-ati.com</strong>.
+          </li>
+          <li>
+            Si un message de sécurité ou de certificat s’affiche, cliquez pour continuer
+            lorsque c’est autorisé, ou appelez l’IT si vous n’êtes pas sûr.
+          </li>
+        </ol>
+        <p class="note">
+          Si le site ne s’ouvre toujours pas, essayez l’adresse de secours
+          <strong>https://192.168.1.26</strong>. Si cela échoue aussi, contactez l’IT en
+          indiquant l’heure et le message éventuel à l’écran.
+        </p>
+      </article>
+
+      <article id="operateur">
+        <h2>Pointer son temps (opérateur)</h2>
+        <p>
+          Cette section décrit le parcours complet d’un opérateur : se connecter, saisir un LT,
+          démarrer le chrono, gérer les pauses, et surtout terminer correctement pour que le
+          temps soit visible côté admin.
+        </p>
+
+        <div class="step-block">
+          <h3>1. Se connecter</h3>
+          <p>
+            Ouvrez SEDI Tablette, puis saisissez votre <strong>numéro de matricule</strong>
+            dans le champ « Code Opérateur ». Ce numéro est celui utilisé pour vous identifier
+            en production : ce n’est pas votre identifiant Windows, ni un code partagé.
+            Ensuite cliquez sur <strong>Se connecter</strong>.
+          </p>
+          <span class="step-ok-label">Quand ça marche</span>
+          <figure class="step-shot">
+            <img src="images/operateur-01-login.png" alt="Écran de connexion opérateur" loading="lazy">
+            <figcaption>
+              Écran de connexion : vous tapez votre matricule puis Se connecter.
+              Le bouton gris du bas (« Mode Administrateur ») est réservé aux responsables.
+            </figcaption>
+          </figure>
+          <div class="step-fail">
+            <span class="step-fail-label">Si ça ne marche pas</span>
+            <p>
+              <strong>Pourquoi :</strong> le matricule est faux, incomplet, ou inconnu dans
+              l’ERP. Un message d’erreur apparaît en général sous le champ. Beaucoup
+              d’erreurs viennent aussi du fait qu’on essaie un login Windows à la place du
+              matricule.
+            </p>
+            <p>
+              <strong>Que faire :</strong> revérifier le numéro chiffre par chiffre. Si le
+              problème continue, prévenir le chef d’équipe pour qu’il contrôle le compte
+              opérateur.
+            </p>
+            <figure class="step-shot step-shot-fail">
+              <img src="images/operateur-01-login-echec.png" alt="Connexion refusée" loading="lazy">
+              <figcaption>Connexion refusée : le code opérateur n’a pas été accepté.</figcaption>
+            </figure>
+          </div>
+          <p class="note">
+            À minuit, le site vous ramène automatiquement à l’écran de login.
+            Le lendemain, il faut simplement se reconnecter avec le même matricule.
+          </p>
+        </div>
+
+        <div class="step-block">
+          <h3>2. Vérifier que c’est bien vous</h3>
+          <p>
+            Une fois connecté, regardez en haut à gauche : votre nom doit apparaître clairement.
+            L’écran opérateur est organisé en plusieurs blocs (Code de Lancement, Compteur
+            Journée, Mon Historique, Contrôles). Prenez quelques secondes pour vérifier que
+            vous êtes bien sur votre session avant de pointer.
+          </p>
+          <p>
+            Si ce n’est pas votre nom, cliquez sur <strong>Déconnexion</strong> en haut à
+            droite, puis reconnectez-vous avec le bon matricule. Ne continuez jamais à pointer
+            sous le nom d’un collègue.
+          </p>
+          <span class="step-ok-label">Quand ça marche</span>
+          <figure class="step-shot">
+            <img src="images/operateur-02-accueil.png" alt="Écran après connexion" loading="lazy">
+            <figcaption>
+              Après connexion : votre nom est visible en haut à gauche, et le champ lancement
+              commence déjà par « LT ».
+            </figcaption>
+          </figure>
+          <div class="step-fail">
+            <span class="step-fail-label">Si ça ne marche pas</span>
+            <p>
+              <strong>Pourquoi :</strong> un autre opérateur est encore connecté sur la tablette,
+              ou la page est restée figée après un plantage / une coupure réseau.
+            </p>
+            <p>
+              <strong>Que faire :</strong> cliquez sur Déconnexion, ou actualisez le navigateur
+              avec
+              <img src="images/navigateur-actualiser.png" alt="Actualiser" class="inline-icon">
+              puis reconnectez-vous proprement.
+            </p>
+          </div>
+        </div>
+
+        <div class="step-block">
+          <h3>3. Saisir le code de lancement (LT)</h3>
+          <p>
+            Dans le champ Code de Lancement, le préfixe <strong>LT</strong> est déjà écrit.
+            Complétez uniquement les chiffres (par exemple <strong>2600401</strong> pour
+            obtenir <strong>LT2600401</strong>), puis validez. Attendez le message vert de
+            succès avant de démarrer : c’est la preuve que le LT a bien été trouvé dans l’ERP.
+          </p>
+          <span class="step-ok-label">Quand ça marche</span>
+          <figure class="step-shot">
+            <img src="images/operateur-03-lancement-valide.png" alt="Lancement trouvé" loading="lazy">
+            <figcaption>
+              Message vert « Succès » : le lancement est trouvé et validé. Vous pouvez passer
+              à la section Contrôles.
+            </figcaption>
+          </figure>
+          <div class="step-fail">
+            <span class="step-fail-label">Si ça ne marche pas</span>
+            <p>
+              <strong>Pourquoi :</strong> les chiffres sont incorrects, le LT n’existe pas
+              encore, ou il n’est pas disponible dans l’ERP. Un message rouge d’erreur
+              s’affiche alors : ne démarrez pas tant que le LT n’est pas validé.
+            </p>
+            <p>
+              <strong>Que faire :</strong> resaisir le code lentement, vérifier le planning,
+              ou demander au chef d’équipe si le LT est bien ouvert.
+            </p>
+            <figure class="step-shot step-shot-fail">
+              <img src="images/operateur-07-lt-introuvable.png" alt="LT introuvable" loading="lazy">
+              <figcaption>LT introuvable : vérifier la saisie ou demander confirmation au planning.</figcaption>
+            </figure>
+            <p>
+              <strong>Cas particulier — champ grisé / impossible d’écrire :</strong>
+              si un lancement est déjà <strong>En cours</strong>, le champ Code de Lancement
+              est volontairement verrouillé. Cela évite de pointer un nouveau LT sans avoir
+              fermé le précédent. Dans ce cas, cliquez d’abord sur <strong>Terminer</strong>
+              (bouton rouge), puis saisissez le nouveau code.
+            </p>
+            <figure class="step-shot step-shot-fail">
+              <img src="images/operateur-08-lt-verrouille.png" alt="Champ LT verrouillé" loading="lazy">
+              <figcaption>
+                Champ verrouillé : impossible de taper un autre LT tant que le travail actuel
+                n’est pas terminé.
+              </figcaption>
+            </figure>
+            <figure class="step-shot step-shot-fail">
+              <img src="images/operateur-08-lt-verrouille-terminer.png" alt="Cliquer Terminer" loading="lazy">
+              <figcaption>
+                Solution : cliquer <strong>Terminer</strong> → le champ se libère → saisir
+                le nouveau LT.
+              </figcaption>
+            </figure>
+          </div>
+        </div>
+
+        <div class="step-block">
+          <h3>4. Lire le détail dans la section Contrôles</h3>
+          <p>
+            Après la validation du LT, la section Contrôles affiche le détail du lancement :
+            numéro LT, article, désignation, et un message du type
+            « Lancement validé… Prêt à démarrer ». C’est le moment de vérifier que vous êtes
+            bien sur le bon travail avant de lancer le chronomètre.
+          </p>
+          <span class="step-ok-label">Quand ça marche</span>
+          <figure class="step-shot">
+            <img src="images/operateur-04-controles.png" alt="Section Contrôles" loading="lazy">
+            <figcaption>
+              Contrôles OK : le détail du LT est visible, et les boutons Démarrer / Pause /
+              Terminer sont prêts.
+            </figcaption>
+          </figure>
+          <div class="step-fail">
+            <span class="step-fail-label">Si ça ne marche pas</span>
+            <p>
+              <strong>Pourquoi :</strong> le LT n’a pas encore été validé correctement à
+              l’étape précédente, donc la section Contrôles n’a pas les bonnes informations.
+            </p>
+            <p>
+              <strong>Que faire :</strong> revenir au champ lancement, resaisir / revalider,
+              et attendre le message vert avant de continuer.
+            </p>
+          </div>
+        </div>
+
+        <div class="step-block">
+          <h3>5. Choisir l’étape quand le LT a plusieurs phases</h3>
+          <p>
+            Certains lancements ont plusieurs phases dans l’ERP. Elles peuvent toutes
+            s’appeler « Fabrication », mais avec des numéros différents (010, 040, 060…).
+            Dans ce cas, une liste <strong>Étape (Phase)</strong> apparaît dans Contrôles.
+            Vous devez choisir <strong>la phase sur laquelle vous travaillez réellement</strong>
+            avant de démarrer, pour que le temps soit affecté au bon endroit.
+          </p>
+          <p>
+            Exemple réel avec le lancement <strong>LT2600106</strong> (coupleur) : trois
+            phases, uniquement en Fabrication :
+          </p>
+          <ul>
+            <li><strong>010 (Composant) — Fabrication</strong></li>
+            <li><strong>040 (Connect) — Fabrication</strong></li>
+            <li><strong>060 (Composant) — Fabrication</strong></li>
+          </ul>
+          <span class="step-ok-label">Quand ça marche</span>
+          <figure class="step-shot">
+            <img src="images/operateur-09-etapes-multiples.png" alt="Liste des étapes" loading="lazy">
+            <figcaption>
+              Après validation du LT multi-phases : la liste des étapes apparaît.
+              Choisissez celle qui correspond à votre travail du moment.
+            </figcaption>
+          </figure>
+          <figure class="step-shot">
+            <img src="images/operateur-09-etape-choisie.png" alt="Étape choisie" loading="lazy">
+            <figcaption>
+              Une fois l’étape choisie (ici <strong>040 — Fabrication</strong>), vous pouvez
+              cliquer sur <strong>Démarrer</strong>.
+            </figcaption>
+          </figure>
+          <div class="step-fail">
+            <span class="step-fail-label">Si ça ne marche pas</span>
+            <p>
+              <strong>Pourquoi :</strong> aucune étape n’a été sélectionnée alors que le LT
+              en a plusieurs. La liste reste sur « Choisir une étape (Phase) », et le
+              démarrage ne peut pas être correct.
+            </p>
+            <p>
+              <strong>Que faire :</strong> ouvrir la liste, choisir 010, 040 ou 060 selon
+              votre phase, puis démarrer. Si le LT n’a qu’une seule phase, cette liste
+              n’apparaît pas : c’est normal.
+            </p>
+            <figure class="step-shot step-shot-fail">
+              <img src="images/operateur-09-etape-manquante.png" alt="Étape non choisie" loading="lazy">
+              <figcaption>
+                Sans choix d’étape sur un LT multi-phases, le démarrage est bloqué ou incorrect.
+              </figcaption>
+            </figure>
+          </div>
+          <p class="note">
+            Rappel : si une seule phase existe pour le LT, le système pointe directement
+            dessus et n’affiche pas de liste à choisir.
+          </p>
+        </div>
+
+        <div class="step-block">
+          <h3>6. Démarrer le chronomètre</h3>
+          <p>
+            Avant de démarrer, le chronomètre est à <strong>00:00:00</strong> et le statut
+            est « En attente ». Quand vous êtes vraiment prêt à travailler, cliquez sur le
+            bouton vert <strong>Démarrer</strong> : le chrono part, le statut passe à
+            <strong>En cours</strong>, et une ligne apparaît dans Mon Historique.
+          </p>
+          <span class="step-ok-label">Quand ça marche</span>
+          <figure class="step-shot">
+            <img src="images/operateur-05-boutons-attente.png" alt="Avant de démarrer" loading="lazy">
+            <figcaption>Statut En attente : cliquez sur <strong>Démarrer</strong> (vert) pour lancer le temps.</figcaption>
+          </figure>
+          <figure class="step-shot">
+            <img src="images/operateur-06-en-cours.png" alt="En cours" loading="lazy">
+            <figcaption>
+              Statut En cours : le chronomètre tourne, et le pointage apparaît dans
+              Mon Historique.
+            </figcaption>
+          </figure>
+          <div class="step-fail">
+            <span class="step-fail-label">Si ça ne marche pas</span>
+            <p>
+              <strong>Pourquoi :</strong> le LT n’est pas validé, l’étape n’a pas été choisie
+              alors qu’elle est obligatoire, ou un autre travail est déjà en cours sur ce poste.
+            </p>
+            <p>
+              <strong>Que faire :</strong> revenir aux étapes 3 à 5, valider le LT, choisir
+              l’étape si demandée, ou Terminer / Pause le travail précédent avant de relancer.
+            </p>
+          </div>
+        </div>
+
+        <div class="step-block">
+          <h3>7. Pause et Terminer</h3>
+          <p>
+            Pendant un travail En cours, deux boutons sont particulièrement importants.
+            <strong>Pause</strong> (jaune) sert pour une interruption temporaire : le temps
+            de pause n’est pas compté comme de la production. <strong>Terminer</strong> (rouge)
+            sert quand le travail est vraiment fini.
+          </p>
+          <p>
+            Le bouton <strong>Terminer</strong> est obligatoire en fin de travail. Sans lui,
+            le temps reste « En cours », n’apparaît pas correctement pour le transfert SILOG,
+            et le champ LT reste verrouillé : vous ne pourrez pas saisir un autre lancement.
+          </p>
+          <span class="step-ok-label">Quand ça marche</span>
+          <figure class="step-shot">
+            <img src="images/operateur-06-en-cours.png" alt="Pause et Terminer" loading="lazy">
+            <figcaption>
+              En cours : Pause et Terminer sont actifs. Après Terminer, la ligne passe au
+              statut Terminé.
+            </figcaption>
+          </figure>
+          <div class="step-fail">
+            <span class="step-fail-label">Si ça ne marche pas</span>
+            <p>
+              <strong>Pourquoi (oubli de Terminer) :</strong> le travail reste En cours,
+              l’admin ne voit pas la ligne comme prête à transférer, et le champ Code de
+              Lancement reste bloqué.
+            </p>
+            <p>
+              <strong>Que faire :</strong> dès que le travail est fini, cliquez toujours sur
+              <strong>Terminer</strong> (rouge) avant de quitter le poste ou de changer de LT.
+            </p>
+            <figure class="step-shot step-shot-fail">
+              <img src="images/operateur-08-lt-verrouille.png" alt="Sans Terminer le LT est bloqué" loading="lazy">
+              <figcaption>
+                Sans Terminer : le champ LT reste verrouillé. Après Terminer, vous pouvez
+                saisir un autre lancement.
+              </figcaption>
+            </figure>
+          </div>
+        </div>
+
+        <h3>Compteur journée et historique</h3>
+        <p>
+          Le bloc <strong>Compteur Journée</strong> montre le temps cumulé de la journée
+          et ce qu’il reste par rapport à un repère de 8 heures. Le bloc
+          <strong>Mon Historique</strong> liste vos LT du jour. Si une ligne semble manquer,
+          cliquez sur <strong>Actualiser</strong> pour recharger l’affichage depuis le serveur.
+        </p>
+      </article>
+
+      <article id="fsop">
+        <h2>Remplir un FSOP</h2>
+        <p>
+          Le FSOP est la fiche de traçabilité du lancement : on y renseigne les composants,
+          les codes lot, les dates, les contrôles et les opérateurs. Cette fiche est stockée
+          sur le partage réseau de traçabilité. Le pointage du temps et le FSOP sont
+          indépendants : même si le FSOP échoue (dossier manquant, partage coupé…), vous
+          pouvez continuer à pointer normalement.
+        </p>
+        <p class="note">
+          Exemple utilisé dans ce guide : LT <strong>LT2600334</strong>, formulaire
+          <strong>F479</strong>, numéro de série <strong>26-17-01</strong>.
+        </p>
+
+        <div class="step-block">
+          <h3>1. Ouvrir FSOP</h3>
+          <p>
+            Pour ouvrir un FSOP, vous devez être connecté en opérateur et avoir saisi un
+            <strong>LT complet</strong> (par exemple LT2600334). Ensuite cliquez sur le bouton
+            vert <strong>FSOP</strong>, situé près du champ lancement (à côté de la caméra).
+          </p>
+          <span class="step-ok-label">Quand ça marche</span>
+          <figure class="step-shot">
+            <img src="images/fsop-01-bouton.png" alt="Bouton FSOP" loading="lazy">
+            <figcaption>LT saisi correctement + bouton vert <strong>FSOP</strong> disponible.</figcaption>
+          </figure>
+          <div class="step-fail">
+            <span class="step-fail-label">Si ça ne marche pas</span>
+            <p>
+              <strong>Pourquoi :</strong> le champ lancement est vide, il ne contient que
+              « LT » sans chiffres, ou vous êtes connecté en mode admin (FSOP est prévu pour
+              le parcours opérateur avec un LT valide).
+            </p>
+            <p>
+              <strong>Que faire :</strong> revenir en session opérateur, saisir le LT complet,
+              attendre sa validation, puis recliquer sur FSOP.
+            </p>
+            <figure class="step-shot step-shot-fail">
+              <img src="images/fsop-01-sans-lt.png" alt="LT manquant pour FSOP" loading="lazy">
+              <figcaption>
+                Message d’avertissement : il faut un LT valide avant d’ouvrir FSOP.
+              </figcaption>
+            </figure>
+          </div>
+        </div>
+
+        <div class="step-block">
+          <h3>2. Choisir le formulaire et le numéro de série</h3>
+          <p>
+            Dans la fenêtre FSOP, indiquez le numéro de formulaire (par exemple
+            <strong>F479</strong>) et le <strong>numéro de série</strong> de la pièce / du lot.
+            Ce numéro de série doit déjà exister dans le fichier de mesures du LT.
+            Ensuite cliquez sur <strong>Remplir dans l’interface</strong> pour ouvrir le
+            formulaire interactif.
+          </p>
+          <span class="step-ok-label">Quand ça marche</span>
+          <figure class="step-shot">
+            <img src="images/fsop-02-modal.png" alt="Fenêtre FSOP" loading="lazy">
+            <figcaption>
+              Fenêtre FSOP : numéro de formulaire, numéro de série, puis Remplir /
+              Générer Code Lot.
+            </figcaption>
+          </figure>
+          <div class="step-fail">
+            <span class="step-fail-label">Si ça ne marche pas</span>
+            <p>
+              <strong>Pourquoi :</strong> le numéro de série n’a pas encore été créé dans le
+              fichier de mesures (méthodes / traçabilité), ou le numéro de formulaire est
+              incorrect pour ce LT.
+            </p>
+            <p>
+              <strong>Que faire :</strong> vérifier le numéro auprès de méthodes, faire créer
+              le SN si besoin, puis réessayer Remplir dans l’interface.
+            </p>
+            <figure class="step-shot step-shot-fail">
+              <img src="images/fsop-02-serie-invalide.png" alt="Série invalide" loading="lazy">
+              <figcaption>
+                Série invalide : le numéro de série doit exister avant de remplir le FSOP.
+              </figcaption>
+            </figure>
+          </div>
+        </div>
+
+        <div class="step-block">
+          <h3>3. Générer et consulter les codes lot ERP</h3>
+          <p>
+            Le bouton <strong>Générer Code Lot</strong> récupère les lots disponibles dans
+            l’ERP pour ce LT. Ensuite, <strong>Afficher / Masquer</strong> permet de voir la
+            liste par composant / article. Un clic sur une puce copie le code, ce qui est
+            pratique si vous devez le coller ailleurs.
+          </p>
+          <p>
+            Point important pour la suite : dans le formulaire, les lots proposés sont ceux
+            liés à <strong>l’article de la ligne</strong>, pas la totalité des lots du LT.
+            S’il y a plusieurs lots pour la même référence, vous aurez un choix à faire à
+            l’étape suivante.
+          </p>
+          <span class="step-ok-label">Quand ça marche</span>
+          <figure class="step-shot">
+            <img src="images/fsop-02-lots.png" alt="Liste des lots ERP" loading="lazy">
+            <figcaption>
+              Lots ERP affichés par composant. Afficher / Masquer permet de plier ou déplier
+              la liste.
+            </figcaption>
+          </figure>
+          <div class="step-fail">
+            <span class="step-fail-label">Si ça ne marche pas</span>
+            <p>
+              <strong>Pourquoi :</strong> le LT n’a pas de lignes de lots dans l’ERP, ou
+              l’API / le réseau est indisponible. La liste reste alors vide.
+            </p>
+            <p>
+              <strong>Que faire :</strong> prévenir méthodes. Vous pouvez malgré tout ouvrir
+              le formulaire et saisir un code lot à la main si vous le connaissez.
+            </p>
+          </div>
+        </div>
+
+        <div class="step-block">
+          <h3>4. Remplir le formulaire</h3>
+          <p>
+            Après <strong>Remplir dans l’interface</strong>, le formulaire s’ouvre avec les
+            tableaux à compléter (composants / lots, dates, mesures, contrôles, etc.).
+            Le numéro de lancement est souvent déjà prérempli.
+          </p>
+          <p>
+            Pour la colonne <strong>Lot</strong>, le comportement dépend de l’article de
+            chaque ligne :
+          </p>
+          <ul>
+            <li>
+              s’il n’y a <strong>qu’un seul</strong> lot ERP pour cet article, il peut être
+              prérempli automatiquement ;
+            </li>
+            <li>
+              s’il y a <strong>plusieurs</strong> lots pour la même référence article, un
+              menu déroulant apparaît (-- Choisir -- / lots / Autre…) pour que vous
+              sélectionniez le bon ;
+            </li>
+            <li>
+              s’il n’y a aucun lot associé à l’article, le champ reste en saisie libre.
+            </li>
+          </ul>
+          <p class="note" style="border-left-color:#c62828;background:#fff5f5;">
+            Pour la colonne <strong>Opérateur</strong>, choisissez
+            <strong>vos propres initiales / votre nom</strong> dans le menu
+            (ou « Autre… » pour les saisir).
+            <strong>Ne mettez jamais le nom ou les initiales d’une autre personne</strong>.
+            Cette colonne sert de traçabilité qualité : c’est la preuve de qui a réellement
+            réalisé l’opération.
+          </p>
+          <span class="step-ok-label">Quand ça marche</span>
+          <figure class="step-shot">
+            <img src="images/fsop-03-formulaire.png" alt="Formulaire FSOP ouvert" loading="lazy">
+            <figcaption>
+              Formulaire ouvert : tableau Général (composants / lots) et boutons
+              Sauvegarder / Annuler en bas.
+            </figcaption>
+          </figure>
+          <figure class="step-shot">
+            <img src="images/fsop-03-lot-choix.png" alt="Choisir un lot parmi plusieurs" loading="lazy">
+            <figcaption>
+              Exemple : pour l’article <strong>CL-AGS-ELIO-0005A</strong>, plusieurs codes lot
+              existent. Le menu propose uniquement ces lots-là (ici 3), pas tous les lots du LT.
+            </figcaption>
+          </figure>
+          <figure class="step-shot">
+            <img src="images/fsop-03-operateur.png" alt="Choisir ses initiales" loading="lazy">
+            <figcaption>
+              Colonne Opérateur : choisissez vos initiales / votre nom uniquement.
+            </figcaption>
+          </figure>
+          <div class="step-fail">
+            <span class="step-fail-label">Si ça ne marche pas</span>
+            <p>
+              <strong>Pourquoi :</strong> le dossier du LT est introuvable sur le partage
+              traçabilité, ou l’accès réseau est coupé. Ce n’est en général
+              <strong>pas un bug de la tablette</strong> elle-même.
+            </p>
+            <p>
+              <strong>Que faire :</strong> prévenir méthodes / maintenance. En attendant,
+              vous pouvez continuer le pointage du temps normalement.
+            </p>
+            <figure class="step-shot step-shot-fail">
+              <img src="images/fsop-03-dossier-introuvable.png" alt="Dossier LT introuvable" loading="lazy">
+              <figcaption>
+                Dossier / répertoire du LT manquant sur le partage réseau de traçabilité.
+              </figcaption>
+            </figure>
+          </div>
+        </div>
+
+        <div class="step-block">
+          <h3>5. Sauvegarder</h3>
+          <p>
+            Quand le formulaire est rempli, cliquez sur <strong>Sauvegarder</strong> pour
+            écrire le fichier FSOP sur le partage traçabilité, dans le dossier du LT.
+            Le bouton <strong>Annuler</strong> ferme la fenêtre sans enregistrer vos
+            modifications.
+          </p>
+          <span class="step-ok-label">Quand ça marche</span>
+          <figure class="step-shot">
+            <img src="images/fsop-05-sauvegarde-ok.png" alt="Sauvegarde réussie" loading="lazy">
+            <figcaption>
+              Message de succès : le FSOP a bien été enregistré sur le partage
+              (dossier LT / FSOP).
+            </figcaption>
+          </figure>
+          <div class="step-fail">
+            <span class="step-fail-label">Si ça ne marche pas</span>
+            <p>
+              La sauvegarde peut échouer pour plusieurs raisons fréquentes. Voici les plus
+              courantes, avec ce qu’il faut faire :
+            </p>
+            <ul>
+              <li>
+                <strong>Fichier déjà ouvert ou verrouillé</strong> — quelqu’un a le FSOP
+                (ou un Excel lié) ouvert sur un PC. Demandez de fermer le fichier, puis
+                réessayez.
+              </li>
+              <li>
+                <strong>Partage traçabilité inaccessible</strong> — réseau coupé ou montage
+                serveur indisponible. Prévenez l’IT. Le pointage du temps peut continuer.
+              </li>
+              <li>
+                <strong>Dossier LT introuvable</strong> — il n’existe pas de répertoire pour
+                ce LT sur le partage. Prévenez méthodes / maintenance.
+              </li>
+              <li>
+                <strong>Droits d’écriture insuffisants</strong> — le serveur ne peut pas
+                écrire dans le dossier FSOP. Prévenez l’IT.
+              </li>
+            </ul>
+            <p>
+              Pendant que le bouton affiche « Sauvegarde… », ne forcez pas l’arrêt de la
+              tablette et ne fermez pas brutalement le navigateur.
+            </p>
+            <figure class="step-shot step-shot-fail">
+              <img src="images/fsop-05-sauvegarde-echec.png" alt="Échec de sauvegarde" loading="lazy">
+              <figcaption>
+                Échec typique : fichier verrouillé, partage inaccessible, ou droits manquants.
+              </figcaption>
+            </figure>
+            <figure class="step-shot step-shot-fail">
+              <img src="images/fsop-03-dossier-introuvable.png" alt="Dossier LT introuvable" loading="lazy">
+              <figcaption>
+                Autre cause fréquente : dossier LT introuvable sur le partage, autant à
+                l’ouverture qu’à la sauvegarde.
+              </figcaption>
+            </figure>
+          </div>
+        </div>
+
+        <p class="note">
+          Les fichiers FSOP vivent sur un partage Windows monté côté serveur.
+          Sans accès au bon dossier, l’ouverture ou la sauvegarde échoue, même si le
+          pointage du temps continue de fonctionner.
+        </p>
+      </article>
+
+      <article id="admin">
+        <h2>Écran admin</h2>
+        <p>
+          L’écran administrateur sert à surveiller les pointages de l’atelier, corriger les
+          erreurs, ajouter un oubli, et lancer le <strong>Transfert</strong> qui prépare
+          l’envoi des temps vers SILOG. Il ne remplace pas le pointage opérateur : il le
+          contrôle et le valide.
+        </p>
+
+        <div class="step-block">
+          <h3>1. Passer en Mode Administrateur</h3>
+          <p>
+            Sur l’écran de login, cliquez sur <strong>Mode Administrateur</strong>, le bouton
+            gris situé sous « Se connecter ». Ce n’est pas le champ matricule : c’est
+            l’entrée vers l’écran d’administration.
+          </p>
+          <span class="step-ok-label">Quand ça marche</span>
+          <figure class="step-shot">
+            <img src="images/admin-01-mode-admin.png" alt="Bouton Mode Administrateur" loading="lazy">
+            <figcaption>Bouton gris <strong>Mode Administrateur</strong> sous Se connecter.</figcaption>
+          </figure>
+          <div class="step-fail">
+            <span class="step-fail-label">Si ça ne marche pas</span>
+            <p>
+              <strong>Pourquoi :</strong> la page n’a pas bien chargé, ou vous êtes déjà sur
+              l’écran Administration sans vous en rendre compte.
+            </p>
+            <p>
+              <strong>Que faire :</strong> actualiser la page, ou utiliser Retour puis
+              recliquer sur Mode Administrateur.
+            </p>
+          </div>
+        </div>
+
+        <div class="step-block">
+          <h3>2. Se connecter avec le compte admin</h3>
+          <p>
+            Saisissez l’identifiant et le mot de passe admin SEDI Tablette fournis par l’IT
+            ou le responsable, puis cliquez sur <strong>Se connecter</strong>. Ces comptes
+            sont dédiés à l’administration de l’outil : ils ne correspondent ni au matricule
+            opérateur, ni au login Windows, ni à Jenkins.
+          </p>
+          <span class="step-ok-label">Quand ça marche</span>
+          <figure class="step-shot">
+            <img src="images/admin-02-login.png" alt="Login admin" loading="lazy">
+            <figcaption>
+              Écran Administration : utilisateur + mot de passe.
+              Le bouton Retour ramène au login opérateur.
+            </figcaption>
+          </figure>
+          <div class="step-fail">
+            <span class="step-fail-label">Si ça ne marche pas</span>
+            <p>
+              <strong>Pourquoi :</strong> identifiant ou mot de passe incorrect, ou confusion
+              avec un autre type de compte (matricule, Windows, Jenkins…).
+            </p>
+            <p>
+              <strong>Que faire :</strong> revérifier les identifiants auprès de l’IT /
+              responsable, sans réutiliser un compte opérateur.
+            </p>
+            <figure class="step-shot step-shot-fail">
+              <img src="images/admin-02-login-echec.png" alt="Login admin refusé" loading="lazy">
+              <figcaption>Échec de connexion admin : les identifiants n’ont pas été acceptés.</figcaption>
+            </figure>
+          </div>
+        </div>
+
+        <div class="step-block">
+          <h3>3. Comprendre le tableau de bord</h3>
+          <p>
+            Une fois connecté, vous arrivez sur le <strong>Tableau de Bord Admin</strong>.
+            En haut se trouvent les filtres et les boutons d’action. Au centre, des cartes
+            résument la situation (opérateurs actifs, opérations en cours, en pause,
+            terminées). En dessous, le tableau « Détails des Opérations » liste les lignes
+            une par une.
+          </p>
+          <span class="step-ok-label">Quand ça marche</span>
+          <figure class="step-shot">
+            <img src="images/admin-03-dashboard.png" alt="Tableau de bord admin" loading="lazy">
+            <figcaption>Filtres, boutons d’action et cartes de synthèse du tableau de bord.</figcaption>
+          </figure>
+          <div class="step-fail">
+            <span class="step-fail-label">Si ça ne marche pas</span>
+            <p>
+              <strong>Pourquoi :</strong> la session a expiré, ou les filtres sont trop
+              restrictifs (période / statut) et masquent toutes les lignes.
+            </p>
+            <p>
+              <strong>Que faire :</strong> cliquer sur <strong>Effacer filtres</strong>, puis
+              sur <strong>Actualiser</strong>.
+            </p>
+          </div>
+        </div>
+
+        <div class="step-block">
+          <h3>4. Utiliser les filtres</h3>
+          <p>
+            Les filtres permettent de ne garder que les lignes utiles avant de contrôler ou
+            de transférer. Prenez le temps de les régler correctement, surtout avant un
+            transfert SILOG.
+          </p>
+          <table>
+            <tr><th>Filtre</th><th>À quoi ça sert</th></tr>
+            <tr>
+              <td><strong>Opérateur</strong></td>
+              <td>Limiter la vue à une personne, ou laisser « Tous les opérateurs ».</td>
+            </tr>
+            <tr>
+              <td><strong>Statut</strong></td>
+              <td>
+                En cours / En pause / <strong>Terminé</strong> (prêt à envoyer) /
+                Transmis SILOG (déjà remonté).
+              </td>
+            </tr>
+            <tr>
+              <td><strong>Période</strong></td>
+              <td>Aujourd’hui, hier, semaine, mois, ou un jour précis choisi manuellement.</td>
+            </tr>
+            <tr>
+              <td><strong>Recherche</strong></td>
+              <td>Retrouver un LT précis (exemple : LT2600401).</td>
+            </tr>
+          </table>
+          <p class="note">
+            Astuce pour préparer un transfert : filtrez sur <strong>Terminé</strong> et sur
+            la période du jour, afin de ne voir que les lignes réellement à envoyer.
+          </p>
+          <span class="step-ok-label">Quand ça marche</span>
+          <figure class="step-shot">
+            <img src="images/admin-03-dashboard.png" alt="Filtres" loading="lazy">
+            <figcaption>Les filtres se trouvent en haut du tableau de bord.</figcaption>
+          </figure>
+          <div class="step-fail">
+            <span class="step-fail-label">Si ça ne marche pas</span>
+            <p>
+              <strong>Pourquoi :</strong> mauvaise période ou mauvais statut
+              (par exemple Transmis au lieu de Terminé). Le tableau paraît vide alors que
+              des lignes existent.
+            </p>
+            <p>
+              <strong>Que faire :</strong> remettre Aujourd’hui + Terminé, ou cliquer sur
+              Effacer filtres pour repartir d’une vue claire.
+            </p>
+          </div>
+        </div>
+
+        <div class="step-block">
+          <h3>5. Boutons d’action</h3>
+          <p>
+            Les boutons en haut du tableau de bord servent aux actions principales de
+            l’admin. Voici leur rôle, dans l’ordre où on les utilise le plus souvent.
+          </p>
+          <table>
+            <tr><th>Bouton</th><th>Rôle</th></tr>
+            <tr>
+              <td><strong>Ajouter une ligne</strong> (vert)</td>
+              <td>Créer un pointage manuel lorsqu’un opérateur a oublié de pointer.</td>
+            </tr>
+            <tr>
+              <td><strong>Actualiser</strong> (violet)</td>
+              <td>Recharger le tableau avec les données les plus récentes du serveur.</td>
+            </tr>
+            <tr>
+              <td><strong>Transfert</strong> (orange)</td>
+              <td>
+                Ouvrir la fenêtre d’envoi des lignes terminées vers SILOG
+                (voir aussi <a href="#silog">Envoi vers SILOG</a>).
+              </td>
+            </tr>
+            <tr>
+              <td><strong>Effacer filtres</strong> (gris)</td>
+              <td>Remettre une vue complète et claire, sans filtre actif.</td>
+            </tr>
+          </table>
+          <span class="step-ok-label">Quand ça marche</span>
+          <figure class="step-shot">
+            <img src="images/admin-03-dashboard.png" alt="Boutons admin" loading="lazy">
+            <figcaption>Ajouter (vert) · Actualiser (violet) · Transfert (orange) · Effacer (gris).</figcaption>
+          </figure>
+          <div class="step-fail">
+            <span class="step-fail-label">Si ça ne marche pas</span>
+            <p>
+              <strong>Pourquoi (surtout pour Transfert) :</strong> aucune ligne n’est en
+              statut Terminé. Soit elles sont déjà Transmis, soit les opérateurs n’ont pas
+              cliqué Terminer à l’atelier.
+            </p>
+            <p>
+              <strong>Que faire :</strong> vérifier le filtre Terminé et la section
+              <a href="#silog">Envoi vers SILOG</a>.
+            </p>
+          </div>
+        </div>
+
+        <div class="step-block">
+          <h3>6. Lire le tableau « Détails des Opérations »</h3>
+          <p>
+            Le tableau liste chaque pointage avec l’opérateur, le LT, la désignation,
+            la phase / le libellé d’étape (par exemple <strong>010 — Fabrication</strong>),
+            les heures, le statut et les actions possibles. C’est ici que l’on voit si une
+            ligne est encore corrigible ou déjà transmise.
+          </p>
+          <span class="step-ok-label">Quand ça marche</span>
+          <figure class="step-shot">
+            <img src="images/admin-04-tableau.png" alt="Tableau des opérations" loading="lazy">
+            <figcaption>
+              Exemple : phase <strong>010</strong> / <strong>Fabrication</strong>.
+              TERMINÉ = encore modifiable ; TRANSMIS = grisé (cadenas).
+            </figcaption>
+          </figure>
+          <div class="step-fail">
+            <span class="step-fail-label">Si ça ne marche pas</span>
+            <p>
+              <strong>Pourquoi :</strong> une ligne absente signifie souvent que l’opérateur
+              n’a pas cliqué Terminer, ou que le filtre masque la ligne. Une ligne grisée
+              signifie qu’elle est déjà Transmis : on ne la corrige plus depuis cet écran.
+            </p>
+          </div>
+        </div>
+
+        <div class="step-block">
+          <h3>7. Fenêtre Transfert</h3>
+          <p>
+            Quand vous cliquez sur <strong>Transfert</strong>, une fenêtre s’ouvre pour
+            choisir précisément les lignes à envoyer. Cochez celles qui sont correctes
+            (ou utilisez Tout sélectionner), puis validez avec <strong>Transférer</strong>.
+            Si vous n’êtes pas prêt, cliquez sur <strong>Fermer</strong> pour annuler sans
+            envoyer.
+          </p>
+          <span class="step-ok-label">Quand ça marche</span>
+          <figure class="step-shot">
+            <img src="images/admin-05-transfert-modal.png" alt="Fenêtre Transfert" loading="lazy">
+            <figcaption>Cases à cocher, puis bouton orange <strong>Transférer</strong>.</figcaption>
+          </figure>
+          <div class="step-fail">
+            <span class="step-fail-label">Si ça ne marche pas</span>
+            <p>
+              <strong>Pourquoi :</strong> il n’y a aucune opération terminée à transférer
+              (déjà Transmis, ou pas de Terminer côté atelier).
+            </p>
+            <p>
+              <strong>Que faire :</strong> contrôler le filtre Terminé et les pointages
+              opérateurs, puis réessayer.
+            </p>
+            <figure class="step-shot step-shot-fail">
+              <img src="images/admin-05-transfert-vide.png" alt="Rien à transférer" loading="lazy">
+              <figcaption>Message d’échec : aucune opération terminée à envoyer.</figcaption>
+            </figure>
+          </div>
+        </div>
+
+        <h3>Actions sur une ligne</h3>
+        <table>
+          <tr><th>Action</th><th>Quand l’utiliser</th></tr>
+          <tr>
+            <td><strong>Corriger</strong></td>
+            <td>
+              Sur une ligne non transmise : ajuster les heures ou le statut, puis
+              sauvegarder.
+            </td>
+          </tr>
+          <tr>
+            <td><strong>Supprimer</strong></td>
+            <td>Uniquement pour un doublon évident ou une erreur claire.</td>
+          </tr>
+          <tr>
+            <td><strong>Cadenas / Transmis</strong></td>
+            <td>
+              La ligne est déjà dans SILOG. On ne la modifie plus depuis l’admin tablette.
+            </td>
+          </tr>
+        </table>
+
+        <h3>Ordre de travail conseillé en fin de journée</h3>
+        <ol>
+          <li>Régler la période sur <strong>Aujourd’hui</strong> (ou la bonne date).</li>
+          <li>Filtrer sur <strong>Terminé</strong> et contrôler les durées / LT.</li>
+          <li>Corriger ou ajouter les lignes manquantes si besoin.</li>
+          <li>Lancer <strong>Transfert</strong>, sélectionner, puis confirmer.</li>
+          <li>
+            Plus tard, filtrer sur <strong>Transmis SILOG</strong> pour vérifier que les
+            lignes sont bien passées (grisées).
+          </li>
+        </ol>
+      </article>
+
+      <article id="silog">
+        <h2>Envoi vers SILOG</h2>
+        <p>
+          Quand un opérateur clique sur <strong>Terminer</strong>, son temps reste d’abord
+          dans SEDI Tablette. Il faut ensuite une validation côté admin (bouton Transfert),
+          puis un passage automatique vers SILOG qui a lieu environ
+          <strong>toutes les 2 heures</strong> sur le poste dédié. Autrement dit : Terminer
+          à l’atelier ne suffit pas à lui seul pour que le temps apparaisse immédiatement
+          dans l’ERP.
+        </p>
+
+        <div class="step-block">
+          <h3>1. Préparer les lignes à envoyer</h3>
+          <p>
+            Ouvrez l’admin et filtrez sur le statut <strong>Terminé</strong>
+            (pas Transmis). Contrôlez les durées, les LT et les opérateurs.
+            Un même LT travaillé par plusieurs personnes donne plusieurs lignes : c’est
+            normal, chacune doit être vérifiée.
+          </p>
+          <span class="step-ok-label">Quand ça marche</span>
+          <figure class="step-shot">
+            <img src="images/admin-03-dashboard.png" alt="Filtre Terminé" loading="lazy">
+            <figcaption>
+              Filtrer sur <strong>Terminé</strong>, puis utiliser le bouton orange
+              <strong>Transfert</strong>.
+            </figcaption>
+          </figure>
+          <figure class="step-shot">
+            <img src="images/admin-04-tableau.png" alt="Terminé vs Transmis" loading="lazy">
+            <figcaption>
+              TERMINÉ = ligne à envoyer · TRANSMIS = ligne déjà remontée (grisée).
+            </figcaption>
+          </figure>
+          <div class="step-fail">
+            <span class="step-fail-label">Si ça ne marche pas</span>
+            <p>
+              <strong>Pourquoi :</strong> il n’y a rien en Terminé. Soit les opérateurs sont
+              encore En cours / En pause, soit les lignes sont déjà Transmis, soit la période
+              filtrée est incorrecte.
+            </p>
+            <p>
+              <strong>Que faire :</strong> faire Terminer côté atelier si besoin, élargir la
+              période, ou Effacer les filtres pour retrouver les lignes.
+            </p>
+            <figure class="step-shot step-shot-fail">
+              <img src="images/admin-05-transfert-vide.png" alt="Rien à envoyer" loading="lazy">
+              <figcaption>Aucune opération terminée à transférer pour le moment.</figcaption>
+            </figure>
+          </div>
+        </div>
+
+        <div class="step-block">
+          <h3>2. Confirmer le transfert</h3>
+          <p>
+            Cliquez sur <strong>Transfert</strong>, cochez les lignes à envoyer
+            (ou Tout sélectionner), puis validez avec <strong>Transférer</strong>.
+            Pendant le message « Transfert en cours… », laissez le traitement se terminer
+            et ne recliquez pas plusieurs fois de suite.
+          </p>
+          <span class="step-ok-label">Quand ça marche</span>
+          <figure class="step-shot">
+            <img src="images/admin-05-transfert-modal.png" alt="Confirmation transfert" loading="lazy">
+            <figcaption>Fenêtre de confirmation : sélectionner les lignes puis Transférer.</figcaption>
+          </figure>
+          <div class="step-fail">
+            <span class="step-fail-label">Si ça ne marche pas</span>
+            <p>
+              <strong>Pourquoi :</strong> une ligne peut être refusée si le LT est soldé /
+              introuvable dans l’ERP, s’il y a un doublon, ou si la ligne a déjà été prise
+              en compte.
+            </p>
+            <p>
+              <strong>Que faire :</strong> noter l’opérateur, le LT et le message exact à
+              l’écran. Si rien ne remonte depuis longtemps malgré des transferts réussis
+              côté admin, prévenir l’IT / le poste SVC_SILOG.
+            </p>
+          </div>
+        </div>
+
+        <div class="step-block">
+          <h3>3. Passage automatique dans SILOG</h3>
+          <p>
+            Sur le poste Windows <strong>SVC_SILOG</strong>, un job tourne
+            <strong>toutes les 2 heures</strong> et envoie dans l’ERP les temps déjà validés
+            côté admin. Personne n’a besoin de lancer SILOG.exe depuis l’atelier : le
+            mécanisme est automatique une fois le transfert admin fait.
+          </p>
+          <p class="note">
+            Un temps correctement Terminé à l’atelier puis validé par Transfert admin peut
+            donc mettre jusqu’à environ 2 heures avant d’apparaître dans SILOG. Ce délai est
+            normal.
+          </p>
+          <div class="step-fail">
+            <span class="step-fail-label">Si ça ne marche pas</span>
+            <p>
+              <strong>Pourquoi :</strong> le poste SVC_SILOG est éteint, le job est arrêté,
+              ou la ligne n’a jamais été validée côté admin.
+            </p>
+            <p>
+              <strong>Que faire :</strong> demander à l’IT de vérifier le job des 2 heures.
+              Pour un signalement utile, indiquez le matricule, le LT et l’heure vue à
+              l’écran.
+            </p>
+          </div>
+        </div>
+      </article>
+
+      <article id="prod-test">
+        <h2>Production ou environnement test ?</h2>
+        <p>
+          Il existe deux environnements. L’atelier doit toujours pointer en production.
+          L’environnement test sert uniquement à vérifier une nouvelle version avant de la
+          publier pour tout le monde.
+        </p>
+        <table>
+          <tr><th></th><th>Production (atelier)</th><th>Test (:8088)</th></tr>
+          <tr>
+            <td>Adresse</td>
+            <td>https://fsop.sedi-ati.com</td>
+            <td>http://192.168.1.26:8088</td>
+          </tr>
+          <tr>
+            <td>Pour qui</td>
+            <td>Opérateurs et admin métier</td>
+            <td>Développeurs / maintenance</td>
+          </tr>
+          <tr>
+            <td>Données</td>
+            <td>Réelles — les pointages comptent pour SILOG</td>
+            <td>De test — elles ne remplacent pas la prod</td>
+          </tr>
+          <tr>
+            <td>Mises à jour</td>
+            <td>Sur demande, par la maintenance</td>
+            <td>Automatiques après un passage Jenkins réussi</td>
+          </tr>
+        </table>
+        <p class="note">
+          <strong>Ne pointez jamais en test</strong> pour remplacer la production : ces temps
+          n’alimentent pas le SILOG de prod. Si Jenkins est vert mais que l’atelier ne voit
+          pas encore le changement, c’est normal : la production n’a simplement pas encore
+          été mise à jour.
+        </p>
+      </article>
+
+      <article id="jenkins">
+        <h2>Jenkins &amp; Sonar (équipe technique)</h2>
+        <p>
+          Jenkins et Sonar tournent sur le même serveur (ports 8085 et 9000).
+          L’atelier n’en a pas besoin pour pointer. Ces outils servent à tester et contrôler
+          le code avant qu’une version n’arrive en production.
+        </p>
+
+        <h3>Jenkins</h3>
+        <p>
+          À chaque push de code sur GitHub, Jenkins enchaîne les tests backend et frontend,
+          l’analyse Sonar, la construction des images Docker, puis le déploiement sur le
+          site <strong>test</strong> (port 8088). Un pipeline vert signifie que la version
+          test est à jour. Un pipeline rouge signifie qu’il faut corriger le code avant de
+          merger.
+        </p>
+        <figure class="step-shot">
+          <img src="images/jenkins-01-login.png" alt="Login Jenkins" loading="lazy">
+          <figcaption>
+            Accès : <a href="http://192.168.1.26:8085" target="_blank" rel="noopener">http://192.168.1.26:8085</a>
+            — se connecter avec le compte Jenkins (IT / dev), pas avec un matricule atelier.
+          </figcaption>
+        </figure>
+        <figure class="step-shot">
+          <img src="images/jenkins-02-job.png" alt="Job Jenkins FSOP" loading="lazy">
+          <figcaption>
+            Job FSOP : badge vert Passed = Quality Gate Sonar OK.
+            Pipeline vert → le site test (:8088) est à jour.
+          </figcaption>
+        </figure>
+
+        <h3>SonarQube</h3>
+        <p>
+          Sonar mesure la qualité du code source (bugs potentiels, dette technique,
+          couverture de tests) sur le projet <em>tablette-fsop</em>. Si la Quality Gate
+          échoue, Jenkins peut bloquer le déploiement de la version test.
+        </p>
+        <figure class="step-shot">
+          <img src="images/sonar-01-projects.png" alt="Projets Sonar" loading="lazy">
+          <figcaption>Liste des projets : Tablette FSOP avec badge vert Passed.</figcaption>
+        </figure>
+        <figure class="step-shot">
+          <img src="images/sonar-02-dashboard.png" alt="Dashboard Sonar" loading="lazy">
+          <figcaption>
+            Vue projet :
+            <a href="http://192.168.1.26:9000" target="_blank" rel="noopener">http://192.168.1.26:9000</a>
+            — Quality Gate Passed = Jenkins peut continuer le déploiement test.
+          </figcaption>
+        </figure>
+      </article>
+
+      <article id="pannes">
+        <h2>Problèmes fréquents</h2>
+        <p>
+          Voici les situations les plus souvent rencontrées, avec la première chose à
+          vérifier avant d’appeler quelqu’un.
+        </p>
+        <table>
+          <tr><th>Ce que vous voyez</th><th>Que vérifier / que faire</th></tr>
+          <tr>
+            <td>Le site ne s’ouvre pas / page blanche</td>
+            <td>
+              Vérifier le réseau de la tablette, essayer https://192.168.1.26, puis
+              contacter l’IT si cela continue.
+            </td>
+          </tr>
+          <tr>
+            <td>« Erreur serveur » ou chargement sans fin</td>
+            <td>
+              Vérifier le Wi‑Fi / câble. Si plusieurs tablettes sont touchées en même temps,
+              prévenir la maintenance (API ou base indisponible).
+            </td>
+          </tr>
+          <tr>
+            <td>Connexion opérateur refusée</td>
+            <td>
+              Vérifier le numéro de matricule exact. Ce n’est pas le login Windows.
+              Sinon demander au chef d’équipe de contrôler le compte.
+            </td>
+          </tr>
+          <tr>
+            <td>Impossible de taper un nouveau LT</td>
+            <td>
+              Un travail est encore En cours. Cliquez d’abord sur <strong>Terminer</strong>,
+              puis saisissez le nouveau code.
+            </td>
+          </tr>
+          <tr>
+            <td>FSOP : dossier LT introuvable</td>
+            <td>
+              Le partage traçabilité n’a pas de dossier pour ce LT, ou le réseau est coupé.
+              Prévenir méthodes / maintenance. Le pointage temps peut continuer.
+            </td>
+          </tr>
+          <tr>
+            <td>FSOP : impossible de sauvegarder</td>
+            <td>
+              Fichier déjà ouvert ailleurs (souvent Excel), partage inaccessible, ou droits
+              d’écriture manquants. Fermer le fichier chez les collègues, réessayer, sinon
+              prévenir l’IT.
+            </td>
+          </tr>
+          <tr>
+            <td>Temps invisible en admin</td>
+            <td>
+              L’opérateur a-t-il bien cliqué <strong>Terminer</strong> ?
+              Le filtre date / statut est-il le bon (Terminé + bonne période) ?
+            </td>
+          </tr>
+          <tr>
+            <td>Transfert SILOG échoue</td>
+            <td>
+              Noter le LT et le message exact. Vérifier avec l’IT le poste SVC_SILOG et
+              l’état du LT dans l’ERP.
+            </td>
+          </tr>
+          <tr>
+            <td>Nouvelle version absente en atelier</td>
+            <td>
+              Normal si seul Jenkins a mis à jour le site test. Demander un déploiement
+              production à la maintenance.
+            </td>
+          </tr>
+        </table>
+        <p>
+          Pour un signalement utile à l’IT / maintenance, préparez : l’heure du problème,
+          le numéro de matricule, le LT concerné, et une capture d’écran si possible.
+          Le serveur de référence est <strong>serveurproduction</strong> (192.168.1.26).
+        </p>
+      </article>
+
+      <footer class="page-foot">
+        Guide SEDI Tablette — <a href="dev.html">doc technique</a>
+      </footer>
+    </main>
+  </div>
+
+  <script src="js/docs.js"></script>
+</body>
+</html>

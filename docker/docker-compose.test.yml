@@ -84,6 +84,8 @@ services:
         SSL_EXTRA_IP: ${SSL_EXTRA_IP:-}
     container_name: sedi-tablette-test-frontend
     volumes:
+      # Config dédiée test : pas de redirect HTTPS prod, upstream compose service "backend"
+      - ./nginx.test.conf:/etc/nginx/nginx.conf:ro
       - ./ssl-runtime-test/nginx-ssl:/etc/nginx/ssl:ro
       - ./ssl-runtime-test/tablet:/usr/share/nginx/html/ssl:ro
     ports:

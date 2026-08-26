@@ -583,6 +583,37 @@ body {
     font-size: 0.95rem;
 }
 
+.temps-restant-block {
+    margin-top: 0.85rem;
+    padding-top: 0.85rem;
+    border-top: 1px solid #e2e5e9;
+    display: flex;
+    flex-direction: column;
+    gap: 0.35rem;
+}
+
+.temps-restant-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    gap: 1rem;
+}
+
+.temps-restant-label {
+    color: #666;
+    font-size: 0.9rem;
+}
+
+.temps-restant-value {
+    font-variant-numeric: tabular-nums;
+    font-weight: 600;
+    color: #1f2937;
+}
+
+.temps-restant-value.temps-restant-overrun {
+    color: #b45309;
+}
+
 /* Contrôles */
 .controls-row {
     display: flex;
@@ -2422,6 +2453,45 @@ tr:hover {
 }
 
 .fsop-operator-other-input:focus {
+    outline: none;
+    border-color: #667eea;
+    box-shadow: 0 0 0 2px rgba(102, 126, 234, 0.2);
+}
+
+/* Lot dropdown (2+ codes lot pour le même article) — même pattern que opérateurs */
+.fsop-lot-cell {
+    width: 100%;
+    position: relative;
+}
+
+.fsop-lot-select {
+    width: 100%;
+    border: 1px solid #ccc;
+    border-radius: 4px;
+    padding: 4px 8px;
+    background: #fff;
+    font-size: 13px;
+    cursor: pointer;
+    min-height: 28px;
+}
+
+.fsop-lot-select:focus {
+    outline: none;
+    border-color: #667eea;
+    box-shadow: 0 0 0 2px rgba(102, 126, 234, 0.2);
+}
+
+.fsop-lot-other-input {
+    width: 100%;
+    border: 1px solid #ccc;
+    border-radius: 4px;
+    padding: 4px 8px;
+    background: #fff;
+    font-size: 13px;
+    min-height: 28px;
+}
+
+.fsop-lot-other-input:focus {
     outline: none;
     border-color: #667eea;
     box-shadow: 0 0 0 2px rgba(102, 126, 234, 0.2);

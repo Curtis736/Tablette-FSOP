@@ -3,6 +3,7 @@ import {
     normalizeFsopLotKey,
     matchLotByParenRef,
     collectLotsForVoieCell,
+    collectLotsForLotCell,
     parseSavedVoies,
     sourceMatchesComponent
 } from '../../components/fsopForm/lotMatching.js';
@@ -31,7 +32,7 @@ describe('lotMatching', () => {
         expect(lots).toEqual(['L1']);
     });
 
-    it('falls back to items then uniqueLots', () => {
+    it('falls back to items then empty (no uniqueLots dump)', () => {
         const fromItems = collectLotsForVoieCell(
             [],
             [{ codeRubrique: 'ABC', lots: ['X'] }],
@@ -41,8 +42,8 @@ describe('lotMatching', () => {
             ''
         );
         expect(fromItems).toEqual(['X']);
-        const fromUnique = collectLotsForVoieCell([], [], ['FB'], [], 'nope', '');
-        expect(fromUnique).toEqual(['FB']);
+        const noMatch = collectLotsForVoieCell([], [], ['FB'], [], 'nope', '');
+        expect(noMatch).toEqual([]);
     });
 
     it('parses saved multi-voie lots', () => {
@@ -76,5 +77,29 @@ describe('lotMatching', () => {
             'ABC',
             'MO 1'
         )).toBe(false);
+    });
+
+    it('collectLotsForLotCell returns empty when no article match (no LT-wide dump)', () => {
+        const lots = collectLotsForLotCell(
+            [],
+            [{ codeRubrique: 'OTHER', lots: ['Z'] }],
+            ['LOT-A', 'LOT-B'],
+            [{ raw: 'NOPE' }],
+            'Composant inconnu (NOPE)',
+            'MO X'
+        );
+        expect(lots).toEqual([]);
+    });
+
+    it('collectLotsForLotCell returns only lots matched to the article', () => {
+        const lots = collectLotsForLotCell(
+            [{ codeOperation: 'MO 1', codeRubrique: 'ABC', lots: ['L1', 'L2'] }],
+            [],
+            ['FB1', 'FB2'],
+            [],
+            'Piece ABC',
+            'MO 1'
+        );
+        expect(lots).toEqual(['L1', 'L2']);
     });
 });
