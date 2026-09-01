@@ -23,6 +23,7 @@
 
         <div class="nav-label">Backend</div>
         <a href="#api">API principales</a>
+        <a href="#temps-restant">Temps restant LT</a>
         <a href="#silog">Pipeline SILOG</a>
         <a href="#cron">Tâches planifiées</a>
         <a href="#sql">Bases SQL</a>
@@ -122,7 +123,7 @@ Express (sedi-tablette-backend)  :3001 (interne Docker)
           <tr><td>POST</td><td><code>/api/operators/pause</code></td><td>Pause</td></tr>
           <tr><td>POST</td><td><code>/api/operators/resume</code></td><td>Reprise</td></tr>
           <tr><td>POST</td><td><code>/api/operators/stop</code></td><td>Terminer</td></tr>
-          <tr><td>GET</td><td><code>/api/operators/steps/:lancementCode</code></td><td>Étapes d'un lancement</td></tr>
+          <tr><td>GET</td><td><code>/api/operators/steps/:lancementCode</code></td><td>Étapes + <code>tempsRestant</code> (LCTC / ETEMPS / ABTEMPS)</td></tr>
           <tr><td>POST</td><td><code>/api/heartbeat</code></td><td>Keep-alive session</td></tr>
         </table>
 
@@ -152,6 +153,74 @@ Express (sedi-tablette-backend)  :3001 (interne Docker)
           <code>POST /api/admin/transfer</code> est <strong>désactivée</strong> (stub informatif dans
           <code>backend/routes/admin.js</code>). Le front appelle
           <code>validate-and-transmit-batch</code> via <code>frontend/services/ApiService.js</code>.
+        </p>
+      </article>
+
+      <article id="temps-restant">
+        <h2>Temps restant LT (ERP + SILOG)</h2>
+        <p>
+          Service : <code>backend/services/LancementTempsRestantService.js</code>.
+          Exposé dans la réponse de
+          <code>GET /api/operators/steps/:lancementCode</code> (champ <code>tempsRestant</code>).
+          UI opérateur : bloc <strong>Total LT</strong> + encadré <strong>Temps restant étape</strong>
+          (voir doc atelier, capture <code>operateur-10-temps-restant.png</code>).
+        </p>
+
+        <h3>Formule (par étape Phase + CodeRubrique)</h3>
+        <pre><code>TheoH     = TempsReglage + TempsPoste × QuantiteLancee   (LCTC + LCTE, en heures)
+ConsommeH = SUM(ETEMPS.DureeExecution + DureeReglage + DureeCalage)   /* SILOG, déjà intégré */
+          + SUM(ABTEMPS.ProductiveDuration / 60)   /* tablette, StatutTraitement NOT IN ('T','D') */
+RestantH  = TheoH - ConsommeH</code></pre>
+
+        <h3>Tables SQL</h3>
+        <table>
+          <tr><th>Base</th><th>Table / vue</th><th>Rôle</th></tr>
+          <tr>
+            <td><code>SEDI_ERP</code></td>
+            <td><code>LCTC</code></td>
+            <td>Gamme : <code>TempsPoste</code>, <code>TempsReglage</code>, Phase, CodeRubrique (<code>TypeRubrique='O'</code>)</td>
+          </tr>
+          <tr>
+            <td><code>SEDI_ERP</code></td>
+            <td><code>LCTE</code></td>
+            <td><code>QuantiteLancee</code> du LT</td>
+          </tr>
+          <tr>
+            <td><code>SEDI_ERP</code></td>
+            <td><code>ETEMPS</code></td>
+            <td>Temps déjà scannés / intégrés SILOG (jointure Phase + CodePoste = CodeRubrique)</td>
+          </tr>
+          <tr>
+            <td><code>SEDI_APP_INDEPENDANTE</code></td>
+            <td><code>ABTEMPS_OPERATEURS</code></td>
+            <td>Pointages tablette en attente de validation / transfert (minutes → heures)</td>
+          </tr>
+        </table>
+
+        <h3>Exemple de réponse API</h3>
+        <pre><code>GET /api/operators/steps/LT2600888
+{
+  "success": true,
+  "steps": [ ... ],
+  "tempsRestant": {
+    "lancementCode": "LT2600888",
+    "quantiteLancee": 120,
+    "total": {
+      "theoH": 8.5,
+      "consommeH": 4.18,
+      "restantH": 4.32,
+      "restantMinutes": 259,
+      "avancementPct": 49.2
+    },
+    "byStepId": {
+      "010|Connect": { "theoH": 4.32, "restantH": 4.32, ... }
+    },
+    "etapes": [ ... ]
+  }
+}</code></pre>
+        <p class="note">
+          <code>UniteTxAffectation</code> sur LCTC : si unité en minutes (<code>M</code>, <code>MIN</code>),
+          conversion automatique en heures côté service.
         </p>
       </article>
 

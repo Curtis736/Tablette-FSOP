@@ -212,6 +212,16 @@
             </td>
           </tr>
           <tr>
+            <td><strong>Temps restant</strong></td>
+            <td>
+              Durée théorique encore disponible sur le LT ou sur l’étape choisie, calculée à
+              partir de la gamme ERP (<strong>LCTC</strong>) moins le temps déjà consommé dans
+              <strong>SILOG</strong> (<code>ETEMPS</code>) et les pointages tablette pas encore
+              transmis (<code>ABTEMPS_OPERATEURS</code>). Affiché dans Contrôles après validation
+              du LT.
+            </td>
+          </tr>
+          <tr>
             <td><strong>FSOP</strong></td>
             <td>
               Fiche de traçabilité associée au LT et au numéro de série. Elle contient les
@@ -439,7 +449,8 @@
             <img src="images/operateur-04-controles.png" alt="Section Contrôles" loading="lazy">
             <figcaption>
               Contrôles OK : le détail du LT est visible, et les boutons Démarrer / Pause /
-              Terminer sont prêts.
+              Terminer sont prêts. Le <strong>temps restant</strong> apparaît juste après
+              (voir étape suivante).
             </figcaption>
           </figure>
           <div class="step-fail">
@@ -453,6 +464,64 @@
               et attendre le message vert avant de continuer.
             </p>
           </div>
+        </div>
+
+        <div class="step-block">
+          <h3>4 bis. Voir le temps restant sur le lancement</h3>
+          <p>
+            Dès que le LT est validé (message vert), SEDI Tablette calcule le
+            <strong>temps restant théorique</strong> à partir des données ERP et SILOG.
+            Vous voyez deux indicateurs dans la section <strong>Contrôles</strong> :
+          </p>
+          <ul>
+            <li>
+              <strong>Total LT</strong> — temps restant sur l’ensemble du lancement (toutes
+              les étapes de fabrication additionnées).
+            </li>
+            <li>
+              <strong>Temps restant étape</strong> — encadré à droite des boutons Démarrer /
+              Pause / Terminer : temps restant pour la phase sélectionnée (ou la seule phase
+              du LT).
+            </li>
+          </ul>
+          <p>
+            Le calcul utilise la <strong>gamme</strong> du LT dans l’ERP
+            (<code>LCTC</code> : temps de réglage + temps unitaire × quantité lancée), puis
+            soustrait le temps déjà pointé dans <strong>SILOG</strong> (<code>ETEMPS</code>)
+            et les durées saisies sur tablette pas encore transmises
+            (<code>ABTEMPS_OPERATEURS</code>, statuts autres que Transmis / refusé).
+          </p>
+          <p>
+            Si le temps dépasse la gamme, la valeur s’affiche en
+            <strong>dépassé (+durée)</strong> (couleur orange).
+          </p>
+          <span class="step-ok-label">Quand ça marche</span>
+          <figure class="step-shot">
+            <img src="images/operateur-10-temps-restant.png" alt="Temps restant LT et étape" loading="lazy">
+            <figcaption>
+              Exemple <strong>LT2600888</strong> : <strong>Total LT</strong> et
+              <strong>Temps restant étape</strong> (ici identiques car une seule phase).
+              À droite : l’encadré « Temps restant étape » avec la durée (ex. 04:19:12).
+            </figcaption>
+          </figure>
+          <div class="step-fail">
+            <span class="step-fail-label">Si ça ne marche pas</span>
+            <p>
+              <strong>Pourquoi :</strong> le LT n’est pas validé, la gamme LCTC n’a pas de
+              temps renseigné (temps poste / réglage à 0), ou la page n’est pas à jour
+              (cache navigateur, ancienne version du site).
+            </p>
+            <p>
+              <strong>Que faire :</strong> valider le LT (flèche du clavier sur tablette),
+              actualiser la page (Ctrl+F5), vérifier l’étape choisie si le LT est multi-phases.
+              Si « gamme LCTC sans temps » s’affiche pour le Total LT, la gamme ERP est vide :
+              prévenir méthodes / planning.
+            </p>
+          </div>
+          <p class="note">
+            Changer l’étape dans la liste met à jour le <strong>Temps restant étape</strong>
+            sans ressaisir le LT. Le <strong>Total LT</strong> reste global au lancement.
+          </p>
         </div>
 
         <div class="step-block">
