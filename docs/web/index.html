@@ -440,17 +440,18 @@
           <h3>4. Lire le détail dans la section Contrôles</h3>
           <p>
             Après la validation du LT, la section Contrôles affiche le détail du lancement :
-            numéro LT, article, désignation, et un message du type
-            « Lancement validé… Prêt à démarrer ». C’est le moment de vérifier que vous êtes
-            bien sur le bon travail avant de lancer le chronomètre.
+            numéro LT, article, désignation, le message
+            « Lancement validé… Prêt à démarrer », ainsi que le <strong>Total LT</strong>
+            (temps restant global) et l’encadré <strong>Temps restant étape</strong> à droite
+            des boutons.
           </p>
           <span class="step-ok-label">Quand ça marche</span>
           <figure class="step-shot">
-            <img src="images/operateur-04-controles.png" alt="Section Contrôles" loading="lazy">
+            <img src="images/operateur-04-controles.png" alt="Section Contrôles avec temps restant" loading="lazy">
             <figcaption>
-              Contrôles OK : le détail du LT est visible, et les boutons Démarrer / Pause /
-              Terminer sont prêts. Le <strong>temps restant</strong> apparaît juste après
-              (voir étape suivante).
+              Exemple <strong>LT2600146</strong> : détail du LT, ligne <strong>Total LT</strong>
+              (ex. 08:10:59), boutons Démarrer / Pause / Terminer, et encadré
+              <strong>Temps restant étape</strong> à droite (même durée si une seule phase).
             </figcaption>
           </figure>
           <div class="step-fail">
@@ -499,9 +500,9 @@
           <figure class="step-shot">
             <img src="images/operateur-10-temps-restant.png" alt="Temps restant LT et étape" loading="lazy">
             <figcaption>
-              Exemple <strong>LT2600888</strong> : <strong>Total LT</strong> et
-              <strong>Temps restant étape</strong> (ici identiques car une seule phase).
-              À droite : l’encadré « Temps restant étape » avec la durée (ex. 04:19:12).
+              Exemple <strong>LT2600146</strong> : <strong>Total LT</strong> sous le détail du
+              lancement, <strong>Temps restant étape</strong> dans l’encadré à droite des
+              boutons (ici 08:10:59 — une seule phase, les deux valeurs sont identiques).
             </figcaption>
           </figure>
           <div class="step-fail">
@@ -592,14 +593,21 @@
           </p>
           <span class="step-ok-label">Quand ça marche</span>
           <figure class="step-shot">
-            <img src="images/operateur-05-boutons-attente.png" alt="Avant de démarrer" loading="lazy">
-            <figcaption>Statut En attente : cliquez sur <strong>Démarrer</strong> (vert) pour lancer le temps.</figcaption>
+            <img src="images/operateur-05-boutons-attente.png" alt="Contrôles avant démarrage" loading="lazy">
+            <figcaption>
+              Avant <strong>Démarrer</strong> : le chronomètre est à 00:00:00 (statut
+              « En attente »). Le <strong>Total LT</strong> et le
+              <strong>Temps restant étape</strong> sont déjà visibles pour vérifier la gamme
+              ERP avant de lancer le temps.
+            </figcaption>
           </figure>
           <figure class="step-shot">
-            <img src="images/operateur-06-en-cours.png" alt="En cours" loading="lazy">
+            <img src="images/operateur-06-en-cours.png" alt="Contrôles en cours ou terminé" loading="lazy">
             <figcaption>
-              Statut En cours : le chronomètre tourne, et le pointage apparaît dans
-              Mon Historique.
+              Pendant ou après le travail : le chronomètre affiche la durée de la session
+              (ex. <strong>LT2600888</strong> — 04:19:12 restant étape). Les indicateurs
+              <strong>Total LT</strong> / <strong>Temps restant étape</strong> restent affichés
+              tant que le LT est validé dans Contrôles.
             </figcaption>
           </figure>
           <div class="step-fail">
