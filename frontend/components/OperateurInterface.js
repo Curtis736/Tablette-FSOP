@@ -656,13 +656,15 @@ class OperateurInterface {
         return null;
     }
 
-    hideOperationSteps() {
+    hideOperationSteps(clearTempsRestant = false) {
         if (this.operationStepGroup) this.operationStepGroup.style.display = 'none';
         if (this.operationStepSelect) {
             this.operationStepSelect.innerHTML = '<option value="">Choisir une étape (Phase)</option>';
         }
-        this.tempsRestantData = null;
-        this.updateTempsRestantDisplay();
+        if (clearTempsRestant) {
+            this.tempsRestantData = null;
+            this.updateTempsRestantDisplay();
+        }
     }
 
     formatTempsRestantLabel(restantH) {
@@ -680,8 +682,11 @@ class OperateurInterface {
         if (!this.tempsRestantBlock) return;
 
         const totalTheo = Number(data?.total?.theoH);
+        const totalConsomme = Number(data?.total?.consommeH);
         const hasTheo = Number.isFinite(totalTheo) && totalTheo > 0;
-        if (!data || !hasTheo) {
+        const hasConsomme = Number.isFinite(totalConsomme) && totalConsomme > 0;
+        const hasEtapes = Array.isArray(data?.etapes) && data.etapes.length > 0;
+        if (!data || (!hasTheo && !hasConsomme && !hasEtapes)) {
             this.tempsRestantBlock.style.display = 'none';
             if (this.tempsRestantEtapeDisplay) this.tempsRestantEtapeDisplay.textContent = '—';
             if (this.tempsRestantTotalDisplay) this.tempsRestantTotalDisplay.textContent = '—';
@@ -691,8 +696,13 @@ class OperateurInterface {
         this.tempsRestantBlock.style.display = 'block';
 
         if (this.tempsRestantTotalDisplay) {
-            this.tempsRestantTotalDisplay.textContent = this.formatTempsRestantLabel(data.total?.restantH);
-            this.tempsRestantTotalDisplay.classList.toggle('temps-restant-overrun', Number(data.total?.restantH) < 0);
+            if (hasTheo) {
+                this.tempsRestantTotalDisplay.textContent = this.formatTempsRestantLabel(data.total?.restantH);
+                this.tempsRestantTotalDisplay.classList.toggle('temps-restant-overrun', Number(data.total?.restantH) < 0);
+            } else {
+                this.tempsRestantTotalDisplay.textContent = 'gamme LCTC sans temps';
+                this.tempsRestantTotalDisplay.classList.remove('temps-restant-overrun');
+            }
         }
 
         const selectedStep = this.operationStepSelect
@@ -719,12 +729,13 @@ class OperateurInterface {
     renderOperationSteps(payload) {
         const steps = Array.isArray(payload?.steps) ? payload.steps : [];
         this.tempsRestantData = payload?.tempsRestant || null;
+        this.updateTempsRestantDisplay();
+
         if (!this.operationStepGroup || !this.operationStepSelect) {
-            this.updateTempsRestantDisplay();
             return;
         }
         if (!steps.length) {
-            this.hideOperationSteps();
+            this.hideOperationSteps(false);
             return;
         }
 
@@ -769,15 +780,19 @@ class OperateurInterface {
     async loadOperationStepsForLaunch(lancementCode) {
         const code = String(lancementCode || '').trim().toUpperCase();
         if (!/^LT\d{7,8}$/.test(code)) {
-            this.hideOperationSteps();
+            this.hideOperationSteps(true);
             return;
         }
         try {
             const payload = await this.apiService.getLancementSteps(code);
+            if (!payload?.success && payload?.error) {
+                console.warn('Étapes LT:', payload.error);
+            }
             this.renderOperationSteps(payload);
         } catch (e) {
-            // Non bloquant: si l'API ne répond pas, on cache juste le select
-            this.hideOperationSteps();
+            // Non bloquant: masquer le select sans effacer le temps restant déjà affiché
+            console.warn('Étapes / temps restant indisponibles:', e?.message || e);
+            this.hideOperationSteps(false);
         }
     }
 
@@ -1883,7 +1898,7 @@ class OperateurInterface {
             // Gérer les différents types d'erreurs
             console.error('Erreur validation lancement:', error);
             this.currentLancement = null;
-            this.hideOperationSteps();
+            this.hideOperationSteps(true);
             
             if (error.status === 409) {
                 // Conflit : lancement déjà en cours par un autre opérateur
@@ -2255,7 +2270,7 @@ class OperateurInterface {
             this.lancementInput.placeholder = 'Saisir un nouveau code de lancement...';
         }
         if (this.controlsSection) this.controlsSection.style.display = 'none';
-        this.hideOperationSteps();
+        this.hideOperationSteps(true);
         this.enforceNumericLancementInput(false);
     }
 

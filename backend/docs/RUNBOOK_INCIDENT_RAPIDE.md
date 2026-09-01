@@ -41,12 +41,25 @@ ALERTS_ENABLED=true
 ```
 
 ```bash
-sudo chmod +x /home/Tablette-FSOP/docker/scripts/*.sh
-sudo cp /home/Tablette-FSOP/docker/systemd/sedi-backend-health.* /etc/systemd/system/
-sudo cp /home/Tablette-FSOP/docker/systemd/sedi-watchdog.* /etc/systemd/system/
-sudo cp /home/Tablette-FSOP/docker/systemd/sedi-backup.* /etc/systemd/system/
+# Adapter FSOP_ROOT si le clone n'est pas /home/Tablette-FSOP (ex. /home/maintenance/tablette_better)
+cd /home/Tablette-FSOP   # ou le chemin réel du clone
+sudo chmod +x docker/scripts/install-systemd-watchdog.sh docker/scripts/*.sh
+sudo ./docker/scripts/install-systemd-watchdog.sh
+```
+
+Le script installe health + CIFS + watchdog et adapte les chemins au clone courant.
+
+Optionnel dans `docker/.env` :
+```
+AUTO_RESTART_BACKEND=true
+TEAMS_WEBHOOK_URL=https://outlook.office.com/webhook/...
+```
+
+Backup (séparé) :
+```bash
+sudo cp docker/systemd/sedi-backup.* /etc/systemd/system/
 sudo systemctl daemon-reload
-sudo systemctl enable --now sedi-backend-health.timer sedi-watchdog.timer sedi-backup.timer
+sudo systemctl enable --now sedi-backup.timer
 ```
 
 Test manuel :

@@ -14,9 +14,25 @@ function round3(n) {
     return Math.round(x * 1000) / 1000;
 }
 
+/** Convertit TempsPoste / TempsReglage LCTC en heures selon UniteTxAffectation. */
+function toHoursFromLctc(value, unite) {
+    const v = Number(value);
+    if (!Number.isFinite(v)) return 0;
+    const u = String(unite || '').trim().toUpperCase();
+    if (u === 'M' || u === 'MIN' || u === 'MN' || u === 'MINUTE' || u === 'MINUTES') {
+        return v / 60;
+    }
+    if (u === 'S' || u === 'SEC' || u === 'SECONDE' || u === 'SECONDES') {
+        return v / 3600;
+    }
+    // H, HEURE, HR, vide… : déjà en heures (convention SILOG / ETEMPS.Duree*)
+    return v;
+}
+
 function buildStepPayload(row) {
-    const tempsPosteH = round3(row.TempsPoste);
-    const tempsReglageH = round3(row.TempsReglage);
+    const unite = String(row.UniteTxAffectation || '').trim();
+    const tempsPosteH = round3(toHoursFromLctc(row.TempsPoste, unite));
+    const tempsReglageH = round3(toHoursFromLctc(row.TempsReglage, unite));
     const quantiteLancee = round3(row.QuantiteLancee);
     const theoH = round3(tempsReglageH + tempsPosteH * quantiteLancee);
     const scanneSilogH = round3(row.ScanneSilogH);
@@ -37,7 +53,7 @@ function buildStepPayload(row) {
         phase,
         codeRubrique,
         codeOperation,
-        unite: String(row.UniteTxAffectation || '').trim() || null,
+        unite: unite || null,
         tempsPosteH,
         tempsReglageH,
         quantiteLancee,
@@ -100,6 +116,8 @@ class LancementTempsRestantService {
             ) P
             WHERE C.CodeLancement = @lancementCode
               AND C.TypeRubrique = 'O'
+              AND LTRIM(RTRIM(ISNULL(C.CodeOperation, ''))) <> ''
+              AND UPPER(LTRIM(RTRIM(C.CodeOperation))) COLLATE Latin1_General_CI_AI NOT IN ('SECHAGE', 'ETUVAGE')
             ORDER BY LTRIM(RTRIM(C.Phase)), LTRIM(RTRIM(C.CodeRubrique))
         `, { lancementCode: code });
 

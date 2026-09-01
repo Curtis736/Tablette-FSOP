@@ -1,7 +1,7 @@
 // Classe principale de l'application
 import { FRONTEND_RELEASE } from '../version.js';
 // ?v= aligné sur FRONTEND_RELEASE (frontend/version.js) pour invalidation navigateur
-import OperateurInterface from './OperateurInterface.js?v=20260826.1';
+import OperateurInterface from './OperateurInterface.js?v=20260901.1';
 import AdminPage from './AdminPage.js?v=20260512.1';
 import ApiService from '../services/ApiService.js?v=20260608.1';
 import StorageService from '../services/StorageService.js?v=20260512.1';

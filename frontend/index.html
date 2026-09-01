@@ -8,7 +8,7 @@
     <meta http-equiv="Pragma" content="no-cache">
     <title>SEDI - Interface Tablette</title>
     <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📱</text></svg>">
-    <link rel="stylesheet" href="assets/styles.css?v=20260512.1">
+    <link rel="stylesheet" href="assets/styles.css?v=20260901.1">
     <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
     <!-- ZXing pour le scan de code-barres (local, pas de dépendance Internet) -->
     <script defer src="assets/vendor/zxing.min.js?v=20260706.1"></script>
@@ -102,6 +102,7 @@
                             autocomplete="off"
                             value="LT"
                             inputmode="numeric"
+                            enterkeyhint="go"
                             pattern="[0-9]*"
                             maxlength="10"
                             aria-label="Saisir les chiffres du code de lancement ou scanner avec une douchette"
@@ -115,7 +116,7 @@
                     </div>
                     <div id="lancementList" class="lancement-list" style="display: none;"></div>
                     <div class="help-text">
-                        <small id="lancementHelpText"><i class="fas fa-info-circle"></i> "LT" est pré-rempli — saisissez les chiffres ou scannez avec une douchette Bluetooth/USB (ex: LT2501145)</small>
+                        <small id="lancementHelpText"><i class="fas fa-info-circle"></i> « LT » est pré-rempli — saisissez les chiffres, puis appuyez sur la flèche du clavier (↵) pour valider. Douchette Bluetooth/USB possible (ex. LT2501145).</small>
                     </div>
                 </div>
 
@@ -541,6 +542,6 @@
         </div>
     </div>
 
-    <script type="module" src="index.js?v=20260826.1"></script>
+    <script type="module" src="index.js?v=20260901.1"></script>
 </body>
 </html>
