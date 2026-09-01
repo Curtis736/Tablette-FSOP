@@ -258,7 +258,6 @@ class OperateurInterface {
         this.operationStepGroup = document.getElementById('operationStepGroup');
         this.operationStepSelect = document.getElementById('operationStepSelect');
         this.tempsRestantBlock = document.getElementById('tempsRestantBlock');
-        this.tempsRestantEtapeDisplay = document.getElementById('tempsRestantEtapeDisplay');
         this.tempsRestantTotalDisplay = document.getElementById('tempsRestantTotalDisplay');
         this.startBtn = document.getElementById('startBtn');
         this.pauseBtn = document.getElementById('pauseBtn');
@@ -688,7 +687,10 @@ class OperateurInterface {
         const hasEtapes = Array.isArray(data?.etapes) && data.etapes.length > 0;
         if (!data || (!hasTheo && !hasConsomme && !hasEtapes)) {
             this.tempsRestantBlock.style.display = 'none';
-            if (this.tempsRestantEtapeDisplay) this.tempsRestantEtapeDisplay.textContent = '—';
+            if (this.endTimeDisplay) {
+                this.endTimeDisplay.textContent = '—';
+                this.endTimeDisplay.classList.remove('temps-restant-overrun');
+            }
             if (this.tempsRestantTotalDisplay) this.tempsRestantTotalDisplay.textContent = '—';
             return;
         }
@@ -715,13 +717,13 @@ class OperateurInterface {
             etape = data.etapes.find(s => Number(s?.theoH) > 0) || data.etapes[0] || null;
         }
 
-        if (this.tempsRestantEtapeDisplay) {
+        if (this.endTimeDisplay) {
             if (etape && Number(etape.theoH) > 0) {
-                this.tempsRestantEtapeDisplay.textContent = this.formatTempsRestantLabel(etape.restantH);
-                this.tempsRestantEtapeDisplay.classList.toggle('temps-restant-overrun', Number(etape.restantH) < 0);
+                this.endTimeDisplay.textContent = this.formatTempsRestantLabel(etape.restantH);
+                this.endTimeDisplay.classList.toggle('temps-restant-overrun', Number(etape.restantH) < 0);
             } else {
-                this.tempsRestantEtapeDisplay.textContent = 'n/a';
-                this.tempsRestantEtapeDisplay.classList.remove('temps-restant-overrun');
+                this.endTimeDisplay.textContent = 'n/a';
+                this.endTimeDisplay.classList.remove('temps-restant-overrun');
             }
         }
     }
@@ -2071,7 +2073,6 @@ class OperateurInterface {
         this.lancementInput.disabled = true;
         // Mettre à jour l’affichage du temps immédiatement (sinon il reste à 00:00:00 jusqu’au premier tick)
         this.updateTimer();
-        this.updateEndTime();
     }
 
     resumePausedOperation(operation) {
@@ -2229,8 +2230,6 @@ class OperateurInterface {
         if (!this.canPerformAction()) return;
 
         try {
-            this.setFinalEndTime();
-
             const operatorCode = this.operator.code || this.operator.id;
             const selectedStep = this.operationStepSelect ? String(this.operationStepSelect.value || '').trim() : '';
             const result = await this.apiService.stopOperation(
@@ -2326,7 +2325,10 @@ class OperateurInterface {
         if (this.pauseBtn) this.pauseBtn.disabled = true;
         if (this.stopBtn) this.stopBtn.disabled = true;
         if (this.statusDisplay) this.statusDisplay.textContent = 'En attente';
-        if (this.endTimeDisplay) this.endTimeDisplay.textContent = '--:--';
+        if (this.endTimeDisplay) {
+            this.endTimeDisplay.textContent = '—';
+            this.endTimeDisplay.classList.remove('temps-restant-overrun');
+        }
     }
 
     updateTimer() {
@@ -2336,9 +2338,6 @@ class OperateurInterface {
         const elapsed = Math.floor((now - this.startTime - this.totalPausedTime) / 1000);
         this.timerDisplay.textContent = TimeUtils.formatDuration(Math.max(0, elapsed));
         this.updateShiftCountdownDisplay();
-        
-        // Mettre à jour l'heure de fin estimée
-        this.updateEndTime();
     }
 
     parseOperationDurationToSeconds(operation = {}) {
@@ -2396,43 +2395,6 @@ class OperateurInterface {
             this.shiftRemainingDisplay.classList.toggle('shift-target-reached', targetReached);
             this.shiftRemainingDisplay.classList.toggle('shift-target-pending', !targetReached);
         }
-    }
-
-    updateEndTime() {
-        if (!this.endTimeDisplay) {
-            console.warn('⚠️ endTimeDisplay non trouvé, impossible de mettre à jour l\'heure de fin');
-            return;
-        }
-        
-        if (!this.isRunning || !this.startTime) {
-            this.endTimeDisplay.textContent = '--:--';
-            return;
-        }
-        
-        // Afficher l'heure actuelle comme heure de fin en cours
-        const now = new Date();
-        
-        // Formater l'heure de fin
-        this.endTimeDisplay.textContent = now.toLocaleTimeString('fr-FR', {
-            timeZone: 'Europe/Paris',
-            hour: '2-digit',
-            minute: '2-digit'
-        });
-    }
-
-    setFinalEndTime() {
-        if (!this.endTimeDisplay) {
-            console.warn('⚠️ endTimeDisplay non trouvé, impossible de définir l\'heure de fin');
-            return;
-        }
-        
-        // Afficher l'heure de fin définitive quand l'opération se termine
-        const now = new Date();
-        this.endTimeDisplay.textContent = now.toLocaleTimeString('fr-FR', {
-            timeZone: 'Europe/Paris',
-            hour: '2-digit',
-            minute: '2-digit'
-        });
     }
 
     // Méthodes de compatibilité

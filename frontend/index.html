@@ -8,7 +8,7 @@
     <meta http-equiv="Pragma" content="no-cache">
     <title>SEDI - Interface Tablette</title>
     <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📱</text></svg>">
-    <link rel="stylesheet" href="assets/styles.css?v=20260901.1">
+    <link rel="stylesheet" href="assets/styles.css?v=20260901.2">
     <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
     <!-- ZXing pour le scan de code-barres (local, pas de dépendance Internet) -->
     <script defer src="assets/vendor/zxing.min.js?v=20260706.1"></script>
@@ -142,10 +142,6 @@
                         <p id="lancementDetails"></p>
                         <div id="tempsRestantBlock" class="temps-restant-block" style="display:none;" aria-live="polite">
                             <div class="temps-restant-row">
-                                <span class="temps-restant-label">Temps restant étape</span>
-                                <span class="temps-restant-value" id="tempsRestantEtapeDisplay">—</span>
-                            </div>
-                            <div class="temps-restant-row">
                                 <span class="temps-restant-label">Total LT</span>
                                 <span class="temps-restant-value" id="tempsRestantTotalDisplay">—</span>
                             </div>
@@ -174,8 +170,8 @@
                             </button>
                         </div>
                         <div class="end-time-display">
-                            <div class="end-time-label">Heure de fin prévue :</div>
-                            <div class="end-time-value" id="endTimeDisplay">--:--</div>
+                            <div class="end-time-label">Temps restant étape</div>
+                            <div class="end-time-value" id="endTimeDisplay">—</div>
                         </div>
                     </div>
                     <div class="timer">
@@ -542,6 +538,6 @@
         </div>
     </div>
 
-    <script type="module" src="index.js?v=20260901.1"></script>
+    <script type="module" src="index.js?v=20260901.2"></script>
 </body>
 </html>

@@ -482,7 +482,6 @@ describe('OperateurInterface', () => {
             operInterface.currentLancement = { CodeLancement: 'LT1234567' };
             operInterface.isRunning = true;
             operInterface.canPerformAction = vi.fn(() => true);
-            operInterface.setFinalEndTime = vi.fn();
             operInterface.stopTimer = vi.fn();
             operInterface.resetControls = vi.fn();
             operInterface.loadOperatorHistory = vi.fn();
@@ -494,7 +493,6 @@ describe('OperateurInterface', () => {
             await operInterface.handleStop();
             
             expect(mockApiService.stopOperation).toHaveBeenCalledWith('OP001', 'LT1234567', {});
-            expect(operInterface.setFinalEndTime).toHaveBeenCalled();
             expect(operInterface.resetControls).toHaveBeenCalled();
             expect(mockNotificationManager.success).toHaveBeenCalled();
         });
