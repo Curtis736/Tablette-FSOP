@@ -22,9 +22,9 @@ function parseArgs(argv) {
     else if (a === '--lancement-prefix') out.lancementPrefix = String(argv[++i] || '26');
     else if (a === '--code-operation') out.codeOperation = String(argv[++i] || '');
     else if (a === '--no-auto-code-operation') out.autoCodeOperation = false;
-    else if (a === '--limit') out.limit = Math.max(1, parseInt(argv[++i] || '500', 10) || 500);
-    else if (a === '--max-operators') out.maxOperators = Math.max(0, parseInt(argv[++i] || '0', 10) || 0);
-    else if (a === '--concurrency') out.concurrency = Math.max(1, parseInt(argv[++i] || '40', 10) || 40);
+    else if (a === '--limit') out.limit = Math.max(1, Number.parseInt(argv[++i] || '500', 10) || 500);
+    else if (a === '--max-operators') out.maxOperators = Math.max(0, Number.parseInt(argv[++i] || '0', 10) || 0);
+    else if (a === '--concurrency') out.concurrency = Math.max(1, Number.parseInt(argv[++i] || '40', 10) || 40);
     else if (a === '--dry-run') out.dryRun = true;
   }
   return out;

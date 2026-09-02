@@ -34,7 +34,11 @@ class FactorialService {
     }
 
     static _baseApiUrl() {
-        return (process.env.FACTORIAL_API_BASE_URL || '').replace(/\/+$/, '');
+        let base = process.env.FACTORIAL_API_BASE_URL || '';
+        while (base.endsWith('/')) {
+            base = base.slice(0, -1);
+        }
+        return base;
     }
 
     static isEnabled() {
@@ -50,8 +54,8 @@ class FactorialService {
         const template = process.env.FACTORIAL_STATUS_ENDPOINT_TEMPLATE || '/employees/{operatorId}/attendance?date={date}';
 
         const path = template
-            .replace(/\{operatorId\}/g, encodeURIComponent(String(operatorId)))
-            .replace(/\{date\}/g, encodeURIComponent(String(dateKey)));
+            .replaceAll('{operatorId}', encodeURIComponent(String(operatorId)))
+            .replaceAll('{date}', encodeURIComponent(String(dateKey)));
 
         return `${baseUrl}${path.startsWith('/') ? path : `/${path}`}`;
     }

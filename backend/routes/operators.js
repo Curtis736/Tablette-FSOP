@@ -12,6 +12,7 @@ const SessionService = require('../services/SessionService');
 const AuditService = require('../services/AuditService');
 const { generateRequestId } = require('../middleware/audit');
 const OperationStopService = require('../services/OperationStopService');
+const LancementTempsRestantService = require('../services/LancementTempsRestantService');
 
 // ⚡ OPTIMISATION : Cache pour les validations de lancement (évite les requêtes répétées)
 const lancementCache = new Map();
@@ -36,7 +37,7 @@ function sendDbTimeout(res, context) {
 }
 
 function getOperatorHistoryDays() {
-    const raw = parseInt(process.env.OPERATOR_HISTORY_DAYS || '1', 10);
+    const raw = Number.parseInt(process.env.OPERATOR_HISTORY_DAYS || '1', 10);
     if (!Number.isFinite(raw) || raw <= 0) return 1;
     return Math.min(raw, 7);
 }
@@ -50,7 +51,7 @@ function getOperatorCurrentLookbackDays() {
 function getCurrentStateMaxAgeHours() {
     // Anti-ghost guard: if last non-finished event is too old, ignore it.
     // Must remain permissive enough to allow logout/reconnect resume on same shift.
-    const raw = parseInt(process.env.OPERATOR_CURRENT_MAX_AGE_HOURS || '16', 10);
+    const raw = Number.parseInt(process.env.OPERATOR_CURRENT_MAX_AGE_HOURS || '16', 10);
     if (!Number.isFinite(raw) || raw <= 0) return 16;
     return Math.min(raw, 72);
 }
@@ -79,7 +80,7 @@ function formatDateTime(dateTime) {
         
         // Sinon, traiter comme une date complète
         const date = new Date(dateTime);
-        if (isNaN(date.getTime())) return null;
+        if (Number.isNaN(date.getTime())) return null;
         
         return date.toLocaleTimeString('fr-FR', {
             timeZone: 'Europe/Paris',
@@ -308,7 +309,7 @@ router.get('/:code', async (req, res) => {
 router.get('/', async (req, res) => {
     try {
         const { search, limit = 100 } = req.query;
-        const limitNum = Math.max(1, Math.min(parseInt(limit, 10) || 100, 500));
+        const limitNum = Math.max(1, Math.min(Number.parseInt(limit, 10) || 100, 500));
         
         // Utiliser la vue V_RESSOURC au lieu d'accéder directement à RESSOURC
         let query = `
@@ -550,7 +551,7 @@ router.get('/lancements/search', async (req, res) => {
         console.log(`🔍 Recherche de lancements avec le terme: ${term}`);
         
         const searchTerm = `%${term}%`;
-        const rawLimit = parseInt(limit, 10);
+        const rawLimit = Number.parseInt(limit, 10);
         const limitNum = Number.isFinite(rawLimit)
             ? Math.min(Math.max(rawLimit, 1), 100)
             : 10;
@@ -694,12 +695,12 @@ function buildInParams(values, prefix) {
     return { params, placeholders: placeholders.join(', ') };
 }
 
-async function getFabricationMapForOperations(ops) {
-    // Map: `${CodeLancement}_${Phase}_${CodeRubrique}` -> "CodeOperation" (or joined list)
-    const launches = [...new Set((ops || []).map(o => String(o?.lancementCode || o?.CodeLancement || '').trim()).filter(Boolean))];
-    if (launches.length === 0) return new Map();
+async function getLctcStepsByLaunch(launches) {
+    const unique = [...new Set((launches || []).map(x => String(x || '').trim()).filter(Boolean))];
+    const byLaunch = new Map();
+    if (unique.length === 0) return byLaunch;
 
-    const { params, placeholders } = buildInParams(launches, 'lc');
+    const { params, placeholders } = buildInParams(unique, 'lc');
     const rows = await executeQuery(`
         SELECT DISTINCT
             C.CodeLancement,
@@ -710,27 +711,39 @@ async function getFabricationMapForOperations(ops) {
         WHERE C.TypeRubrique = 'O'
           AND C.CodeOperation IS NOT NULL
           AND LTRIM(RTRIM(C.CodeOperation)) <> ''
-          -- Ne jamais proposer "Séchage" / "ÉtuVage" (accents/casse ignorés)
           AND UPPER(LTRIM(RTRIM(C.CodeOperation))) COLLATE Latin1_General_CI_AI NOT IN ('SECHAGE', 'ETUVAGE')
           AND C.CodeLancement IN (${placeholders})
+        ORDER BY C.CodeLancement, LTRIM(RTRIM(C.Phase)), LTRIM(RTRIM(C.CodeRubrique))
     `, params);
 
-    const acc = new Map(); // key -> Set
     (rows || []).forEach(r => {
         const lc = String(r?.CodeLancement || '').trim();
         const ph = String(r?.Phase || '').trim();
         const rub = String(r?.CodeRubrique || '').trim();
         const op = String(r?.CodeOperation || '').trim();
-        if (!lc || !op) return;
-        const key = `${lc}_${ph}_${rub}`;
-        if (!acc.has(key)) acc.set(key, new Set());
-        acc.get(key).add(op);
+        if (!lc || !ph || !op) return;
+        if (!byLaunch.has(lc)) byLaunch.set(lc, []);
+        byLaunch.get(lc).push({ Phase: ph, CodeRubrique: rub, CodeOperation: op });
     });
+    return byLaunch;
+}
 
+async function getFabricationMapForOperations(ops) {
+    // Map: `${CodeLancement}_${Phase}_${CodeRubrique}` -> "CodeOperation" (or joined list)
+    const launches = [...new Set((ops || []).map(o => String(o?.lancementCode || o?.CodeLancement || '').trim()).filter(Boolean))];
+    const byLaunch = await getLctcStepsByLaunch(launches);
     const out = new Map();
-    acc.forEach((set, key) => {
-        out.set(key, Array.from(set).join(' / '));
+    byLaunch.forEach((steps, lc) => {
+        const acc = new Map();
+        steps.forEach(s => {
+            const key = `${lc}_${s.Phase}_${s.CodeRubrique}`;
+            if (!acc.has(key)) acc.set(key, new Set());
+            acc.get(key).add(s.CodeOperation);
+        });
+        acc.forEach((set, key) => out.set(key, Array.from(set).join(' / ')));
     });
+    // Also stash steps for phase resolution
+    out._byLaunch = byLaunch;
     return out;
 }
 
@@ -756,6 +769,15 @@ router.get('/steps/:lancementCode', async (req, res) => {
         });
         const uniqueOps = [...new Set((steps || []).map(s => String(s?.CodeOperation || '').trim()).filter(Boolean))];
         const uniqueSteps = [...new Set((stepsWithLabel || []).map(s => String(s?.StepId || '').trim()).filter(Boolean))];
+
+        let tempsRestant = null;
+        try {
+            tempsRestant = await LancementTempsRestantService.getTempsRestant(lancementCode);
+        } catch (tempsErr) {
+            console.warn(`⚠️ Temps restant indisponible pour ${lancementCode}:`, tempsErr?.message || tempsErr);
+            tempsRestant = null;
+        }
+
         return res.json({
             success: true,
             lancementCode,
@@ -764,7 +786,8 @@ router.get('/steps/:lancementCode', async (req, res) => {
             uniqueSteps,
             stepCount: uniqueSteps.length,
             operationCount: uniqueOps.length,
-            count: stepsWithLabel.length
+            count: stepsWithLabel.length,
+            tempsRestant
         });
     } catch (error) {
         console.error('❌ Erreur récupération étapes LCTC:', error);
@@ -1590,8 +1613,8 @@ router.get('/:operatorCode/operations',
     try {
         const { operatorCode } = req.params;
         const { page = 1, limit = 50 } = req.query; // ⚡ OPTIMISATION : Pagination
-        const pageNum = parseInt(page, 10);
-        const limitNum = Math.min(parseInt(limit, 10), 100); // Max 100 par page
+        const pageNum = Number.parseInt(page, 10);
+        const limitNum = Math.min(Number.parseInt(limit, 10), 100); // Max 100 par page
         const historyDays = getOperatorHistoryDays();
         
         console.log(`🔍 Récupération de l'historique pour l'opérateur ${operatorCode} (page ${pageNum}, limit ${limitNum}, historyDays=${historyDays})...`);
@@ -1600,7 +1623,7 @@ router.get('/:operatorCode/operations',
         // 🔒 FILTRE IMPORTANT : Exclure les lancements transférés (StatutTraitement = 'T')
         // L'opérateur doit voir ses lancements tant qu'ils n'ont pas été transférés par l'admin
         // ⚡ OPTIMISATION : Utiliser LEFT JOIN avec sous-requête dérivée au lieu de sous-requête corrélée
-        // IMPORTANT: Convertir HeureDebut et HeureFin en VARCHAR(5) (HH:mm) directement dans SQL
+        // IMPORTANT: Convertir HeureDebut et HeureFin en VARCHAR(8) (HH:mm:ss) directement dans SQL
         // pour éviter les problèmes de timezone lors de la conversion par Node.js
         const eventsQuery = `
             SELECT 
@@ -1611,8 +1634,8 @@ router.get('/:operatorCode/operations',
                 h.OperatorCode,
                 h.CodeRubrique,
                 h.Statut,
-                CONVERT(VARCHAR(5), h.HeureDebut, 108) AS HeureDebut,
-                CONVERT(VARCHAR(5), h.HeureFin, 108) AS HeureFin,
+                CONVERT(VARCHAR(8), h.HeureDebut, 108) AS HeureDebut,
+                CONVERT(VARCHAR(8), h.HeureFin, 108) AS HeureFin,
                 h.DateCreation,
                 h.CreatedAt,
                 l.DesignationLct1 as Article,
@@ -1624,9 +1647,17 @@ router.get('/:operatorCode/operations',
                 ON t.OperatorCode = h.OperatorCode 
                 AND t.LancementCode = h.CodeLanctImprod
                 AND CAST(t.DateCreation AS DATE) = CAST(h.DateCreation AS DATE)
-                -- IMPORTANT: ne pas cacher une autre étape du même lancement (Phase+CodeRubrique)
-                AND ISNULL(LTRIM(RTRIM(t.Phase)), '') = ISNULL(LTRIM(RTRIM(COALESCE(h.Phase, 'PRODUCTION'))), '')
-                AND ISNULL(LTRIM(RTRIM(t.CodeRubrique)), '') = ISNULL(LTRIM(RTRIM(h.CodeRubrique)), '')
+                -- IMPORTANT: ne pas cacher une autre étape du même lancement (Phase+CodeRubrique).
+                -- Si les clés ERP n'ont pas pu être résolues (V_LCTC muet), t.Phase/t.CodeRubrique
+                -- sont NULL : on retombe sur le rattachement lancement + date.
+                AND (
+                    t.Phase IS NULL
+                    OR ISNULL(LTRIM(RTRIM(t.Phase)), '') = ISNULL(LTRIM(RTRIM(COALESCE(h.Phase, 'PRODUCTION'))), '')
+                )
+                AND (
+                    t.CodeRubrique IS NULL
+                    OR ISNULL(LTRIM(RTRIM(t.CodeRubrique)), '') = ISNULL(LTRIM(RTRIM(h.CodeRubrique)), '')
+                )
             -- ⚡ OPTIMISATION : Utiliser h.Phase directement (plus simple et fiable)
             -- Si Phase n'est pas dans h, on utilise 'PRODUCTION' par défaut
             WHERE h.OperatorCode = @operatorCode
@@ -1647,24 +1678,24 @@ router.get('/:operatorCode/operations',
         const processed = processLancementEventsWithPauses(events);
         const fabricationMap = await getFabricationMapForOperations(processed);
         const allFormattedOperations = processed.map(operation => {
-            // Normaliser les heures pour s'assurer qu'elles sont au format HH:mm uniquement
+            // Normaliser les heures pour s'assurer qu'elles sont au format HH:mm:ss
             let startTime = operation.startTime;
             let endTime = operation.endTime;
             
             // Si startTime contient une date, extraire uniquement l'heure
             if (startTime && typeof startTime === 'string') {
                 // Si format "YYYY-MM-DD HH:mm:ss" ou similaire, extraire l'heure
-                const timeMatch = startTime.match(/(\d{2}:\d{2})(?::\d{2})?/);
+                const timeMatch = startTime.match(/(\d{2}:\d{2}:\d{2}|\d{2}:\d{2})/);
                 if (timeMatch) {
-                    startTime = timeMatch[1]; // Garder uniquement HH:mm
+                    startTime = timeMatch[1].length === 5 ? `${timeMatch[1]}:00` : timeMatch[1];
                 }
             }
             
             // Si endTime contient une date, extraire uniquement l'heure
             if (endTime && typeof endTime === 'string') {
-                const timeMatch = endTime.match(/(\d{2}:\d{2})(?::\d{2})?/);
+                const timeMatch = endTime.match(/(\d{2}:\d{2}:\d{2}|\d{2}:\d{2})/);
                 if (timeMatch) {
-                    endTime = timeMatch[1]; // Garder uniquement HH:mm
+                    endTime = timeMatch[1].length === 5 ? `${timeMatch[1]}:00` : timeMatch[1];
                 }
             }
             
@@ -1697,10 +1728,32 @@ router.get('/:operatorCode/operations',
                 status = statusMap[statusCode] || statusCode;
             }
             
-            const phase = operation.phase || 'PRODUCTION';
-            const codeRubrique = operation.codeRubrique || null;
+            const MARKERS = new Set(['PRODUCTION', 'PAUSE', 'REPRISE', 'TERMINE', 'TERMINÉE', 'ADMIN']);
+            let phase = String(operation.phase || '').trim();
+            let codeRubrique = operation.codeRubrique || null;
+            const opCode = String(operation.operatorId || operation.operatorCode || operatorCode || '').trim();
+            const steps = (fabricationMap._byLaunch && fabricationMap._byLaunch.get(String(operation.lancementCode || '').trim())) || [];
+            if (!phase || MARKERS.has(phase.toUpperCase()) || phase === opCode) {
+                let match = null;
+                const rub = String(codeRubrique || '').trim();
+                if (rub && rub !== opCode) {
+                    match = steps.find(s => s.CodeRubrique === rub) || null;
+                }
+                if (!match && steps.length === 1) match = steps[0];
+                if (!match && steps.length > 0) match = steps[0];
+                if (match) {
+                    phase = match.Phase;
+                    codeRubrique = match.CodeRubrique;
+                } else {
+                    phase = '-';
+                }
+            }
             const fabKey = `${operation.lancementCode}_${String(phase || '').trim()}_${String(codeRubrique || '').trim()}`;
-            const fabrication = fabricationMap.get(fabKey) || operation.codeOperation || operation.fabrication || '-';
+            const fabrication = fabricationMap.get(fabKey)
+                || (steps.filter(s => s.Phase === phase).map(s => s.CodeOperation).filter(Boolean).join(' / '))
+                || operation.codeOperation
+                || operation.fabrication
+                || '-';
             
             return {
                 id: operation.id,
@@ -1774,6 +1827,9 @@ router.get('/current/:operatorCode', authenticateOperator, async (req, res) => {
         if (!activeSession) {
             return res.json({ success: true, data: null });
         }
+
+        // Chaque lecture "opération en cours" prolonge la session (réveil tablette, polling UI).
+        await SessionService.updateLastActivity(operatorCode, activeSession.SessionId);
         
         // Chercher le DERNIER événement de l'opérateur, puis déduire l'état.
         // ⚠️ Important: on ne doit pas filtrer sur Statut IN ('EN_COURS','EN_PAUSE'),

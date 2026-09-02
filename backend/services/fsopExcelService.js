@@ -146,10 +146,10 @@ function normalizeHeaderToTagLike(text) {
     let tag = String(text).trim();
 
     // Convertir "1er", "2ème" → "1", "2", etc.
-    tag = tag.replace(/(\d+)(er|eme|ème|e)/gi, '$1');
+    tag = tag.replace(/(\d+)(?:er|eme|ème|e)/gi, '$1');
 
     // Supprimer le contenu entre parenthèses, mais garder les unités courantes sous forme de suffixe
-    tag = tag.replace(/\(([^)]+)\)/g, (match, content) => {
+    tag = tag.replace(/\(([^)]*)\)/g, (match, content) => {
         if (/mm|db|°c|°f|°|kg|g|m|cm/i.test(content)) {
             return '_' + content.toUpperCase().trim();
         }
@@ -169,7 +169,7 @@ function normalizeHeaderToTagLike(text) {
     tag = tag.replace(/\s+/g, '_').replace(/_+/g, '_');
 
     // Trim underscores
-    tag = tag.replace(/^_+|_+$/g, '');
+    tag = tag.replace(/^_+/, '').replace(/_+$/, '');
 
     return tag;
 }
@@ -347,7 +347,7 @@ function columnNumberToLetter(colNum) {
     let result = '';
     while (colNum > 0) {
         colNum--;
-        result = String.fromCharCode(65 + (colNum % 26)) + result;
+        result = String.fromCodePoint(65 + (colNum % 26)) + result;
         colNum = Math.floor(colNum / 26);
     }
     return result;
@@ -357,7 +357,7 @@ function colLetterToNumber(col) {
     let n = 0;
     const s = String(col || '').toUpperCase();
     for (let i = 0; i < s.length; i++) {
-        const code = s.charCodeAt(i);
+        const code = s.codePointAt(i);
         if (code < 65 || code > 90) return null;
         n = n * 26 + (code - 64);
     }
@@ -369,7 +369,7 @@ function numToColLetter(num) {
     let n = Number(num);
     while (n > 0) {
         n--;
-        result = String.fromCharCode(65 + (n % 26)) + result;
+        result = String.fromCodePoint(65 + (n % 26)) + result;
         n = Math.floor(n / 26);
     }
     return result;
@@ -586,8 +586,8 @@ async function updateExcelCellByXmlDirect(excelPath, sheetName, rowNum, colNum, 
     if (typeof newValue === 'number') {
         valueToWrite = String(newValue);
     } else {
-        const numValue = parseFloat(String(newValue).replace(',', '.'));
-        if (!isNaN(numValue) && isFinite(numValue)) {
+        const numValue = Number.parseFloat(String(newValue).replace(',', '.'));
+        if (!Number.isNaN(numValue) && Number.isFinite(numValue)) {
             valueToWrite = String(numValue);
         } else {
             valueToWrite = String(newValue);
@@ -686,7 +686,7 @@ async function updateExcelCellByXmlDirect(excelPath, sheetName, rowNum, colNum, 
     const cellCloseTag = match[3];
     
     // Supprimer t="s" si présent (shared string)
-    cellOpenTag = cellOpenTag.replace(/\s+t="s"/, '');
+    cellOpenTag = cellOpenTag.replace(/[ \t]+t="s"/, '');
     
     // Modifier la valeur
     let newCellContent = cellContent;
@@ -993,8 +993,8 @@ async function updateExcelWithTaggedMeasures(excelPath, taggedMeasures, options 
                             let cellValue = value;
                             // Essayer de convertir en nombre si c'est un nombre valide
                             if (typeof value === 'string') {
-                                const numValue = parseFloat(value.replace(',', '.'));
-                                if (!isNaN(numValue) && isFinite(numValue)) {
+                                const numValue = Number.parseFloat(value.replace(',', '.'));
+                                if (!Number.isNaN(numValue) && Number.isFinite(numValue)) {
                                     cellValue = numValue;
                                 }
                             }
@@ -1043,8 +1043,8 @@ async function updateExcelWithTaggedMeasures(excelPath, taggedMeasures, options 
                         }
 
                         const sheetName = rangeMatch[1];
-                        const startCell = rangeMatch[2].replace(/\$/g, ''); // Remove $ signs
-                        const endCell = rangeMatch[3] ? rangeMatch[3].replace(/\$/g, '') : startCell;
+                        const startCell = rangeMatch[2].replaceAll('$', ''); // Remove $ signs
+                        const endCell = rangeMatch[3] ? rangeMatch[3].replaceAll('$', '') : startCell;
 
                         const worksheet = workbook.getWorksheet(sheetName);
                         if (!worksheet) {
@@ -1073,8 +1073,8 @@ async function updateExcelWithTaggedMeasures(excelPath, taggedMeasures, options 
                         // Update the cell(s) - convertir en nombre si possible
                         let cellValue = value;
                         if (typeof value === 'string') {
-                            const numValue = parseFloat(value.replace(',', '.'));
-                            if (!isNaN(numValue) && isFinite(numValue)) {
+                            const numValue = Number.parseFloat(value.replace(',', '.'));
+                            if (!Number.isNaN(numValue) && Number.isFinite(numValue)) {
                                 cellValue = numValue;
                             }
                         }
@@ -1401,9 +1401,9 @@ async function validateSerialNumberInMesure(launchNumber, serialNumber, traceRoo
         // Also try variations: with/without spaces, different separators
         const searchPatterns = [
             serialNumberNormalized,
-            serialNumberNormalized.replace(/-/g, ' '),
-            serialNumberNormalized.replace(/-/g, '.'),
-            serialNumberNormalized.replace(/\s+/g, '-')
+            serialNumberNormalized.replaceAll('-', ' '),
+            serialNumberNormalized.replaceAll('-', '.'),
+            serialNumberNormalized.replaceAll(/\s+/g, '-')
         ];
 
         let found = false;

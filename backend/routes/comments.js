@@ -33,8 +33,8 @@ const validateComment = (req, res, next) => {
     
     // Validation de QteNonConforme (optionnel, doit être numérique si fourni)
     if (qteNonConforme !== undefined && qteNonConforme !== null) {
-        const qte = parseFloat(qteNonConforme);
-        if (isNaN(qte) || qte < 0) {
+        const qte = Number.parseFloat(qteNonConforme);
+        if (Number.isNaN(qte) || qte < 0) {
             return res.status(400).json({
                 success: false,
                 error: 'QteNonConforme doit être un nombre positif ou nul'
@@ -72,7 +72,7 @@ router.post('/', validateComment, async (req, res) => {
         
         // Ajouter QteNonConforme si fourni
         if (qteNonConforme !== undefined && qteNonConforme !== null) {
-            commentData.qteNonConforme = parseFloat(qteNonConforme);
+            commentData.qteNonConforme = Number.parseFloat(qteNonConforme);
         }
         
         // Ajouter Statut si fourni (normaliser en majuscules)
@@ -135,7 +135,7 @@ router.get('/operator/:operatorCode', async (req, res) => {
         
         console.log(`🔍 Récupération des commentaires pour l'opérateur ${operatorCode}`);
         
-        const result = await Comment.getByOperator(operatorCode, parseInt(limit));
+        const result = await Comment.getByOperator(operatorCode, Number.parseInt(limit));
         
         if (!result.success) {
             return res.status(500).json({
@@ -167,7 +167,7 @@ router.get('/lancement/:lancementCode', async (req, res) => {
         
         console.log(`🔍 Récupération des commentaires pour le lancement ${lancementCode}`);
         
-        const result = await Comment.getByLancement(lancementCode, parseInt(limit));
+        const result = await Comment.getByLancement(lancementCode, Number.parseInt(limit));
         
         if (!result.success) {
             return res.status(500).json({
@@ -198,7 +198,7 @@ router.get('/', async (req, res) => {
         
         console.log(`🔍 Récupération de tous les commentaires récents (limite: ${limit})`);
         
-        const result = await Comment.getAll(parseInt(limit));
+        const result = await Comment.getAll(Number.parseInt(limit));
         
         if (!result.success) {
             return res.status(500).json({
@@ -237,7 +237,7 @@ router.delete('/:commentId', async (req, res) => {
         
         console.log(`🗑️ Suppression du commentaire ${commentId} par l'opérateur ${operatorCode}`);
         
-        const result = await Comment.delete(parseInt(commentId), operatorCode);
+        const result = await Comment.delete(Number.parseInt(commentId), operatorCode);
         
         if (!result.success) {
             return res.status(400).json({
@@ -322,9 +322,9 @@ router.get('/stats', async (req, res) => {
         res.json({
             success: true,
             data: {
-                totalComments: parseInt(stats.totalComments),
-                uniqueOperators: parseInt(stats.uniqueOperators),
-                uniqueLancements: parseInt(stats.uniqueLancements),
+                totalComments: Number.parseInt(stats.totalComments),
+                uniqueOperators: Number.parseInt(stats.uniqueOperators),
+                uniqueLancements: Number.parseInt(stats.uniqueLancements),
                 period: period
             }
         });

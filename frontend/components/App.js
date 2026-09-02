@@ -1,15 +1,15 @@
 // Classe principale de l'application
-// Bump version to bust browser cache when OperateurInterface changes (session isolation, neutral LT state, etc.)
-import OperateurInterface from './OperateurInterface.js?v=20260420-oi-v4';
-// Bump to bust cache when AdminPage logic changes (auto consolidation, etc.)
-import AdminPage from './AdminPage.js?v=20260408-admin-v2';
-import ApiService from '../services/ApiService.js?v=20260420-session-context-v2';
-import StorageService from '../services/StorageService.js?v=20251007-final';
-import notificationManager from '../utils/NotificationManager.js';
+import { FRONTEND_RELEASE } from '../version.js';
+// ?v= aligné sur FRONTEND_RELEASE (frontend/version.js) pour invalidation navigateur
+import OperateurInterface from './OperateurInterface.js?v=20260901.2';
+import AdminPage from './AdminPage.js?v=20260512.1';
+import ApiService from '../services/ApiService.js?v=20260608.1';
+import StorageService from '../services/StorageService.js?v=20260512.1';
+import notificationManager from '../utils/NotificationManager.js?v=20260512.1';
+import { ADMIN_CONFIG } from '../utils/Constants.js';
 
-// Bump this on deployments that change frontend behavior/state.
-// When it changes, the app will auto-clear local caches to avoid stale UI states.
-const APP_BUILD_ID = '2026-04-20.1';
+// Quand FRONTEND_RELEASE change, purge des caches locaux (voir initializeApp)
+const APP_BUILD_ID = FRONTEND_RELEASE;
 
 class App {
     constructor() {
@@ -18,6 +18,8 @@ class App {
         this.isAdmin = false;
         this.operateurInterface = null;
         this.adminPage = null;
+        /** Horodatage du dernier passage en arrière-plan (veille tablette) */
+        this._lastVisibilityHiddenAt = 0;
         this.apiService = new ApiService();
         this.storageService = new StorageService();
         this.notificationManager = notificationManager;
@@ -25,8 +27,11 @@ class App {
         // Rendre notificationManager accessible globalement
         window.notificationManager = notificationManager;
         
-        this.initializeApp();
-        this.setupEventListeners();
+        // Hors constructeur (Sonar S7059) — init async différée
+        queueMicrotask(() => {
+            this.initializeApp();
+            this.setupEventListeners();
+        });
     }
 
     _scheduleMidnightLogout() {
@@ -100,7 +105,7 @@ class App {
                 if (validOperator) {
                     // IMPORTANT: le backend exige maintenant x-operator-session-id
                     // sur /operators/* (hors login). Poser le contexte AVANT getCurrentOperation.
-                    const restoredSessionId = savedOperator?.sessionId || null;
+                    const restoredSessionId = savedOperator?.sessionId || savedOperator?.SessionId || null;
                     if (code && restoredSessionId) {
                         this.apiService.setCurrentOperatorContext(code, restoredSessionId);
                     }
@@ -108,6 +113,19 @@ class App {
                     try {
                         await this.apiService.getCurrentOperation(code);
                     } catch (_) {
+                        if (!this.apiService.isBackendAvailable()) {
+                            this.currentOperator = savedOperator;
+                            if (code) this.apiService.setOperatorSessionActive(code, true);
+                            if (code && restoredSessionId) {
+                                this.apiService.setCurrentOperatorContext(code, restoredSessionId);
+                            }
+                            this.showOperatorScreen();
+                            this._updateDegradedBanner(false);
+                            notificationManager.warning(
+                                'Mode dégradé : API indisponible. Les dernières données connues restent affichées.'
+                            );
+                            return;
+                        }
                         this.apiService.setCurrentOperatorContext(null, null);
                         this.storageService.clearCurrentOperator();
                         this.showLoginScreen();
@@ -115,7 +133,7 @@ class App {
                     }
                     this.currentOperator = { ...savedOperator, ...validOperator };
                     const restoredCode = this.currentOperator?.code || this.currentOperator?.id;
-                    const mergedSessionId = this.currentOperator?.sessionId || restoredSessionId || null;
+                    const mergedSessionId = this.currentOperator?.sessionId || this.currentOperator?.SessionId || restoredSessionId || null;
                     if (restoredCode) this.apiService.setOperatorSessionActive(restoredCode, true);
                     if (restoredCode && mergedSessionId) this.apiService.setCurrentOperatorContext(restoredCode, mergedSessionId);
                     this.storageService.setCurrentOperator(this.currentOperator);
@@ -127,6 +145,21 @@ class App {
                 }
             } catch (error) {
                 console.error('❌ Erreur restauration opérateur:', error);
+                if (!this.apiService.isBackendAvailable() && savedOperator) {
+                    const code = savedOperator.code || savedOperator.id;
+                    const restoredSessionId = savedOperator?.sessionId || savedOperator?.SessionId || null;
+                    this.currentOperator = savedOperator;
+                    if (code) this.apiService.setOperatorSessionActive(code, true);
+                    if (code && restoredSessionId) {
+                        this.apiService.setCurrentOperatorContext(code, restoredSessionId);
+                    }
+                    this.showOperatorScreen();
+                    this._updateDegradedBanner(false);
+                    notificationManager.warning(
+                        'Mode dégradé : API indisponible. Les dernières données connues restent affichées.'
+                    );
+                    return;
+                }
                 this.storageService.clearCurrentOperator();
                 this.showLoginScreen();
             }
@@ -169,6 +202,63 @@ class App {
         this.lastHealthStatus = true;
         this._healthCheckInterval = setInterval(() => this.runHealthCheck(), 30000);
 
+        this._ensureDegradedBanner();
+        window.addEventListener('sedi:backend-unavailable', () => this._updateDegradedBanner(false));
+        window.addEventListener('sedi:backend-available', () => this._updateDegradedBanner(true));
+
+        // Veille / déverrouillage tablette : prolonger la session côté serveur + réaligner le contexte
+        document.addEventListener('visibilitychange', () => this._onDocumentVisibilityChange());
+
+        // Même origine, autre onglet : localStorage (currentOperator) a changé — aligner ApiService + UI
+        window.addEventListener('storage', (e) => {
+            try {
+                if (e.storageArea !== window.localStorage) return;
+                if (e.key !== 'currentOperator') return;
+
+                if (e.newValue == null || e.newValue === '') {
+                    this.apiService.setCurrentOperatorContext(null, null);
+                    if (this.currentOperator && !this.storageService.getCurrentOperator()) {
+                        try {
+                            notificationManager.warning('Déconnexion détectée depuis un autre onglet.');
+                        } catch (_) {}
+                        this.showLoginScreen();
+                    }
+                    return;
+                }
+
+                let saved;
+                try {
+                    saved = JSON.parse(e.newValue);
+                } catch (_) {
+                    return;
+                }
+                const savedCode = String(saved?.code || saved?.id || '').trim();
+                const savedSid = String(saved?.sessionId || saved?.SessionId || '').trim();
+                if (!savedCode || !savedSid) return;
+
+                this.apiService.syncOperatorContextWithLocalStorage();
+
+                if (!this.currentOperator) return;
+
+                const myCode = String(this.currentOperator.code || this.currentOperator.id || '').trim();
+                if (myCode !== savedCode) {
+                    try {
+                        notificationManager.warning('Un autre code opérateur est actif dans un autre onglet.');
+                    } catch (_) {}
+                    this.showLoginScreen();
+                    return;
+                }
+
+                this.currentOperator = { ...this.currentOperator, ...saved };
+                this.storageService.setCurrentOperator(this.currentOperator);
+                if (this.operateurInterface) {
+                    this.operateurInterface.operator = this.currentOperator;
+                }
+            } catch (err) {
+                console.debug('Sync opérateur inter-onglets:', err);
+            }
+        });
+
         // Session expirée côté serveur -> purge totale des caches tablette
         // (localStorage + sessionStorage) puis rechargement propre.
         // Ainsi l'opérateur n'a rien à nettoyer manuellement (pas besoin de F12).
@@ -197,25 +287,88 @@ class App {
 
     }
 
+    _ensureDegradedBanner() {
+        if (this._degradedBannerEl) return;
+        const el = document.createElement('div');
+        el.id = 'backendDegradedBanner';
+        el.setAttribute('role', 'status');
+        el.style.cssText = [
+            'display:none',
+            'position:fixed',
+            'top:0',
+            'left:0',
+            'right:0',
+            'z-index:9999',
+            'padding:10px 14px',
+            'background:#b45309',
+            'color:#fff',
+            'font-weight:600',
+            'text-align:center',
+            'box-shadow:0 2px 8px rgba(0,0,0,.2)'
+        ].join(';');
+        el.textContent = 'Mode dégradé : API indisponible — affichage des dernières données. Les sauvegardes sont suspendues.';
+        document.body.prepend(el);
+        this._degradedBannerEl = el;
+    }
+
+    _updateDegradedBanner(isAvailable) {
+        this._ensureDegradedBanner();
+        if (!this._degradedBannerEl) return;
+        this._degradedBannerEl.style.display = isAvailable ? 'none' : 'block';
+    }
+
     async runHealthCheck() {
-        if (!this.currentOperator) return;
         try {
             const health = await this.apiService.healthCheck();
             const isAccessible = health.accessible !== false && health.status !== 'error';
             if (this.lastHealthStatus && !isAccessible) {
-                notificationManager.warning('Connexion au serveur perdue. Vérifiez votre connexion réseau.');
+                notificationManager.warning(
+                    'Connexion API perdue. Mode dégradé actif (lecture des dernières données).'
+                );
             } else if (!this.lastHealthStatus && isAccessible) {
-                notificationManager.success('Connexion au serveur rétablie');
+                notificationManager.success('Connexion API rétablie');
             }
             this.lastHealthStatus = isAccessible;
+            this._updateDegradedBanner(isAccessible);
         } catch (error) {
             if (error.message !== 'SERVER_NOT_ACCESSIBLE') {
                 console.debug('Health check échoué:', error);
             }
             if (this.lastHealthStatus) {
-                this.lastHealthStatus = false;
+                notificationManager.warning(
+                    'Connexion API perdue. Mode dégradé actif (lecture des dernières données).'
+                );
             }
+            this.lastHealthStatus = false;
+            this._updateDegradedBanner(false);
         }
+    }
+
+    /**
+     * Après déverrouillage tablette : prolonger la session (GET /operators/current met à jour LastActivityTime)
+     * et réaligner le contexte opérateur pour éviter SESSION_MISMATCH côté API.
+     */
+    _onDocumentVisibilityChange() {
+        if (document.visibilityState === 'hidden' || document.hidden) {
+            this._lastVisibilityHiddenAt = Date.now();
+            return;
+        }
+        const minHidden = ADMIN_CONFIG.SLEEP_WAKE_MIN_HIDDEN_MS ?? 2000;
+        const delay = ADMIN_CONFIG.SLEEP_WAKE_REFRESH_DELAY_MS ?? 400;
+        const hiddenMs = this._lastVisibilityHiddenAt ? Date.now() - this._lastVisibilityHiddenAt : 0;
+        if (hiddenMs < minHidden) return;
+        if (this.currentScreen !== 'operator' || !this.currentOperator) return;
+        const code = String(this.currentOperator.code || this.currentOperator.id || '').trim();
+        if (!code) return;
+
+        setTimeout(async () => {
+            try {
+                this.apiService.syncOperatorContextWithLocalStorage();
+                await this.apiService.getCurrentOperation(code);
+            } catch (e) {
+                console.warn('Réveil tablette: impossible de rafraîchir la session', e?.message || e);
+            }
+        }, delay);
     }
 
     async handleLogin(e) {
@@ -240,7 +393,7 @@ class App {
 
             this.currentOperator = operator;
             const code = operator.code || operator.id;
-            const sessionId = operator.sessionId || null;
+            const sessionId = operator.sessionId || operator.SessionId || null;
             if (code) this.apiService.setOperatorSessionActive(code, true);
             if (code && sessionId) this.apiService.setCurrentOperatorContext(code, sessionId);
             this.storageService.setCurrentOperator(operator);

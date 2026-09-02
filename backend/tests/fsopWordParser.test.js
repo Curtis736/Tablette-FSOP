@@ -32,5 +32,19 @@ describe('fsopWordParser text extraction', () => {
         expect(text).toContain('< 0,5 dB');
         expect(text.toLowerCase()).not.toContain('w14:');
     });
+
+    it('extractTextContent preserves w:t text and strips leftover tags', () => {
+        const xml = '<w:p><w:t xml:space="preserve">Hello</w:t><w:br/><w:t>World</w:t></w:p>';
+        const text = parser.__test.extractTextContent(xml);
+        expect(text).toContain('Hello');
+        expect(text).toContain('World');
+        expect(text).not.toContain('<w:');
+    });
+
+    it('stripXmlMarkup removes tags without eating comparison text', () => {
+        expect(parser.__test.stripXmlMarkup('A<w:br/>B < 0,5')).toContain('A');
+        expect(parser.__test.stripXmlMarkup('A<w:br/>B < 0,5')).toContain('B');
+        expect(parser.__test.stripXmlMarkup('plain')).toBe('plain');
+    });
 });
 

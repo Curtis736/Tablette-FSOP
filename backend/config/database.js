@@ -1,5 +1,15 @@
 const sql = require('mssql');
 
+function resolveConfigSource(productionConfig) {
+    if (productionConfig?.__source) {
+        return `config-production.js (${productionConfig.__source})`;
+    }
+    if (productionConfig) {
+        return 'config-production.js';
+    }
+    return 'variables d\'environnement';
+}
+
 function readTimeoutMs(envKey, fallback) {
     const raw = process.env[envKey];
     const parsed = Number.parseInt(raw || '', 10);
@@ -21,13 +31,16 @@ try {
         DB_DATABASE: productionConfig?.DB_DATABASE
     });
 } catch (error) {
+    if (error.code !== 'MODULE_NOT_FOUND') {
+        throw error;
+    }
     console.log('📝 Configuration de production non trouvée (optionnel), utilisation des variables d\'environnement.');
 }
 
 // Configuration de la base de données SQL Server
 // Priorité : config-production.js > variables d'environnement > valeurs par défaut (dev uniquement)
 const config = {
-    server: productionConfig?.DB_SERVER || process.env.DB_SERVER || '192.168.1.26',
+    server: productionConfig?.DB_SERVER || process.env.DB_SERVER,
     database: productionConfig?.DB_DATABASE || process.env.DB_DATABASE || 'SEDI_APP_INDEPENDANTE',
     user: productionConfig?.DB_USER || process.env.DB_USER || 'QUALITE',
     password: productionConfig?.DB_PASSWORD || process.env.DB_PASSWORD || 'QUALITE',
@@ -67,12 +80,12 @@ console.log('🔧 Configuration finale de la base de données:', {
     server: config.server,
     database: config.database,
     user: config.user,
-    source: productionConfig?.__source ? `config-production.js (${productionConfig.__source})` : (productionConfig ? 'config-production.js' : 'variables d\'environnement')
+    source: resolveConfigSource(productionConfig)
 });
 
 // Configuration de la base ERP
 const erpConfig = {
-    server: productionConfig?.DB_ERP_SERVER || process.env.DB_ERP_SERVER || '192.168.1.26',
+    server: productionConfig?.DB_ERP_SERVER || process.env.DB_ERP_SERVER,
     database: productionConfig?.DB_ERP_DATABASE || process.env.DB_ERP_DATABASE || 'SEDI_ERP',
     user: productionConfig?.DB_ERP_USER || process.env.DB_ERP_USER || 'QUALITE',
     password: productionConfig?.DB_ERP_PASSWORD || process.env.DB_ERP_PASSWORD || 'QUALITE',
@@ -329,9 +342,6 @@ async function executeInTransaction(callback) {
     try {
         await transaction.begin();
         console.log('🔄 Transaction démarrée');
-        
-        // Créer un objet request lié à la transaction
-        const request = new sql.Request(transaction);
         
         // Wrapper pour exécuter des requêtes dans la transaction
         const transactionContext = {

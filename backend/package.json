@@ -23,6 +23,7 @@
     "lint:report": "eslint . --ext .js --format json --output-file eslint-report.json",
     "test:security": "node scripts/security-test.js || echo 'Security tests skipped (server not running)'",
     "test:health": "node scripts/health-check.js || echo 'Health check skipped (server not running)'",
+    "watchdog": "node scripts/proactive-watchdog.js",
     "sonar": "sonar-scanner",
     "quality": "npm run lint:report && npm run sonar",
     "test:full": "npm run test:all && npm run quality"

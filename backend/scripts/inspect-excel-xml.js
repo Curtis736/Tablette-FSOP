@@ -11,7 +11,7 @@ function columnNumberToLetter(colNum) {
     let result = '';
     while (colNum > 0) {
         colNum--;
-        result = String.fromCharCode(65 + (colNum % 26)) + result;
+        result = String.fromCodePoint(65 + (colNum % 26)) + result;
         colNum = Math.floor(colNum / 26);
     }
     return result;
@@ -27,8 +27,8 @@ async function main() {
     }
 
     const excelPath = args[0];
-    const rowNum = parseInt(args[1], 10);
-    const colNum = parseInt(args[2], 10);
+    const rowNum = Number.parseInt(args[1], 10);
+    const colNum = Number.parseInt(args[2], 10);
 
     try {
         await fs.access(excelPath);

@@ -140,7 +140,7 @@ function logSecurityAction(req, res, next) {
     
     res.send = function(data) {
         // Logger les actions sensibles
-        if (req.security && req.security.validated) {
+        if (req.security?.validated) {
             console.log(`🔍 Action sécurisée: ${req.method} ${req.path} par opérateur ${req.security.operatorId}`);
         }
         

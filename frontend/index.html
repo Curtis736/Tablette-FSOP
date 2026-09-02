@@ -3,13 +3,15 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <!-- Complément aux en-têtes Nginx : certains navigateurs / proxys respectent encore ces balises -->
+    <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+    <meta http-equiv="Pragma" content="no-cache">
     <title>SEDI - Interface Tablette</title>
     <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📱</text></svg>">
-    <link rel="stylesheet" href="assets/styles.css?v=20260203-ind-operator-fix">
+    <link rel="stylesheet" href="assets/styles.css?v=20260901.2">
     <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
-    <!-- ZXing pour le scan de code-barres -->
-    <!-- IMPORTANT: ne pas utiliser "@zxing/library@latest" (entrée CommonJS => `exports is not defined` en navigateur) -->
-    <script defer src="https://cdn.jsdelivr.net/npm/@zxing/library@0.20.0/umd/index.min.js"></script>
+    <!-- ZXing pour le scan de code-barres (local, pas de dépendance Internet) -->
+    <script defer src="assets/vendor/zxing.min.js?v=20260706.1"></script>
 </head>
 <body>
     <div id="app">
@@ -22,8 +24,9 @@
                 </div>
                 <form id="loginForm">
                     <div class="input-group">
-                        <i class="fas fa-user"></i>
-                        <input type="text" id="operatorCode" placeholder="Code Opérateur" required>
+                        <i class="fas fa-user" aria-hidden="true"></i>
+                        <label class="visually-hidden" for="operatorCode">Code Opérateur</label>
+                        <input type="text" id="operatorCode" name="operatorCode" placeholder="Code Opérateur" aria-label="Code Opérateur" required>
                     </div>
                     <button type="submit" class="btn-primary">
                         <i class="fas fa-sign-in-alt"></i>
@@ -48,12 +51,14 @@
                 </div>
                 <form id="adminLoginForm">
                     <div class="input-group">
-                        <i class="fas fa-user-shield"></i>
-                        <input type="text" id="adminUsername" placeholder="Nom d'utilisateur" required>
+                        <i class="fas fa-user-shield" aria-hidden="true"></i>
+                        <label class="visually-hidden" for="adminUsername">Nom d'utilisateur</label>
+                        <input type="text" id="adminUsername" name="adminUsername" placeholder="Nom d'utilisateur" aria-label="Nom d'utilisateur" required>
                     </div>
                     <div class="input-group">
-                        <i class="fas fa-lock"></i>
-                        <input type="password" id="adminPassword" placeholder="Mot de passe" required>
+                        <i class="fas fa-lock" aria-hidden="true"></i>
+                        <label class="visually-hidden" for="adminPassword">Mot de passe</label>
+                        <input type="password" id="adminPassword" name="adminPassword" placeholder="Mot de passe" aria-label="Mot de passe" required>
                     </div>
                     <button type="submit" class="btn-primary">
                         <i class="fas fa-sign-in-alt"></i>
@@ -87,28 +92,45 @@
                 <div class="section">
                     <h2><i class="fas fa-keyboard"></i> Code de Lancement</h2>
                     <div class="input-group with-scanner with-fsop">
-                        <i class="fas fa-barcode"></i>
+                        <i class="fas fa-barcode" aria-hidden="true"></i>
+                        <label class="visually-hidden" for="lancementSearch">Code de lancement</label>
                         <input
-                            type="tel"
+                            type="text"
                             id="lancementSearch"
-                            placeholder="Saisir le code de lancement..."
+                            name="lancementSearch"
+                            placeholder="Saisir ou scanner le code..."
                             autocomplete="off"
                             value="LT"
                             inputmode="numeric"
+                            enterkeyhint="go"
                             pattern="[0-9]*"
                             maxlength="10"
-                            aria-label="Saisir les chiffres du code de lancement"
+                            aria-label="Saisir les chiffres du code de lancement ou scanner avec une douchette"
                         >
                         <button id="fsopBtn" class="btn-fsop" title="FSOP" aria-label="FSOP">
                             FSOP
                         </button>
-                        <button id="scanBarcodeBtn" class="btn-scan" title="Scanner un code-barres" aria-label="Scanner un code-barres">
+                        <button id="scanBarcodeBtn" class="btn-scan" title="Scanner avec la caméra (HTTPS requis)" aria-label="Scanner avec la caméra">
                             <i class="fas fa-camera"></i>
                         </button>
                     </div>
                     <div id="lancementList" class="lancement-list" style="display: none;"></div>
                     <div class="help-text">
-                        <small><i class="fas fa-info-circle"></i> "LT" est pré-rempli, saisissez seulement les chiffres (ex: LT2501145)</small>
+                        <small id="lancementHelpText"><i class="fas fa-info-circle"></i> « LT » est pré-rempli — saisissez les chiffres, puis appuyez sur la flèche du clavier (↵) pour valider. Douchette Bluetooth/USB possible (ex. LT2501145).</small>
+                    </div>
+                </div>
+
+                <div class="section shift-counter-section">
+                    <h2><i class="fas fa-hourglass-half"></i> Compteur Journée</h2>
+                    <div class="shift-progress">
+                        <div class="shift-progress-item">
+                            <span class="shift-progress-label">Temps cumulé</span>
+                            <span class="shift-progress-value" id="shiftWorkedDisplay">00:00:00</span>
+                        </div>
+                        <div class="shift-progress-item">
+                            <span class="shift-progress-label">Reste sur 8h</span>
+                            <span class="shift-progress-value shift-remaining" id="shiftRemainingDisplay">08:00:00</span>
+                        </div>
                     </div>
                 </div>
 
@@ -116,12 +138,19 @@
                 <div class="section" id="controlsSection" style="display: none;">
                     <h2><i class="fas fa-cogs"></i> Contrôles</h2>
                     <div class="lancement-info">
-                        <h3 id="selectedLancement"></h3>
+                        <h3 id="selectedLancement">Lancement sélectionné</h3>
                         <p id="lancementDetails"></p>
+                        <div id="tempsRestantBlock" class="temps-restant-block" style="display:none;" aria-live="polite">
+                            <div class="temps-restant-row">
+                                <span class="temps-restant-label">Total LT</span>
+                                <span class="temps-restant-value" id="tempsRestantTotalDisplay">—</span>
+                            </div>
+                        </div>
                     </div>
                     <div class="input-group" id="operationStepGroup" style="display:none; margin-top:10px;">
-                        <i class="fas fa-list-ol"></i>
-                        <select id="operationStepSelect" style="width:100%; padding:10px; border-radius:10px; border:1px solid #ddd;">
+                        <i class="fas fa-list-ol" aria-hidden="true"></i>
+                        <label class="visually-hidden" for="operationStepSelect">Choisir une étape (CodeOperation)</label>
+                        <select id="operationStepSelect" aria-label="Choisir une étape (CodeOperation)" style="width:100%; padding:10px; border-radius:10px; border:1px solid #ddd;">
                             <option value="">Choisir une étape (CodeOperation)</option>
                         </select>
                     </div>
@@ -141,8 +170,8 @@
                             </button>
                         </div>
                         <div class="end-time-display">
-                            <div class="end-time-label">Heure de fin prévue :</div>
-                            <div class="end-time-value" id="endTimeDisplay">--:--</div>
+                            <div class="end-time-label">Temps restant étape</div>
+                            <div class="end-time-value" id="endTimeDisplay">—</div>
                         </div>
                     </div>
                     <div class="timer">
@@ -186,8 +215,9 @@
                     <h2><i class="fas fa-comments"></i> Commentaires</h2>
                     <div class="comment-form">
                         <div class="input-group">
-                            <i class="fas fa-edit"></i>
-                            <textarea id="commentInput" placeholder="Ajouter un commentaire sur cette opération..." rows="3" maxlength="2000"></textarea>
+                            <i class="fas fa-edit" aria-hidden="true"></i>
+                            <label class="visually-hidden" for="commentInput">Ajouter un commentaire</label>
+                            <textarea id="commentInput" name="commentInput" placeholder="Ajouter un commentaire sur cette opération..." aria-label="Ajouter un commentaire sur cette opération" rows="3" maxlength="2000"></textarea>
                         </div>
                         <div class="comment-actions">
                             <button id="addCommentBtn" class="btn-primary" disabled>
@@ -253,6 +283,7 @@
                                 <option value="EN_COURS">En cours</option>
                                 <option value="EN_PAUSE">En pause</option>
                                 <option value="TERMINE">Terminé</option>
+                                <option value="T">Transmis SILOG</option>
                             </select>
                         </div>
 
@@ -262,12 +293,20 @@
                                 Période :
                             </label>
                             <select id="periodFilter" class="filter-select">
+                                <option value="month" selected>Ce mois</option>
                                 <option value="today">Aujourd'hui</option>
                                 <option value="yesterday">Hier</option>
                                 <option value="week">Cette semaine</option>
-                                <option value="month">Ce mois</option>
-                                <option value="custom">Personnalisé</option>
+                                <option value="custom">Un jour (calendrier)</option>
                             </select>
+                        </div>
+
+                        <div class="filter-group" id="adminDatePickerGroup" style="display: none;">
+                            <label for="adminDatePicker">
+                                <i class="fas fa-calendar-day"></i>
+                                Jour ciblé :
+                            </label>
+                            <input type="date" id="adminDatePicker" class="filter-input" title="Lancements et temps pour ce jour (fuseau navigateur)">
                         </div>
                         
                         <div class="filter-group">
@@ -310,12 +349,12 @@
                     <div class="stat-card">
                         <i class="fas fa-play-circle"></i>
                         <h3 id="activeLancements">0</h3>
-                        <p>Lancements en cours</p>
+                        <p>Opérations en cours</p>
                     </div>
                     <div class="stat-card">
                         <i class="fas fa-pause-circle"></i>
                         <h3 id="pausedLancements">0</h3>
-                        <p>Lancements en pause</p>
+                        <p>Opérations en pause</p>
                     </div>
                     <div class="stat-card">
                         <i class="fas fa-check-circle"></i>
@@ -334,7 +373,7 @@
                                 <th>Code Lancement</th>
                                 <th>Designation</th>
                                 <th>Phase</th>
-                                <th>CodeRubrique</th>
+                                <th>Libellé étape</th>
                                 <th>Heure Début</th>
                                 <th>Heure Fin</th>
                                 <th>Statut</th>
@@ -439,12 +478,14 @@
             <div class="scanner-modal-body">
                 <div class="fsop-form">
                     <div class="input-group">
-                        <i class="fas fa-file-signature"></i>
-                        <input type="text" id="fsopTemplateCode" placeholder="Numéro de formulaire (ex: F469)" autocomplete="off" />
+                        <i class="fas fa-file-signature" aria-hidden="true"></i>
+                        <label class="visually-hidden" for="fsopTemplateCode">Numéro de formulaire</label>
+                        <input type="text" id="fsopTemplateCode" name="fsopTemplateCode" placeholder="Numéro de formulaire (ex: F469)" aria-label="Numéro de formulaire" autocomplete="off" />
                     </div>
                     <div class="input-group">
-                        <i class="fas fa-hashtag"></i>
-                        <input type="text" id="fsopSerialNumber" placeholder="Numéro de série (SN)" autocomplete="off" />
+                        <i class="fas fa-hashtag" aria-hidden="true"></i>
+                        <label class="visually-hidden" for="fsopSerialNumber">Numéro de série</label>
+                        <input type="text" id="fsopSerialNumber" name="fsopSerialNumber" placeholder="Numéro de série (SN)" aria-label="Numéro de série" autocomplete="off" />
                     </div>
                     <div class="input-group" id="fsopLotGroup" style="display:none;">
                         <i class="fas fa-box"></i>
@@ -497,6 +538,6 @@
         </div>
     </div>
 
-    <script type="module" src="index.js?v=20260309-cache-bust"></script>
+    <script type="module" src="index.js?v=20260901.2"></script>
 </body>
 </html>

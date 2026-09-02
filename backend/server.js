@@ -19,6 +19,7 @@ const heartbeatRoutes = require('./routes/heartbeat');
 const { metricsMiddleware, getMetrics, register } = require('./middleware/metrics');
 const { auditMiddleware } = require('./middleware/audit');
 const { requestLogger } = require('./middleware/requestLogger');
+const { noHttpCacheDefaults } = require('./middleware/noHttpCache');
 const { authenticateAdmin } = require('./middleware/auth');
 const apmService = require('./services/APMService');
 const cacheService = require('./services/CacheService');
@@ -45,6 +46,7 @@ const allowedOrigins = [
     'https://localhost',
     'https://192.168.1.26:8443',
     'https://localhost:8443',
+    'http://fsop.sedi-ati.com',
     'https://fsop.sedi-ati.com',
     process.env.FRONTEND_URL
 ].filter(Boolean);
@@ -70,6 +72,7 @@ app.use(cors({
 }));
 
 app.use(helmet({
+    strictTransportSecurity: false,
     crossOriginResourcePolicy: { policy: 'cross-origin' },
     crossOriginEmbedderPolicy: false,
     contentSecurityPolicy: {
@@ -81,7 +84,7 @@ app.use(helmet({
             connectSrc: ["'self'"],
             fontSrc: ["'self'", 'data:'],
             objectSrc: ["'none'"],
-            upgradeInsecureRequests: [],
+            ...(process.env.FORCE_HTTPS === 'true' ? { upgradeInsecureRequests: [] } : {}),
         },
     },
 }));
@@ -139,6 +142,9 @@ app.use(metricsMiddleware);
 
 // Logger request-scoped (X-Request-Id + niveaux via LOG_LEVEL)
 app.use(requestLogger);
+
+// Pas de cache HTTP par défaut sur l'API et les JSON dynamiques (avant routes / APM)
+app.use(noHttpCacheDefaults);
 
 // ⚡ OPTIMISATION : APM middleware pour monitoring détaillé
 app.use(apmService.httpMiddleware());
@@ -431,7 +437,7 @@ function scheduleDailyAutoCloseOperations() {
 }
 
 // Validation automatique quotidienne des temps terminés (StatutTraitement NULL → 'O')
-// Exécutée après la clôture auto des opérations pour que V_REMONTE_TEMPS expose les lignes à SILOG.
+// À 20h par défaut, jour courant inclus → visible dans V_REMONTE_TEMPS pour SILOG (SEDI_ETDIFF).
 function scheduleDailyAutoValidateTemps() {
     const enabled = String(process.env.ENABLE_AUTO_VALIDATE_TEMPS || 'true').toLowerCase() === 'true';
     if (!enabled) {
@@ -452,17 +458,9 @@ function scheduleDailyAutoValidateTemps() {
 
         setTimeout(async () => {
             try {
-                console.log('📋 Validation automatique des temps terminés...');
-                const result = await executeNonQuery(
-                    `
-                    UPDATE [SEDI_APP_INDEPENDANTE].[dbo].[ABTEMPS_OPERATEURS]
-                    SET StatutTraitement = 'O'
-                    WHERE StatutTraitement IS NULL
-                      AND ProductiveDuration > 0
-                      AND CAST(DateCreation AS DATE) < CAST(GETDATE() AS DATE)
-                    `
-                );
-                const count = result?.rowsAffected || 0;
+                const MonitoringService = require('./services/MonitoringService');
+                console.log('📋 Validation automatique des temps terminés (NULL → O, jour courant inclus)...');
+                const { count } = await MonitoringService.autoValidateEligibleTemps({ includeToday: true });
                 if (count > 0) {
                     console.log(`✅ ${count} enregistrement(s) validé(s) automatiquement (StatutTraitement → 'O').`);
                 } else {
@@ -470,6 +468,46 @@ function scheduleDailyAutoValidateTemps() {
                 }
             } catch (error) {
                 console.error('❌ Erreur validation automatique des temps:', error);
+            } finally {
+                scheduleNextRun();
+            }
+        }, delay);
+    };
+
+    scheduleNextRun();
+}
+
+/**
+ * À minuit (configurable) : rattrapage validation (NULL → O) pour les jours passés.
+ * encore en NULL / A / autre (puis O), pour vider le dashboard admin sans toucher au jour en cours.
+ */
+function scheduleMidnightTransmitDashboard() {
+    const enabled = String(process.env.ENABLE_MIDNIGHT_TRANSMIT_DASHBOARD || 'true').toLowerCase() === 'true';
+    if (!enabled) {
+        console.log('🌙 Clôture minuit dashboard désactivée (ENABLE_MIDNIGHT_TRANSMIT_DASHBOARD!=true)');
+        return;
+    }
+
+    const hour = Math.min(Math.max(Number.parseInt(process.env.MIDNIGHT_TRANSMIT_HOUR || '0', 10) || 0, 0), 23);
+    const minute = Math.min(Math.max(Number.parseInt(process.env.MIDNIGHT_TRANSMIT_MINUTE || '5', 10) || 5, 0), 59);
+
+    const scheduleNextRun = () => {
+        const now = new Date();
+        const next = new Date(now);
+        next.setHours(hour, minute, 0, 0);
+        if (next <= now) {
+            next.setDate(next.getDate() + 1);
+        }
+        const delay = next.getTime() - now.getTime();
+        console.log(`🌙 Prochaine clôture StatutTraitement (jours < aujourd'hui) à ${next.toISOString()} (dans ${Math.round(delay / 1000)}s).`);
+
+        setTimeout(async () => {
+            try {
+                const MonitoringService = require('./services/MonitoringService');
+                const r = await MonitoringService.runMidnightDashboardTransmit();
+                console.log('🌙 Clôture minuit dashboard:', r);
+            } catch (error) {
+                console.error('❌ Erreur clôture minuit dashboard:', error);
             } finally {
                 scheduleNextRun();
             }
@@ -557,8 +595,11 @@ if (shouldStartServer()) {
                 // Planifier la clôture automatique quotidienne des opérations (par défaut activée)
                 scheduleDailyAutoCloseOperations();
 
-                // Validation automatique des temps terminés (pour V_REMONTE_TEMPS → SILOG)
+                // Validation automatique à ~20h (NULL → O, jour courant inclus) pour V_REMONTE_TEMPS → SILOG
                 scheduleDailyAutoValidateTemps();
+
+                // Nuit : rattrapage validation jours passés (sans marquer T en mode SILOG planifié)
+                scheduleMidnightTransmitDashboard();
 
                 // Vérifier les dépointages Factorial à partir de 17h toutes les 30 minutes
                 scheduleFactorialDepointedChecks();

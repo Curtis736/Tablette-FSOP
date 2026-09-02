@@ -1,0 +1,4 @@
+# Certificats générés sur le serveur par :
+#   ./scripts/regenerate-fsop-ssl.sh
+#
+# Ne pas committer les fichiers .pem / .crt / .cer générés ici.

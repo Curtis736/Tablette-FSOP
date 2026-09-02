@@ -21,14 +21,14 @@ class Validator {
         // Validation des dates si présentes
         if (data.startTime) {
             const startDate = new Date(data.startTime);
-            if (isNaN(startDate.getTime())) {
+            if (Number.isNaN(startDate.getTime())) {
                 errors.push('Date de début invalide');
             }
         }
 
         if (data.endTime) {
             const endDate = new Date(data.endTime);
-            if (isNaN(endDate.getTime())) {
+            if (Number.isNaN(endDate.getTime())) {
                 errors.push('Date de fin invalide');
             }
 

@@ -47,10 +47,9 @@ class ScannerManager {
         // Les URLs "package root" (ex: @zxing/library@latest) pointent sur une entrée CommonJS
         // qui provoque: "Uncaught ReferenceError: exports is not defined".
         const zxingSources = [
+            'assets/vendor/zxing.min.js',
             'https://cdn.jsdelivr.net/npm/@zxing/library@0.20.0/umd/index.min.js',
-            'https://unpkg.com/@zxing/library@0.20.0/umd/index.min.js',
-            // Fallback "latest" UMD (peut évoluer, mais reste UMD)
-            'https://cdn.jsdelivr.net/npm/@zxing/library@latest/umd/index.min.js'
+            'https://unpkg.com/@zxing/library@0.20.0/umd/index.min.js'
         ];
         
         console.log('📦 Chargement dynamique de ZXing...');

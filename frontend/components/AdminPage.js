@@ -9,6 +9,108 @@ import { debounce } from '../utils/debounce.js';
 import { createElement, createTableCell, createButton, createBadge, clearElement } from '../utils/DOMHelper.js';
 import { ADMIN_CONFIG, STATUS_CODES, STATUS_LABELS } from '../utils/Constants.js';
 
+/** Date locale YYYY-MM-DD (alignée avec loadData / SQL jour civil). */
+function toLocalDateOnlyString(d) {
+    const x = new Date(d);
+    if (Number.isNaN(x.getTime())) return null;
+    const y = x.getFullYear();
+    const m = String(x.getMonth() + 1).padStart(2, '0');
+    const day = String(x.getDate()).padStart(2, '0');
+    return `${y}-${m}-${day}`;
+}
+
+/**
+ * Colonnes « étape » du tableau admin :
+ * - Phase = Phase ERP du lancement (010, 040…) — jamais le code opérateur
+ * - Libellé = LCTC.CodeOperation (Fabrication)
+ */
+function getAdminStepColumnDisplay(operation) {
+    const EVENT_MARKERS = new Set(['PRODUCTION', 'PAUSE', 'REPRISE', 'TERMINE', 'TERMINÉE', 'ADMIN', '']);
+    const phase = String(operation?.Phase ?? operation?.phase ?? '').trim();
+    const operatorCode = String(
+        operation?.OperatorCode ?? operation?.operatorId ?? operation?.operatorCode ?? ''
+    ).trim();
+    const fabrication = String(operation?.Fabrication ?? operation?.fabrication ?? '').trim();
+    const erpLabel = fabrication && fabrication !== '-' ? fabrication : '';
+
+    const isOperatorCode = operatorCode && phase === operatorCode;
+    const stepCode = (EVENT_MARKERS.has(phase.toUpperCase()) || isOperatorCode) ? '-' : phase;
+    const stepLabel = erpLabel || '-';
+    return { stepCode: stepCode || '-', stepLabel };
+}
+
+/** DateCreation → YYYY-MM-DD (jour civil). */
+function parseAdminRowDateYmd(op) {
+    const raw = op?.DateCreation ?? op?.dateCreation;
+    if (!raw) return null;
+    if (typeof raw === 'string') {
+        const m = raw.match(/^(\d{4}-\d{2}-\d{2})/);
+        if (m) return m[1];
+    }
+    if (raw instanceof Date && !Number.isNaN(raw.getTime())) {
+        return toLocalDateOnlyString(raw);
+    }
+    return null;
+}
+
+/** Affichage date type SILOG (JJ/MM/AAAA). */
+function formatAdminRowDate(op) {
+    const ymd = parseAdminRowDateYmd(op);
+    if (!ymd) return '-';
+    const [y, m, d] = ymd.split('-');
+    return `${d}/${m}/${y}`;
+}
+
+/** Extrait HH:mm pour le tri chronologique. */
+function parseAdminRowTimeHm(raw) {
+    if (!raw) return null;
+    if (typeof raw === 'string') {
+        const m = raw.match(/(\d{1,2}):(\d{2})/);
+        if (m) return `${m[1].padStart(2, '0')}:${m[2]}`;
+    }
+    if (raw instanceof Date && !Number.isNaN(raw.getTime())) {
+        return raw.toLocaleTimeString('fr-FR', {
+            timeZone: 'Europe/Paris',
+            hour: '2-digit',
+            minute: '2-digit',
+            hour12: false
+        });
+    }
+    return null;
+}
+
+/** Timestamp de tri : opérateur puis ordre chronologique (timeline SILOG). */
+function getAdminRowSortTimestamp(op) {
+    const isoStart = op?.StartTime ?? op?.startTime;
+    if (typeof isoStart === 'string' && isoStart.includes('T')) {
+        const t = new Date(isoStart).getTime();
+        if (!Number.isNaN(t)) return t;
+    }
+    const ymd = parseAdminRowDateYmd(op);
+    const hm = parseAdminRowTimeHm(isoStart);
+    if (ymd && hm) {
+        const t = new Date(`${ymd}T${hm}:00`).getTime();
+        if (!Number.isNaN(t)) return t;
+    }
+    if (ymd) {
+        const t = new Date(`${ymd}T00:00:00`).getTime();
+        if (!Number.isNaN(t)) return t;
+    }
+    return Number.MAX_SAFE_INTEGER;
+}
+
+function compareAdminTimelineRows(a, b) {
+    const opA = String(a?.OperatorCode || a?.operatorCode || a?.operatorId || '').trim();
+    const opB = String(b?.OperatorCode || b?.operatorCode || b?.operatorId || '').trim();
+    if (opA !== opB) return opA.localeCompare(opB, 'fr');
+    const tsA = getAdminRowSortTimestamp(a);
+    const tsB = getAdminRowSortTimestamp(b);
+    if (tsA !== tsB) return tsA - tsB;
+    const idA = Number(a?.TempsId ?? a?.EventId ?? a?.id ?? 0) || 0;
+    const idB = Number(b?.TempsId ?? b?.EventId ?? b?.id ?? 0) || 0;
+    return idA - idB;
+}
+
 class AdminPage {
     constructor(app) {
         this.app = app;
@@ -61,6 +163,174 @@ class AdminPage {
         this.initializeElements();
         this.setupEventListeners();
         this.startAutoSave();
+    }
+
+    /**
+     * DateCreation d’une ligne (ABTEMPS ou fusion) → YYYY-MM-DD fuseau navigateur.
+     */
+    _parseOpDateCreationLocalYmd(raw) {
+        if (raw == null || raw === '') return null;
+        if (typeof raw === 'string') {
+            const m = String(raw).trim().match(/^(\d{4}-\d{2}-\d{2})/);
+            if (m) return m[1];
+        }
+        if (raw instanceof Date) return toLocalDateOnlyString(raw);
+        return null;
+    }
+
+    /** Période multi-jours : préfixer la date dans les colonnes horaires (timeline SILOG, intitulés inchangés). */
+    _isAdminMultiDayPeriod() {
+        const period = document.getElementById('periodFilter')?.value || 'month';
+        return period === 'month' || period === 'week';
+    }
+
+    formatAdminTimelineTime(op, timeValue) {
+        const time = this.formatDateTime(timeValue);
+        if (time === '-' || !this._isAdminMultiDayPeriod()) return time;
+        const date = formatAdminRowDate(op);
+        return date === '-' ? time : `${date} ${time}`;
+    }
+
+    /**
+     * Lignes transmises à SILOG (StatutTraitement='T') : visibles et grisées
+     * pendant TRANSMITTED_VISIBLE_DAYS, pour savoir ce qui a déjà basculé.
+     */
+    shouldShowAdminDashboardRow(op) {
+        const st = String(op?.StatutTraitement ?? '').toUpperCase().trim();
+        if (st !== 'T') return true;
+
+        const days = Number(ADMIN_CONFIG.TRANSMITTED_VISIBLE_DAYS ?? 30);
+        if (!Number.isFinite(days) || days <= 0) return true;
+
+        const ymd = this._parseOpDateCreationLocalYmd(op?.DateCreation);
+        if (!ymd) return true;
+        const created = new Date(`${ymd}T00:00:00`);
+        if (Number.isNaN(created.getTime())) return true;
+        const cutoff = new Date();
+        cutoff.setHours(0, 0, 0, 0);
+        cutoff.setDate(cutoff.getDate() - days);
+        return created >= cutoff;
+    }
+
+    /**
+     * Clé alignée entre ligne ABTEMPS (consolidée) et agrégat ABHISTORIQUE (non consolidé),
+     * pour retirer l’overlay doublon quand les deux représentent la même opération.
+     */
+    _getAdminMergeDedupSlotKey(op) {
+        const opC = (op?.OperatorCode ?? op?.operatorId ?? '').toString().trim();
+        const lc = (op?.LancementCode ?? op?.lancementCode ?? '').toString().trim().toUpperCase();
+        const { stepCode, stepLabel } = getAdminStepColumnDisplay(op);
+        const step = `${String(stepCode).toUpperCase()}|${String(stepLabel).toUpperCase()}`;
+        const st = this.formatDateTime(op?.StartTime ?? op?.startTime);
+        const et = this.formatDateTime(op?.EndTime ?? op?.endTime);
+        const startNorm = st === '-' ? '' : st;
+        const endNorm = et === '-' ? '' : et;
+        return `${opC}|${lc}|${step}|${startNorm}|${endNorm}`;
+    }
+
+    /**
+     * Après fusion Map, ABHISTORIQUE peut encore apparaître en parallèle d’ABTEMPS (clés T: vs E:).
+     * On garde la ligne consolidée et on supprime l’overlay non consolidé si le créneau métier coïncide.
+     */
+    _dedupeAdminConsolidatedOverlay(ops) {
+        if (!ops?.length) return ops;
+        const consolidatedCountBySlot = new Map();
+        for (const op of ops) {
+            const tid = op?.TempsId ?? op?.tempsId;
+            if (tid == null || String(tid).trim() === '') continue;
+            const slot = this._getAdminMergeDedupSlotKey(op);
+            consolidatedCountBySlot.set(slot, (consolidatedCountBySlot.get(slot) || 0) + 1);
+        }
+        const out = [];
+        for (const op of ops) {
+            if (op?._isPauseRow) {
+                out.push(op);
+                continue;
+            }
+            if (op?._isUnconsolidated) {
+                const tid = op?.TempsId ?? op?.tempsId;
+                if (tid == null || String(tid).trim() === '') {
+                    const slot = this._getAdminMergeDedupSlotKey(op);
+                    if ((consolidatedCountBySlot.get(slot) || 0) > 0) {
+                        continue;
+                    }
+                }
+            }
+            out.push(op);
+        }
+        return out;
+    }
+
+    /**
+     * SILOG : si des segments productifs (historique) existent pour opérateur+LT+jour,
+     * masquer la ligne consolidée ABTEMPS qui couvre toute la journée (évite le doublon).
+     */
+    _preferWorkSegmentsOverConsolidated(ops) {
+        if (!ops?.length) return ops;
+        const daysWithSegments = new Set();
+        for (const op of ops) {
+            if (op?._isWorkSegment || (op?._isUnconsolidated && op?.EventId && !op?._isPauseRow)) {
+                const ymd = this._parseOpDateCreationLocalYmd(op?.DateCreation);
+                if (!ymd) continue;
+                const lc = String(op?.LancementCode || op?.lancementCode || '').trim().toUpperCase();
+                const oc = String(op?.OperatorCode || op?.operatorCode || op?.operatorId || '').trim();
+                daysWithSegments.add(`${oc}|${lc}|${ymd}`);
+            }
+        }
+        if (daysWithSegments.size === 0) return ops;
+        return ops.filter((op) => {
+            if (op?.TempsId == null || String(op.TempsId).trim() === '') return true;
+            const ymd = this._parseOpDateCreationLocalYmd(op?.DateCreation);
+            if (!ymd) return true;
+            const lc = String(op?.LancementCode || op?.lancementCode || '').trim().toUpperCase();
+            const oc = String(op?.OperatorCode || op?.operatorCode || op?.operatorId || '').trim();
+            return !daysWithSegments.has(`${oc}|${lc}|${ymd}`);
+        });
+    }
+
+    /**
+     * Quand plusieurs lignes partagent exactement le même créneau (souvent deux TempsId pour la même plage),
+     * on n’en garde qu’une pour éviter les doublons visuels identiques.
+     */
+    _pickBestAdminSlotDuplicate(a, b) {
+        const hasTid = (x) => x?.TempsId != null && String(x.TempsId).trim() !== '';
+        const tidA = hasTid(a);
+        const tidB = hasTid(b);
+        if (tidA !== tidB) return tidA ? a : b;
+        if (tidA && tidB) {
+            const na = Number.parseInt(String(a.TempsId).replace(/\D/g, ''), 10) || 0;
+            const nb = Number.parseInt(String(b.TempsId).replace(/\D/g, ''), 10) || 0;
+            if (na !== nb) return na > nb ? a : b;
+        }
+        if (Boolean(a?._isUnconsolidated) !== Boolean(b?._isUnconsolidated)) {
+            return a?._isUnconsolidated ? b : a;
+        }
+        return a;
+    }
+
+    _dedupeAdminIdenticalSlotRows(ops) {
+        if (!ops?.length) return ops;
+        const winnerBySlot = new Map();
+        const pauseRows = [];
+        for (const op of ops) {
+            if (op?._isPauseRow) {
+                pauseRows.push(op);
+                continue;
+            }
+            const slot = this._getAdminMergeDedupSlotKey(op);
+            const prev = winnerBySlot.get(slot);
+            winnerBySlot.set(slot, prev ? this._pickBestAdminSlotDuplicate(prev, op) : op);
+        }
+        const out = [];
+        const seen = new Set();
+        for (const op of ops) {
+            if (op?._isPauseRow) continue;
+            const slot = this._getAdminMergeDedupSlotKey(op);
+            if (seen.has(slot)) continue;
+            seen.add(slot);
+            out.push(winnerBySlot.get(slot));
+        }
+        return [...out, ...pauseRows];
     }
 
     initializeElements() {
@@ -170,7 +440,17 @@ class AdminPage {
                 const periodFilter = this.domCache.get('periodFilter');
                 if (periodFilter) {
                     periodFilter.addEventListener('change', () => {
+                        this.syncAdminDatePickerUI();
                         this.loadData();
+                    });
+                }
+
+                const adminDatePicker = this.domCache.get('adminDatePicker');
+                if (adminDatePicker) {
+                    adminDatePicker.addEventListener('change', () => {
+                        if ((this.domCache.get('periodFilter')?.value || '') === 'custom') {
+                            this.loadData();
+                        }
                     });
                 }
                 
@@ -192,6 +472,10 @@ class AdminPage {
                         this.selectedOperatorCode = '';
                         if (statusFilter) statusFilter.value = '';
                         if (periodFilter) periodFilter.value = 'today';
+                        const pg = this.domCache.get('adminDatePickerGroup');
+                        const adp = this.domCache.get('adminDatePicker');
+                        if (adp) adp.value = '';
+                        if (pg) pg.style.display = 'none';
                         if (searchFilter) searchFilter.value = '';
                         this.loadData();
                     });
@@ -215,7 +499,7 @@ class AdminPage {
                     tableBody.addEventListener('click', async (e) => {
                         if (e.target.closest('.btn-delete')) {
                             const btn = e.target.closest('.btn-delete');
-                            const tempsId = btn.dataset.tempsId ? parseInt(btn.dataset.tempsId, 10) : null;
+                            const tempsId = btn.dataset.tempsId ? Number.parseInt(btn.dataset.tempsId, 10) : null;
                             const eventId = btn.dataset.eventId ? btn.dataset.eventId : null;
                             const id = btn.dataset.id || btn.dataset.operationId;
                             const isUnconsolidated = (btn.dataset.unconsolidated === 'true') || !tempsId;
@@ -229,7 +513,7 @@ class AdminPage {
                             e.preventDefault();
                             e.stopPropagation();
                             const btn = e.target.closest('.btn-edit');
-                            const tempsId = btn.dataset.tempsId ? parseInt(btn.dataset.tempsId, 10) : null;
+                            const tempsId = btn.dataset.tempsId ? Number.parseInt(btn.dataset.tempsId, 10) : null;
                             const eventId = btn.dataset.eventId ? btn.dataset.eventId : null;
                             const id = btn.dataset.id || btn.dataset.operationId;
                             const isUnconsolidated = (btn.dataset.unconsolidated === 'true') || !tempsId;
@@ -298,6 +582,29 @@ class AdminPage {
 
     }
 
+    /**
+     * Affiche le sélecteur de date lorsque la période « Un jour » est choisie.
+     */
+    syncAdminDatePickerUI() {
+        const periodFilter = this.domCache.get('periodFilter');
+        const group = this.domCache.get('adminDatePickerGroup');
+        const picker = this.domCache.get('adminDatePicker');
+        if (!group || !picker) return;
+        const period = periodFilter?.value || 'today';
+        if (period === 'custom') {
+            group.style.display = '';
+            if (!picker.value) {
+                const n = new Date();
+                const y = n.getFullYear();
+                const m = String(n.getMonth() + 1).padStart(2, '0');
+                const d = String(n.getDate()).padStart(2, '0');
+                picker.value = `${y}-${m}-${d}`;
+            }
+        } else {
+            group.style.display = 'none';
+        }
+    }
+
     async loadData(enableAutoConsolidate = true) {
         if (this.isLoading) {
             this.logger.log('Chargement déjà en cours, ignorer...');
@@ -339,6 +646,7 @@ class AdminPage {
             const today = toLocalDateOnly(now);
             const periodFilter = this.domCache.get('periodFilter');
             const period = periodFilter?.value || 'today';
+            this.syncAdminDatePickerUI();
 
             const toDateOnly = toLocalDateOnly;
             const startOfWeekMonday = (d) => {
@@ -369,7 +677,12 @@ class AdminPage {
                     const start = startOfMonth(now);
                     return { dateStart: toDateOnly(start), dateEnd: today };
                 }
-                // today / custom (non implémenté): fallback sur aujourd'hui
+                if (period === 'custom') {
+                    const pick = this.domCache.get('adminDatePicker')?.value?.trim();
+                    if (pick) return { date: pick };
+                    return { date: today };
+                }
+                // today: une seule journée
                 return { date: today };
             })();
             
@@ -417,7 +730,7 @@ class AdminPage {
             const operatorCode = this.selectedOperatorCode || operatorFilter?.value || undefined;
             const lancementCode = searchFilter?.value?.trim() || undefined;
 
-            const filters = { ...periodRange };
+            const filters = { ...periodRange, includeAllStatuses: true };
             if (operatorCode) filters.operatorCode = operatorCode;
             if (lancementCode) filters.lancementCode = lancementCode;
 
@@ -427,13 +740,18 @@ class AdminPage {
             if (monitoringResult && monitoringResult.success) {
                 consolidatedOps = monitoringResult.data || [];
             }
+            // Conservé pour le transfert : les lignes consolidées peuvent être masquées à l'affichage
+            // quand des segments SILOG existent pour le même opérateur/LT/jour.
+            this._consolidatedOpsRaw = consolidatedOps;
 
             if (seq !== this._loadSeq) return;
             
             // Convertir les opérations de getAdminData au format monitoring (non consolidées)
             let adminOps = [];
             if (data && data.operations && data.operations.length > 0) {
-                adminOps = data.operations.map(op => ({
+                adminOps = data.operations.map(op => {
+                    const isPauseRow = op.type === 'pause' || op._isPauseRow === true;
+                    return {
                     // IMPORTANT:
                     // - TempsId = identifiant de ABTEMPS_OPERATEURS (consolidé)
                     // - EventId / id = identifiant de ABHISTORIQUE_OPERATEURS (non consolidé)
@@ -449,22 +767,31 @@ class AdminPage {
                     EndTime: op.endTime,
                     startTime: op.startTime,
                     endTime: op.endTime,
-                    TotalDuration: op.duration ? parseInt(op.duration.replace(/[^0-9]/g, '')) : null,
-                    PauseDuration: op.pauseDuration ? parseInt(op.pauseDuration.replace(/[^0-9]/g, '')) : 0,
+                    TotalDuration: op.duration ? Number.parseInt(op.duration.replace(/[^0-9]/g, '')) : null,
+                    PauseDuration: op.pauseDuration ? Number.parseInt(op.pauseDuration.replace(/[^0-9]/g, '')) : 0,
                     ProductiveDuration: null,
                     EventsCount: op.events || 0,
-                    Phase: op.phase || 'PRODUCTION',
-                    CodeRubrique: op.codeRubrique || op.operatorId,
+                    // Ne PAS fabriquer de valeurs: sinon la clé de dédoublonnage diverge de la ligne
+                    // consolidée (ABTEMPS) et l'on obtient des doublons + le code opérateur affiché
+                    // à tort dans la colonne étape.
+                    Phase: op.phase || null,
+                    CodeRubrique: op.codeRubrique || null,
+                    // Libellé ERP de l'étape (LCTC.CodeOperation) résolu côté backend
+                    Fabrication: op.Fabrication || op.fabrication || null,
                     StatutTraitement: null,
                     Status: op.status || 'En cours',
                     StatusCode: op.statusCode || 'EN_COURS',
                     status: op.status || 'En cours',
                     statusCode: op.statusCode || 'EN_COURS',
-                    DateCreation: today,
+                    type: op.type || 'lancement',
+                    _isPauseRow: isPauseRow,
+                    _isWorkSegment: op._isWorkSegment === true,
+                    DateCreation: op.dateCreation || op.DateCreation || today,
                     CalculatedAt: null,
                     CalculationMethod: null,
-                    _isUnconsolidated: true
-                }));
+                    _isUnconsolidated: isPauseRow ? false : true
+                };
+                });
             }
             
             // Appliquer les filtres sur les opérations non consolidées
@@ -478,17 +805,28 @@ class AdminPage {
                 );
             }
             
-            // Fusionner les opérations SANS doublons:
-            // - Une seule ligne par (OperatorCode, LancementCode)
-            // - On garde automatiquement la "meilleure" version (heures non 00:00, consolidée, etc.)
+            // Fusionner les opérations SANS doublons logiques:
+            // - Chaque ligne ABTEMPS (TempsId) reste distincte même si même LT / phase / rubrique
+            // - Les événements non consolidés sont distingués par EventId / id
+            // - Sinon on dédoublonne par (opérateur, lancement, phase, rubrique, heure début) pour l'overlay historique
             const mergedMap = new Map();
 
             const normalizeKey = (op) => {
+                const tid = op?.TempsId ?? op?.tempsId;
+                if (tid != null && String(tid).trim() !== '') {
+                    return `T:${String(tid).trim()}`;
+                }
+                const eid = op?.EventId ?? (op?._isUnconsolidated ? op?.id : null);
+                if (eid != null && String(eid).trim() !== '') {
+                    return `E:${String(eid).trim()}`;
+                }
                 const operator = (op?.OperatorCode ?? op?.operatorId ?? op?.OperatorId ?? '').toString().trim();
-                const lancement = (op?.LancementCode ?? op?.lancementCode ?? op?.lancementCode ?? '').toString().trim().toUpperCase();
+                const lancement = (op?.LancementCode ?? op?.lancementCode ?? '').toString().trim().toUpperCase();
                 const phase = (op?.Phase ?? op?.phase ?? '').toString().trim().toUpperCase();
                 const rubrique = (op?.CodeRubrique ?? op?.codeRubrique ?? '').toString().trim().toUpperCase();
-                return `${operator}_${lancement}_${phase}_${rubrique}`;
+                const startRaw = op?.StartTime ?? op?.startTime ?? '';
+                const startKey = (typeof startRaw === 'string' ? startRaw : (startRaw && startRaw.toISOString ? startRaw.toISOString() : String(startRaw))).trim();
+                return `${operator}_${lancement}_${phase}_${rubrique}_S:${startKey}`;
             };
 
             const toHHmm = (dt) => {
@@ -521,8 +859,8 @@ class AdminPage {
                 if (sa !== sb) return sa > sb ? a : b;
 
                 // Tie-break: TempsId le plus récent si présent
-                const ta = a?.TempsId ? parseInt(a.TempsId, 10) : 0;
-                const tb = b?.TempsId ? parseInt(b.TempsId, 10) : 0;
+                const ta = a?.TempsId ? Number.parseInt(a.TempsId, 10) : 0;
+                const tb = b?.TempsId ? Number.parseInt(b.TempsId, 10) : 0;
                 if (ta !== tb) return ta > tb ? a : b;
 
                 return a; // stable
@@ -542,11 +880,17 @@ class AdminPage {
                 mergedMap.set(key, existing ? chooseBest(existing, op) : op);
             });
             
-            this.operations = Array.from(mergedMap.values());
+            this.operations = this._dedupeAdminIdenticalSlotRows(
+                this._dedupeAdminConsolidatedOverlay(
+                    this._preferWorkSegmentsOverConsolidated(Array.from(mergedMap.values()))
+                )
+            );
             
             // Consolidation automatique des opérations terminées sans TempsId (éviter les "lancement non consolidé")
             if (enableAutoConsolidate && !this._isConsolidating) {
                 const terminatedWithoutTempsId = this.operations.filter(op =>
+                    !op._isPauseRow &&
+                    !op._isWorkSegment &&
                     this.isOperationTerminated(op) && !op.TempsId && (op._isUnconsolidated === true || op.OperatorCode)
                 );
                 if (terminatedWithoutTempsId.length > 0) {
@@ -595,7 +939,7 @@ class AdminPage {
             }
             
             // Mettre à jour le menu déroulant des opérateurs avec les deux listes
-            const connectedOps = operatorsData && (operatorsData.success ? operatorsData.operators : operatorsData.operators) || [];
+            const connectedOps = operatorsData?.operators || [];
             // Utiliser une cache locale pour la liste complète (évite de re-télécharger pendant les refresh)
             const cachedAll = this._allOperatorsCache || [];
             if (connectedOps.length > 0 || cachedAll.length > 0) {
@@ -609,7 +953,7 @@ class AdminPage {
             if (shouldRefreshAll) {
                 this.apiService.getAllOperators()
                     .then((allOperatorsData) => {
-                        const allOps = allOperatorsData && (allOperatorsData.success ? allOperatorsData.operators : allOperatorsData.operators) || [];
+                        const allOps = allOperatorsData?.operators || [];
                         this._allOperatorsCache = allOps;
                         this._allOperatorsCacheAt = Date.now();
                         if (connectedOps.length > 0 || allOps.length > 0) {
@@ -625,7 +969,8 @@ class AdminPage {
             // Mettre à jour l'affichage des opérateurs connectés (toujours, même si vide)
             this.updateActiveOperatorsDisplay(connectedOps);
             
-            this.updateStats();
+            // updateStats() est appelé depuis updateOperationsTable() avec les mêmes filtres que le tableau
+            // (évite un KPI calculé sur l’ancien _lastFilteredOperationsForStats ou des données incohérentes)
             this.updateOperationsTable();
             this.updatePaginationInfo();
         } catch (error) {
@@ -761,7 +1106,7 @@ class AdminPage {
             const operatorCode = document.getElementById('operatorFilter')?.value || undefined;
             const lancementCode = document.getElementById('searchFilter')?.value?.trim() || undefined;
 
-            const filters = { date };
+            const filters = { date, includeAllStatuses: true };
             if (operatorCode) filters.operatorCode = operatorCode;
             if (lancementCode) filters.lancementCode = lancementCode;
 
@@ -778,18 +1123,42 @@ class AdminPage {
         }
     }
 
+    /**
+     * Heure de fin « réelle » : exclut minuit / 00:00 souvent renvoyé par SQL comme placeholder pour une opération encore ouverte.
+     */
+    hasMeaningfulEndTime(op) {
+        const raw = op?.EndTime ?? op?.endTime;
+        if (raw == null) return false;
+        if (typeof raw === 'string') {
+            const s = raw.trim();
+            if (!s || s === '-' || s.toUpperCase() === 'N/A') return false;
+        }
+        const formatted = this.formatDateTime(raw);
+        if (!formatted || formatted === '-' || formatted === 'N/A') return false;
+        if (formatted === '00:00' || formatted.startsWith('00:00')) return false;
+        return true;
+    }
+
+    /**
+     * Statut métier pour filtres / KPI : le statut explicite l’emporte sur une heure de fin parasite (ex. 00:00).
+     */
+    normalizeOperationStatus(op) {
+        const status = (op?.StatusCode || op?.statusCode || '').toString().toUpperCase();
+        const statusLabel = (op?.Status || op?.status || '').toString().toUpperCase();
+        if (status === 'PAUSE_TERMINEE' || statusLabel.includes('PAUSE TERMIN')) return 'PAUSE_TERMINEE';
+        if (status.includes('EN_COURS') || statusLabel.includes('EN COURS') || statusLabel.includes('ENCOURS')) return 'EN_COURS';
+        if (status === 'EN_PAUSE' || statusLabel.includes('EN PAUSE')) return 'EN_PAUSE';
+        if (status.includes('PAUSE') || statusLabel.includes('PAUSE')) return 'EN_PAUSE';
+        if (status.includes('TERMINE') || statusLabel.includes('TERMIN')) return 'TERMINE';
+        if (this.hasMeaningfulEndTime(op)) return 'TERMINE';
+        return 'EN_COURS';
+    }
+
     updateStats(opsOverride = null) {
         // Calculer les statistiques depuis les opérations affichées dans le tableau
         // Cela garantit la cohérence entre le tableau et les statistiques
-        const allOps = Array.isArray(opsOverride) ? opsOverride : (this._lastFilteredOperationsForStats || this.operations || []);
-        const normalizeStatus = (op) => {
-            const status = (op?.StatusCode || op?.statusCode || '').toString().toUpperCase();
-            const statusLabel = (op?.Status || op?.status || '').toString().toUpperCase();
-            const hasEndTime = !!(op?.EndTime && op.EndTime !== '-' && op.EndTime !== 'N/A' && String(op.EndTime).trim() !== '');
-            if (status.includes('TERMINE') || statusLabel.includes('TERMIN') || hasEndTime) return 'TERMINE';
-            if (status.includes('PAUSE') || statusLabel.includes('PAUSE')) return 'EN_PAUSE';
-            return 'EN_COURS';
-        };
+        const allOps = (Array.isArray(opsOverride) ? opsOverride : (this._lastFilteredOperationsForStats || this.operations || []))
+            .filter(op => !op?._isPauseRow);
 
         const getOperatorCode = (op) => {
             // Best-effort selon les différentes sources (admin ops vs monitoring)
@@ -809,22 +1178,18 @@ class AdminPage {
         };
         
         // Compter les opérations par statut depuis les données réelles
-        const activeOps = allOps.filter(op => {
-            return normalizeStatus(op) === 'EN_COURS';
-        });
-        
-        const pausedOps = allOps.filter(op => {
-            return normalizeStatus(op) === 'EN_PAUSE';
-        });
-        
-        const completedOps = allOps.filter(op => {
-            return normalizeStatus(op) === 'TERMINE';
-        });
+        const activeOps = allOps.filter(op => this.normalizeOperationStatus(op) === 'EN_COURS');
 
-        // Compter les "lancements" par LT unique (sinon ça double quand plusieurs opérateurs travaillent sur le même LT)
-        const activeLt = new Set(activeOps.map(getLancementCode).filter(Boolean));
-        const pausedLt = new Set(pausedOps.map(getLancementCode).filter(Boolean));
+        const pausedOps = allOps.filter(op => this.normalizeOperationStatus(op) === 'EN_PAUSE');
+
+        const completedOps = allOps.filter(op => this.normalizeOperationStatus(op) === 'TERMINE');
+
         const completedLt = new Set(completedOps.map(getLancementCode).filter(Boolean));
+
+        // KPI « en cours / pause » : nombre de LIGNES d’opération (plusieurs opérateurs sur le même LT
+        // comptent chacun une fois). L’ancien comptage par Set(LT) sous-estimait ce cas (ex. 8 opérateurs → 5 LT).
+        const activeLancementsCount = activeOps.length;
+        const pausedLancementsCount = pausedOps.length;
 
         // Opérateurs "actifs" = ont au moins une opération EN_COURS / EN_PAUSE affichée
         const activeOperatorCodes = new Set(
@@ -833,12 +1198,12 @@ class AdminPage {
                 .filter(Boolean)
         );
         
-        // totalOperators: utiliser le max(back, local) pour éviter les incohérences
-        // (ex: backend pas à jour mais tableau affiche déjà plusieurs opérateurs en cours)
+        // Opérateurs « actifs » = alignés sur les lignes du tableau (évite ex. 10 au bandeau et 9 dans la liste)
         const stats = {
-            totalOperators: Math.max((this.stats?.totalOperators || 0), activeOperatorCodes.size),
-            activeLancements: activeLt.size,
-            pausedLancements: pausedLt.size,
+            totalOperators: activeOperatorCodes.size,
+            activeLancements: activeLancementsCount,
+            pausedLancements: pausedLancementsCount,
+            // Terminés : rester sur des LT distincts (évite de gonfler l’affichage avec toutes les lignes historiques)
             completedLancements: completedLt.size
         };
         
@@ -1046,10 +1411,20 @@ class AdminPage {
         if (previousSelected) {
             const exists = Array.from(this.operatorSelect.options || []).some(opt => String(opt.value) === String(previousSelected));
             if (exists) {
-                this.operatorSelect.value = previousSelected;
+                this.operatorSelect.value = String(previousSelected);
+            } else {
+                // L'opérateur sélectionné n'est pas (encore) dans la liste rafraîchie
+                // (ex: liste globale pas encore chargée). On conserve son option pour
+                // ne pas réinitialiser silencieusement le filtre vers un autre opérateur.
+                const keepOption = createElement('option', { value: String(previousSelected) }, `Opérateur ${previousSelected}`);
+                this.operatorSelect.appendChild(keepOption);
+                this.operatorSelect.value = String(previousSelected);
             }
+            // Préserver le filtre courant quoi qu'il arrive
+            this.selectedOperatorCode = String(previousSelected);
+        } else {
+            this.selectedOperatorCode = this.operatorSelect?.value || '';
         }
-        this.selectedOperatorCode = this.operatorSelect?.value || '';
         
         this.logger.log('✅ Menu déroulant mis à jour avec', connectedOperators.length, 'connectés et', allOperators.length, 'globaux');
     }
@@ -1069,8 +1444,8 @@ class AdminPage {
                 this.apiService.getAllOperators()
             ]);
             
-            const connectedOps = connectedResponse && (connectedResponse.success ? connectedResponse.operators : connectedResponse.operators) || [];
-            const allOps = allOperatorsResponse && (allOperatorsResponse.success ? allOperatorsResponse.operators : allOperatorsResponse.operators) || [];
+            const connectedOps = connectedResponse?.operators || [];
+            const allOps = allOperatorsResponse?.operators || [];
             
             if (connectedOps.length > 0 || allOps.length > 0) {
                 this.updateOperatorSelect(connectedOps, allOps);
@@ -1349,14 +1724,6 @@ class AdminPage {
         
         // Appliquer les filtres
         let filteredOperations = [...this.operations];
-        const normalizeStatus = (op) => {
-            const status = (op?.StatusCode || op?.statusCode || '').toString().toUpperCase();
-            const statusLabel = (op?.Status || op?.status || '').toString().toUpperCase();
-            const hasEndTime = !!(op?.EndTime && op.EndTime !== '-' && op.EndTime !== 'N/A' && String(op.EndTime).trim() !== '');
-            if (status.includes('TERMINE') || statusLabel.includes('TERMIN') || hasEndTime) return 'TERMINE';
-            if (status.includes('PAUSE') || statusLabel.includes('PAUSE')) return 'EN_PAUSE';
-            return 'EN_COURS';
-        };
         
         // Filtre statut opération (EN_COURS / EN_PAUSE / TERMINE)
         const statusFilter = document.getElementById('statusFilter');
@@ -1364,7 +1731,14 @@ class AdminPage {
 
         if (selectedOpStatus && selectedOpStatus !== '') {
             filteredOperations = filteredOperations.filter(op => {
-                const normalized = normalizeStatus(op);
+                if (selectedOpStatus === 'T') {
+                    return String(op?.StatutTraitement ?? '').toUpperCase().trim() === 'T';
+                }
+                // Hors filtre "Transmis" : ne pas mélanger les lignes déjà basculées SILOG
+                if (String(op?.StatutTraitement ?? '').toUpperCase().trim() === 'T') {
+                    return false;
+                }
+                const normalized = this.normalizeOperationStatus(op);
                 if (selectedOpStatus === 'EN_COURS') return normalized === 'EN_COURS';
                 if (selectedOpStatus === 'EN_PAUSE') return normalized === 'EN_PAUSE';
                 if (selectedOpStatus === 'TERMINE') return normalized === 'TERMINE';
@@ -1396,10 +1770,26 @@ class AdminPage {
             this.logger.log(`📊 Après filtrage recherche: ${filteredOperations.length} opérations`);
         }
 
-        // Masquer automatiquement les opérations déjà transférées (StatutTraitement = 'T')
+        // Transmis (T) : visibles et grisés. On masque seulement les overlays
+        // historiques (segments / non consolidés) du même opérateur+LT+jour,
+        // pour éviter les doublons à côté de la ligne consolidée déjà basculée.
+        const transmittedKeys = new Set();
+        for (const op of this.operations || []) {
+            if (String(op?.StatutTraitement ?? '').toUpperCase().trim() !== 'T') continue;
+            const oc = String(op?.OperatorCode || op?.operatorCode || op?.operatorId || '').trim();
+            const lc = String(op?.LancementCode || op?.lancementCode || '').trim().toUpperCase();
+            const ymd = this._parseOpDateCreationLocalYmd(op?.DateCreation) || '';
+            transmittedKeys.add(`${oc}|${lc}|${ymd}`);
+        }
         filteredOperations = filteredOperations.filter(op => {
-            const st = String(op?.StatutTraitement ?? '').toUpperCase().trim();
-            return st !== 'T';
+            if (!this.shouldShowAdminDashboardRow(op)) return false;
+            const isT = String(op?.StatutTraitement ?? '').toUpperCase().trim() === 'T';
+            if (isT) return true;
+            if (transmittedKeys.size === 0) return true;
+            const oc = String(op?.OperatorCode || op?.operatorCode || op?.operatorId || '').trim();
+            const lc = String(op?.LancementCode || op?.lancementCode || '').trim().toUpperCase();
+            const ymd = this._parseOpDateCreationLocalYmd(op?.DateCreation) || '';
+            return !transmittedKeys.has(`${oc}|${lc}|${ymd}`);
         });
 
         // Mémoriser pour stats cohérentes avec le tableau
@@ -1493,37 +1883,8 @@ class AdminPage {
         // On ne regroupe plus par OperatorCode: chaque enregistrement retourné par le backend apparaît dans le tableau.
         const getOperatorCode = (op) => String(op?.OperatorCode || op?.operatorCode || op?.operatorId || '').trim();
         const getLancementCode = (op) => String(op?.LancementCode || op?.lancementCode || '').trim().toUpperCase();
-        const getRowId = (op) => {
-            const tempsId = op?.TempsId ?? null;
-            const eventId = op?.EventId ?? op?.id ?? null;
-            const v = tempsId || eventId;
-            const n = v ? Number(v) : 0;
-            return Number.isFinite(n) ? n : 0;
-        };
-        const getStatusCode = (op) => {
-            const sc = (op?.StatusCode || op?.statusCode || '').toString().trim().toUpperCase();
-            if (sc) return sc;
-            const statusLabel = (op?.Status || op?.status || '').toString().trim().toUpperCase();
-            if (statusLabel.includes('EN COURS')) return 'EN_COURS';
-            if (statusLabel.includes('PAUSE')) return 'EN_PAUSE';
-            if (statusLabel.includes('TERMIN')) return 'TERMINE';
-            // fallback: si EndTime existe, considérer terminé
-            const end = this.formatDateTime(op?.EndTime ?? op?.endTime);
-            if (end && end !== '-' && String(end).trim() !== '' && end !== 'N/A') return 'TERMINE';
-            return '';
-        };
-        // Trier les opérations pour un affichage stable (opérateur, lancement, heure de début), puis paginer
-        const sorted = [...filteredOperations].sort((a, b) => {
-            const opA = getOperatorCode(a);
-            const opB = getOperatorCode(b);
-            if (opA !== opB) return opA.localeCompare(opB);
-            const ltA = getLancementCode(a);
-            const ltB = getLancementCode(b);
-            if (ltA !== ltB) return ltA.localeCompare(ltB);
-            const startA = this.formatDateTime(a?.StartTime ?? a?.startTime) || '';
-            const startB = this.formatDateTime(b?.StartTime ?? b?.startTime) || '';
-            return startA.localeCompare(startB);
-        });
+        // Timeline SILOG : opérateur puis ordre chronologique (opérations + pauses mélangées)
+        const sorted = [...filteredOperations].sort(compareAdminTimelineRows);
         const operationsToDisplay = sorted.slice(start, end);
 
         // Mémoriser des compteurs d'affichage pour la pagination (fallback)
@@ -1581,6 +1942,20 @@ class AdminPage {
             });
             
             const row = createElement('tr');
+            const isPauseRow = operation._isPauseRow === true || operation.type === 'pause';
+            const isTransmitted = String(operation.StatutTraitement || '').toUpperCase() === 'T';
+
+            if (isPauseRow) {
+                row.classList.add('pause-row');
+                const pauseStatusCode = String(operation.StatusCode || operation.statusCode || '').toUpperCase();
+                if (pauseStatusCode === 'PAUSE_TERMINEE') {
+                    row.classList.add('pause-terminee');
+                }
+            }
+            if (isTransmitted) {
+                row.classList.add('row-transmitted');
+                row.title = 'Transmis à SILOG (StatutTraitement = T)';
+            }
             
             // Identifiants (ne pas confondre):
             // - TempsId: ABTEMPS_OPERATEURS (consolidé)
@@ -1597,20 +1972,29 @@ class AdminPage {
             row.dataset.unconsolidated = isUnconsolidated ? 'true' : 'false';
 
             // Déterminer le statut à afficher :
-            // 1. Priorité au statut de l'opération (Status/StatusCode) - indique si l'opération est Terminé, En cours, En pause
-            // 2. Sinon, utiliser le statut de traitement/consolidation (StatutTraitement) - indique si l'opération est consolidée/transférée
+            // Priorité au basculement SILOG (T) pour que l'admin voie clairement ce qui est déjà transmis.
             let statutCode, statutLabel;
-            
-            // Vérifier d'abord le statut de l'opération (Status/StatusCode)
-            if (operation.StatusCode && operation.Status) {
-                statutCode = operation.StatusCode.toUpperCase().replace(/[^A-Z0-9_]/g, '_');
-                statutLabel = operation.Status;
-            } 
-            // Si pas de statut explicite mais une heure de fin valide, l'opération est terminée
-            else if (formattedEndTime && formattedEndTime !== '-' && formattedEndTime.trim() !== '' && formattedEndTime !== 'N/A') {
+
+            if (isTransmitted) {
+                statutCode = 'T';
+                statutLabel = STATUS_LABELS[STATUS_CODES.TRANSMIS] || 'TRANSMIS';
+            }
+            // Sinon statut opération (Status/StatusCode)
+            else if (operation.StatusCode || operation.statusCode || operation.Status || operation.status) {
+                const rawCode = (operation.StatusCode || operation.statusCode || '').toString().trim();
+                statutCode = rawCode
+                    ? rawCode.toUpperCase().replace(/[^A-Z0-9_]/g, '_')
+                    : this.normalizeOperationStatus(operation);
+                const rawLabel = (operation.Status || operation.status || '').toString().trim();
+                statutLabel = rawLabel
+                    || STATUS_LABELS[statutCode]
+                    || (statutCode === 'TERMINE' ? 'Terminé' : statutCode === 'EN_PAUSE' ? 'En pause' : 'En cours');
+            }
+            // Si pas de statut explicite mais une heure de fin réelle, l'opération est terminée
+            else if (this.hasMeaningfulEndTime(operation)) {
                 statutCode = 'TERMINE';
                 statutLabel = 'Terminé';
-            } 
+            }
             // Sinon, utiliser le statut de traitement/consolidation
             else {
                 statutCode = (operation.StatutTraitement === null || operation.StatutTraitement === undefined)
@@ -1627,7 +2011,14 @@ class AdminPage {
             // Cellule 2: Lancement avec badge multi-opérateurs
             const cell2 = createTableCell('');
             const lancementDiv = createElement('div', { style: { display: 'flex', flexDirection: 'column', gap: '4px' } });
-            const lancementCodeDiv = createElement('div', {}, operation.LancementCode || '-');
+            const lancementCodeDiv = createElement('div', {}, '');
+            if (isPauseRow) {
+                const pauseIcon = createElement('i', { className: 'fas fa-pause-circle pause-icon' });
+                lancementCodeDiv.appendChild(pauseIcon);
+                lancementCodeDiv.appendChild(document.createTextNode(` ${operation.LancementCode || '-'}`));
+            } else {
+                lancementCodeDiv.textContent = operation.LancementCode || '-';
+            }
             lancementDiv.appendChild(lancementCodeDiv);
             
             const lt = String(operation.LancementCode || '').trim().toUpperCase();
@@ -1644,31 +2035,42 @@ class AdminPage {
             const cell3 = createTableCell(operation.LancementName || '-');
             row.appendChild(cell3);
             
-            // Cellule 4: Phase
-            const cell4 = createTableCell(operation.Phase || operation.phase || '-');
+            const { stepCode, stepLabel } = getAdminStepColumnDisplay(operation);
+            const cell4 = createTableCell(stepCode);
             row.appendChild(cell4);
-            
-            // Cellule 5: CodeRubrique
-            const cell5 = createTableCell(operation.CodeRubrique || operation.codeRubrique || '-');
+
+            const cell5 = createTableCell(stepLabel);
             row.appendChild(cell5);
             
             // Cellule 6: Heure début
-            const cell6 = createTableCell(formattedStartTime);
+            const cell6 = createTableCell(this.formatAdminTimelineTime(operation, operation.StartTime ?? operation.startTime));
             row.appendChild(cell6);
             
             // Cellule 7: Heure fin avec warning
-            const endTimeText = formattedEndTime + timeWarning;
+            const endTimeText = this.formatAdminTimelineTime(operation, operation.EndTime ?? operation.endTime) + timeWarning;
             const cell7 = createTableCell(endTimeText);
             row.appendChild(cell7);
             
-            // Cellule 8: Statut
+            // Cellule 9: Statut
             const cell8 = createTableCell('');
             const statusBadge = createBadge(statutLabel, `status-badge status-${statutCode}`);
             cell8.appendChild(statusBadge);
             row.appendChild(cell8);
             
-            // Cellule 9: Actions
+            // Cellule 10: Actions
             const cell9 = createTableCell('', { className: 'actions-cell' });
+            // Un enregistrement déjà transmis à SILOG (StatutTraitement='T') ne peut être ni corrigé
+            // ni supprimé côté backend : on masque les boutons pour éviter une erreur trompeuse.
+            if (!isPauseRow && isTransmitted) {
+                const lockedInfo = createElement('span', {
+                    className: 'transmitted-lock',
+                    title: 'Transmis à SILOG — non modifiable'
+                });
+                lockedInfo.appendChild(createElement('i', { className: 'fas fa-lock' }));
+                lockedInfo.appendChild(document.createTextNode(' Transmis'));
+                cell9.appendChild(lockedInfo);
+            }
+            if (!isPauseRow && !isTransmitted) {
             const editBtn = createButton({
                 icon: 'fas fa-edit',
                 className: 'btn-edit',
@@ -1695,6 +2097,7 @@ class AdminPage {
             });
             cell9.appendChild(editBtn);
             cell9.appendChild(deleteBtn);
+            }
             row.appendChild(cell9);
             
             this.operationsTableBody.appendChild(row);
@@ -1716,21 +2119,159 @@ class AdminPage {
 
     // ===== Helper: déterminer si une opération est Terminé (même logique que dans updateOperationsTable) =====
     isOperationTerminated(operation) {
-        // Si StatusCode/Status existe et indique "Terminé"
-        if (operation.StatusCode && operation.Status) {
-            const statusUpper = String(operation.Status).toUpperCase();
-            if (statusUpper.includes('TERMIN') || statusUpper === 'TERMINE') {
-                return true;
+        return this.normalizeOperationStatus(operation) === 'TERMINE';
+    }
+
+    _getAdminMonitoringFilters() {
+        const now = new Date();
+        const today = toLocalDateOnlyString(now);
+        const periodFilter = this.domCache.get('periodFilter');
+        const period = periodFilter?.value || 'today';
+        const toDateOnly = toLocalDateOnlyString;
+        const startOfWeekMonday = (d) => {
+            const x = new Date(d);
+            x.setHours(0, 0, 0, 0);
+            const day = x.getDay();
+            const diff = (day === 0 ? -6 : 1) - day;
+            x.setDate(x.getDate() + diff);
+            return x;
+        };
+        const startOfMonth = (d) => {
+            const x = new Date(d.getFullYear(), d.getMonth(), 1);
+            x.setHours(0, 0, 0, 0);
+            return x;
+        };
+        const periodRange = (() => {
+            if (period === 'yesterday') {
+                const y = new Date(now);
+                y.setDate(y.getDate() - 1);
+                return { date: toDateOnly(y) };
+            }
+            if (period === 'week') {
+                const start = startOfWeekMonday(now);
+                return { dateStart: toDateOnly(start), dateEnd: today };
+            }
+            if (period === 'month') {
+                const start = startOfMonth(now);
+                return { dateStart: toDateOnly(start), dateEnd: today };
+            }
+            if (period === 'custom') {
+                const pick = this.domCache.get('adminDatePicker')?.value?.trim();
+                if (pick) return { date: pick };
+                return { date: today };
+            }
+            return { date: today };
+        })();
+        const filters = { ...periodRange, includeAllStatuses: true };
+        const operatorCode = this.selectedOperatorCode || this.domCache.get('operatorFilter')?.value || undefined;
+        const lancementCode = this.domCache.get('searchFilter')?.value?.trim() || undefined;
+        if (operatorCode) filters.operatorCode = operatorCode;
+        if (lancementCode) filters.lancementCode = lancementCode;
+        return filters;
+    }
+
+    _getLancementKey(op) {
+        const oc = String(op?.OperatorCode || op?.operatorCode || op?.operatorId || '').trim();
+        const lc = String(op?.LancementCode || op?.lancementCode || '').trim().toUpperCase();
+        return `${oc}|${lc}`;
+    }
+
+    _isLancementStillActiveInDisplay(operatorCode, lancementCode) {
+        const rows = (this.operations || []).filter((op) =>
+            !op._isPauseRow &&
+            String(op.OperatorCode || '') === String(operatorCode) &&
+            String(op.LancementCode || '') === String(lancementCode)
+        );
+        return rows.some((op) => {
+            const st = this.normalizeOperationStatus(op);
+            return st === 'EN_COURS' || st === 'EN_PAUSE';
+        });
+    }
+
+    _upsertTransferEligibleByKey(eligibleByKey, op) {
+        if (!op?.TempsId) return;
+        if (!this.isOperationTerminated(op)) return;
+        if (op.StatutTraitement === 'T') return;
+        eligibleByKey.set(this._getLancementKey(op), op);
+    }
+
+    /**
+     * Résout les opérations transférables en s'appuyant sur ABTEMPS (TempsId),
+     * indépendamment de l'affichage SILOG qui masque parfois les lignes consolidées.
+     */
+    async _resolveTransferEligibleOperations() {
+        const filters = this._getAdminMonitoringFilters();
+        const monitoringResult = await this.apiService.getMonitoringTemps(filters);
+        const consolidatedOps = (monitoringResult?.success ? monitoringResult.data : this._consolidatedOpsRaw) || [];
+        this._consolidatedOpsRaw = consolidatedOps;
+
+        const eligibleByKey = new Map();
+        consolidatedOps.forEach((op) => this._upsertTransferEligibleByKey(eligibleByKey, op));
+
+        const seenLancements = new Set();
+        const toConsolidate = [];
+        for (const op of (this.operations || [])) {
+            if (op._isPauseRow || op.StatutTraitement === 'T') continue;
+            const key = this._getLancementKey(op);
+            if (!key || key === '|' || seenLancements.has(key)) continue;
+            seenLancements.add(key);
+            if (eligibleByKey.has(key)) continue;
+            const [operatorCode, lancementCode] = key.split('|');
+            if (this._isLancementStillActiveInDisplay(operatorCode, lancementCode)) continue;
+            if (!this.isOperationTerminated(op) &&
+                !consolidatedOps.some((c) => this._getLancementKey(c) === key && this.isOperationTerminated(c))) {
+                continue;
+            }
+            toConsolidate.push({ OperatorCode: operatorCode, LancementCode: lancementCode });
+        }
+
+        let skipped = [];
+        let errors = [];
+        if (toConsolidate.length > 0) {
+            const consolidateResult = await this.apiService.consolidateMonitoringBatch(toConsolidate);
+            skipped = consolidateResult?.results?.skipped || [];
+            errors = consolidateResult?.results?.errors || [];
+
+            for (const item of consolidateResult?.results?.success || []) {
+                if (!item?.TempsId) continue;
+                this._upsertTransferEligibleByKey(eligibleByKey, {
+                    OperatorCode: item.OperatorCode,
+                    LancementCode: item.LancementCode,
+                    TempsId: item.TempsId,
+                    StatutTraitement: null,
+                    StatusCode: 'TERMINE',
+                    Status: 'Terminé'
+                });
+            }
+            for (const item of skipped) {
+                if (!item?.TempsId) continue;
+                this._upsertTransferEligibleByKey(eligibleByKey, {
+                    OperatorCode: item.OperatorCode,
+                    LancementCode: item.LancementCode,
+                    TempsId: item.TempsId,
+                    StatutTraitement: null,
+                    StatusCode: 'TERMINE',
+                    Status: 'Terminé'
+                });
+            }
+
+            const missingAfterBatch = toConsolidate.filter(
+                (op) => !eligibleByKey.has(`${op.OperatorCode}|${String(op.LancementCode || '').trim().toUpperCase()}`)
+            );
+            if (missingAfterBatch.length > 0) {
+                const refresh = await this.apiService.getMonitoringTemps(filters);
+                const refreshed = (refresh?.success ? refresh.data : []) || [];
+                refreshed.forEach((op) => this._upsertTransferEligibleByKey(eligibleByKey, op));
+                this._consolidatedOpsRaw = refreshed;
             }
         }
-        
-        // Sinon, vérifier EndTime formaté (même logique que dans updateOperationsTable)
-        const formattedEndTime = this.formatDateTime(operation.EndTime);
-        if (formattedEndTime && formattedEndTime !== '-' && formattedEndTime.trim() !== '' && formattedEndTime !== 'N/A') {
-            return true;
-        }
-        
-        return false;
+
+        return {
+            eligible: Array.from(eligibleByKey.values()),
+            skipped,
+            errors,
+            attemptedConsolidation: toConsolidate.length
+        };
     }
 
     // ===== Transfert: une seule consolidation puis transfert, sans boucle =====
@@ -1753,99 +2294,43 @@ class AdminPage {
             const allRecordsData = this.operations || [];
             this.logger.log(`📊 Total opérations dans le tableau: ${allRecordsData.length}`);
 
-            // 1) Prendre uniquement les opérations TERMINÉES non déjà transférées
-            let terminatedOps = allRecordsData.filter(
-                op => this.isOperationTerminated(op) && op.StatutTraitement !== 'T'
+            const {
+                eligible: terminatedWithTempsId,
+                skipped: lastConsolidationSkipped,
+                errors: lastConsolidationErrors,
+                attemptedConsolidation
+            } = await this._resolveTransferEligibleOperations();
+
+            const terminatedOps = terminatedWithTempsId;
+            this.logger.log(
+                `📊 Opérations TERMINÉES éligibles (TempsId): ${terminatedWithTempsId.length}` +
+                (attemptedConsolidation > 0 ? ` (consolidation tentée: ${attemptedConsolidation})` : '')
             );
 
-            this.logger.log(`📊 Opérations TERMINÉES non transférées: ${terminatedOps.length}`);
-
-            if (terminatedOps.length === 0) {
-                const alreadyTransferred = allRecordsData.filter(op => op.StatutTraitement === 'T').length;
-                const terminated = allRecordsData.filter(op => this.isOperationTerminated(op)).length;
-                this.notificationManager.warning(
-                    `Aucune opération TERMINÉE à transférer (${terminated} terminées, ${alreadyTransferred} déjà transférées)`
-                );
-                return; // le finally s'exécutera et retirera le loader
-            }
-
-            // 2) Un seul batch de consolidation pour celles sans TempsId
-            const opsWithoutTempsId = terminatedOps.filter(op => !op.TempsId);
-            // Garder une trace des éléments ignorés/erreurs du batch de consolidation
-            // pour expliquer correctement l'absence de TempsId après reload.
-            let lastConsolidationSkipped = [];
-            let lastConsolidationErrors = [];
-            if (opsWithoutTempsId.length > 0) {
-                this.logger.log(`🔄 Consolidation de ${opsWithoutTempsId.length} opération(s) terminée(s) sans TempsId avant transfert...`);
-                const operationsToConsolidate = opsWithoutTempsId.map(op => ({
-                    OperatorCode: op.OperatorCode,
-                    LancementCode: op.LancementCode
-                }));
-                
-                // Marquer la consolidation en cours pour éviter les appels récursifs
-                this._isConsolidating = true;
-                try {
-                    const consolidateResult = await this.apiService.consolidateMonitoringBatch(operationsToConsolidate);
-                    const ok = consolidateResult?.results?.success || [];
-                    const errors = consolidateResult?.results?.errors || [];
-                    const skipped = consolidateResult?.results?.skipped || [];
-                    lastConsolidationSkipped = skipped;
-                    lastConsolidationErrors = errors;
-
-                    this.logger.log(
-                        `✅ Consolidation pré-transfert: ${ok.length} réussie(s), ` +
-                        `${skipped.length} ignorée(s), ` +
-                        `${errors.length} erreur(s)`
-                    );
-
-                    if (errors.length > 0) {
-                        // Construire un message détaillé avec les erreurs
-                        const errorDetails = errors.map(err => {
-                            const op = err.operation || {};
-                            return `• ${op.OperatorCode || '?'}/${op.LancementCode || '?'}: ${err.error || 'Erreur inconnue'}`;
-                        }).join('\n');
-                        
-                        const errorMessage = 
-                            `${errors.length} opération(s) n'ont pas pu être consolidée(s):\n\n${errorDetails}\n\n` +
-                            `Vérifiez que les opérations ont bien des événements DEBUT et FIN dans ABHISTORIQUE_OPERATEURS.`;
-                        
-                        this.logger.error('❌ Erreurs de consolidation:', errors);
-                        
-                        // Utiliser alert() pour afficher le message complet
-                        alert(errorMessage);
-                        
-                        // Aussi afficher une notification courte
-                        this.notificationManager.warning(
-                            `${errors.length} opération(s) n'ont pas pu être consolidée(s). Voir l'alerte pour les détails.`,
-                            8000
-                        );
-                    }
-
-                    // Recharger une seule fois les données pour récupérer les nouveaux TempsId
-                    // Désactiver la consolidation automatique pendant le rechargement
-                    await this.loadData(false); // Passer false pour désactiver autoConsolidate
-                    terminatedOps = (this.operations || []).filter(
-                        op => this.isOperationTerminated(op) && op.StatutTraitement !== 'T'
-                    );
-                } finally {
-                    this._isConsolidating = false;
-                }
-            }
-
-            // 3) Ne garder pour le transfert que les opérations qui ont maintenant un TempsId
-            const terminatedWithTempsId = terminatedOps.filter(op => op.TempsId);
-
             if (terminatedWithTempsId.length === 0) {
-                // Afficher les détails des opérations qui ont échoué
-                const failedOps = terminatedOps.filter(op => !op.TempsId);
-
-                // Si la consolidation a "ignoré" toutes les opérations (cas normal: lancement soldé/composant/absent de V_LCTC),
-                // ne pas afficher un message d'erreur DEBUT/FIN trompeur.
-                const skippedKeySet = new Set(
-                    (lastConsolidationSkipped || []).map(s => `${s.OperatorCode}/${s.LancementCode}`)
+                const displayTerminated = allRecordsData.filter(
+                    (op) => !op._isPauseRow && this.isOperationTerminated(op) && op.StatutTraitement !== 'T'
                 );
-                const failedNotSkipped = failedOps.filter(op => !skippedKeySet.has(`${op.OperatorCode}/${op.LancementCode}`));
-                const onlySkipped = failedOps.length > 0 && failedNotSkipped.length === 0 && (lastConsolidationErrors || []).length === 0;
+                const alreadyTransferred = allRecordsData.filter((op) => op.StatutTraitement === 'T').length;
+
+                if (displayTerminated.length === 0) {
+                    const terminated = allRecordsData.filter((op) => this.isOperationTerminated(op)).length;
+                    this.notificationManager.warning(
+                        `Aucune opération TERMINÉE à transférer (${terminated} terminées, ${alreadyTransferred} déjà transférées)`
+                    );
+                    return;
+                }
+
+                const failedOps = displayTerminated;
+                const skippedKeySet = new Set(
+                    (lastConsolidationSkipped || []).map((s) => `${s.OperatorCode}/${s.LancementCode}`)
+                );
+                const failedNotSkipped = failedOps.filter(
+                    (op) => !skippedKeySet.has(`${op.OperatorCode}/${op.LancementCode}`)
+                );
+                const onlySkipped = failedOps.length > 0 &&
+                    failedNotSkipped.length === 0 &&
+                    (lastConsolidationErrors || []).length === 0;
                 if (onlySkipped) {
                     const reasonCounts = (lastConsolidationSkipped || []).reduce((acc, s) => {
                         const r = s.reason || 'Ignoré';
@@ -1858,7 +2343,7 @@ class AdminPage {
 
                     let msg = `Aucune opération terminée n'est éligible au transfert.\n\n` +
                         `${failedOps.length} opération(s) ont été ignorée(s) (normal):\n`;
-                    failedOps.forEach(op => {
+                    failedOps.forEach((op) => {
                         msg += `• ${op.OperatorCode || '?'}/${op.LancementCode || '?'} - ${op.OperatorName || 'Opérateur inconnu'}\n`;
                     });
                     msg += `\nRaisons d'ignorance (consolidation):\n${reasonsText || '- (non précisé)'}\n\n` +
@@ -1871,42 +2356,28 @@ class AdminPage {
                     );
                     return;
                 }
-                
-                // Construire un message détaillé pour alert() (qui gère mieux les multi-lignes)
+
                 let errorDetails = 'Aucune opération terminée n\'a un TempsId valide après consolidation.\n\n';
-                
                 if (failedOps.length > 0) {
                     errorDetails += `Opérations en échec (${failedOps.length}):\n`;
-                    failedOps.forEach(op => {
+                    failedOps.forEach((op) => {
                         errorDetails += `• ${op.OperatorCode || '?'}/${op.LancementCode || '?'} - ${op.OperatorName || 'Opérateur inconnu'}\n`;
                     });
                     errorDetails += '\n';
                 }
-                
                 errorDetails += 'Causes possibles:\n';
                 errorDetails += '• Événements DEBUT ou FIN manquants dans ABHISTORIQUE_OPERATEURS\n';
                 errorDetails += '• Heures incohérentes (fin < début)\n';
                 errorDetails += '• Données invalides dans la base de données\n\n';
                 errorDetails += 'Vérifiez les logs backend pour plus de détails.';
-                
-                this.logger.error('❌ Aucune opération consolidée:', {
-                    totalTerminated: terminatedOps.length,
-                    failedOps: failedOps.map(op => ({
-                        OperatorCode: op.OperatorCode,
-                        LancementCode: op.LancementCode,
-                        Status: op.Status,
-                        StatusCode: op.StatusCode,
-                        TempsId: op.TempsId,
-                        EventId: op.EventId
-                    }))
+
+                this.logger.error('❌ Aucune opération consolidée pour transfert:', {
+                    displayTerminated: failedOps.length,
+                    consolidationErrors: lastConsolidationErrors
                 });
-                
-                // Utiliser alert() pour afficher le message complet (meilleur pour les multi-lignes)
                 alert(errorDetails);
-                
-                // Aussi afficher une notification courte
                 this.notificationManager.error(
-                    `${failedOps.length} opération(s) n'ont pas pu être consolidée(s). Voir la console pour les détails.`,
+                    `${failedOps.length} opération(s) n'ont pas pu être consolidée(s). Voir l'alerte pour les détails.`,
                     10000
                 );
                 return;
@@ -1932,13 +2403,28 @@ class AdminPage {
                     return;
                 }
                 
-                const triggerEdiJob = confirm('Déclencher EDI_JOB après transfert ?');
-                const result = await this.apiService.validateAndTransmitMonitoringBatch(ids, { triggerEdiJob });
+                // Toujours demander EDI : en mode ssh = immédiat ; en scheduled = filet Windows
+                const ok = confirm(
+                    `Valider ${ids.length} opération(s) et envoyer vers SILOG maintenant ?\n\n` +
+                    `OK = validation (O) + déclenchement EDI\nAnnuler = abandon`
+                );
+                if (!ok) return;
+
+                const result = await this.apiService.validateAndTransmitMonitoringBatch(ids, {
+                    triggerEdiJob: true,
+                    // Ne pas marquer T ici : SILOG bascule O→T après intégration réelle
+                    adminMarkTransmitted: false
+                });
                 if (result?.success) {
-                    this.notificationManager.success(`Transfert terminé: ${result.count || ids.length} opération(s) transférée(s)`);
-                    // Recharger les données pour mettre à jour l'affichage
-                    await this.loadData(false); // Désactiver autoConsolidate après transfert
-                    // Mettre à jour le tableau pour refléter les changements
+                    this.notificationManager.success(
+                        this._formatTransferResultMessage(result, ids.length)
+                    );
+                    if (result.ediJob?.success === false) {
+                        this.notificationManager.warning(
+                            result.ediJob.error || result.ediJob.message || 'EDI_JOB a échoué — lignes en O, retry possible'
+                        );
+                    }
+                    await this.loadData(false);
                     this.updateOperationsTable();
                 } else {
                     this.notificationManager.error(result?.error || 'Erreur lors du transfert');
@@ -2061,26 +2547,60 @@ class AdminPage {
     }
 
     async confirmTransferFromModal() {
-        const ids = Array.from(this.transferSelectionIds).map(x => parseInt(x, 10)).filter(n => !Number.isNaN(n));
+        const ids = Array.from(this.transferSelectionIds).map(x => Number.parseInt(x, 10)).filter(n => !Number.isNaN(n));
         if (ids.length === 0) {
             this.notificationManager.warning('Aucune ligne sélectionnée');
             return;
         }
         
         try {
-        const triggerEdiJob = confirm('Déclencher EDI_JOB après transfert ?');
-        const result = await this.apiService.validateAndTransmitMonitoringBatch(ids, { triggerEdiJob });
-        if (result?.success) {
-                this.notificationManager.success(`Transfert terminé: ${result.count || ids.length} opération(s) transférée(s)`);
-            this.hideTransferModal();
-                await this.loadData(false); // Désactiver autoConsolidate après transfert
-        } else {
-            this.notificationManager.error(result?.error || 'Erreur transfert');
+            const ok = confirm(
+                `Valider ${ids.length} opération(s) et envoyer vers SILOG maintenant ?\n\n` +
+                `OK = validation (O) + déclenchement EDI\nAnnuler = abandon`
+            );
+            if (!ok) return;
+
+            const result = await this.apiService.validateAndTransmitMonitoringBatch(ids, {
+                triggerEdiJob: true,
+                adminMarkTransmitted: false
+            });
+            if (result?.success) {
+                this.notificationManager.success(
+                    this._formatTransferResultMessage(result, ids.length)
+                );
+                if (result.ediJob?.success === false) {
+                    this.notificationManager.warning(
+                        result.ediJob.error || result.ediJob.message || 'EDI_JOB a échoué — lignes en O'
+                    );
+                }
+                this.hideTransferModal();
+                await this.loadData(false);
+            } else {
+                this.notificationManager.error(result?.error || 'Erreur transfert');
             }
         } catch (error) {
             this.logger.error('❌ Erreur lors du transfert depuis la modale:', error);
             this.notificationManager.error('Erreur de connexion lors du transfert');
         }
+    }
+
+    /**
+     * Message admin selon le résultat EDI (ssh immédiat vs scheduled).
+     */
+    _formatTransferResultMessage(result, fallbackCount) {
+        const n = result.count || fallbackCount;
+        const edi = result.ediJob;
+        if (!edi) {
+            return `${n} opération(s) validée(s) (statut O)`;
+        }
+        if (edi.skipped) {
+            return `${n} validée(s) (O) — EDI non lancé ici (${edi.message || 'mode planifié'}). Attente tâche Windows.`;
+        }
+        if (edi.success) {
+            const sec = edi.elapsedMs ? ` en ${Math.round(edi.elapsedMs / 1000)}s` : '';
+            return `${n} validée(s) (O) — EDI SILOG déclenché${sec}. Passage en TRANSMIS (T) après intégration.`;
+        }
+        return `${n} validée(s) (O) — EDI en erreur (lignes restent en attente)`;
     }
 
     async deleteOperation(id) {
@@ -2110,8 +2630,8 @@ class AdminPage {
         }
         
         // Convertir l'ID en nombre pour éviter les problèmes de type
-        const tempsId = parseInt(id, 10);
-        if (isNaN(tempsId)) {
+        const tempsId = Number.parseInt(id, 10);
+        if (Number.isNaN(tempsId)) {
             this.logger.error('❌ ID invalide:', id);
             this.notificationManager.error('ID d\'enregistrement invalide');
             return;
@@ -2138,7 +2658,13 @@ class AdminPage {
                 }
             }
         } catch (error) {
-            this.errorHandler.handle(error, 'deleteMonitoringRecord', 'Erreur lors de la suppression');
+            const msg = String(error?.message || '');
+            if (msg.includes('déjà transmis')) {
+                this.notificationManager.warning('Cet enregistrement a déjà été transmis à SILOG : il ne peut plus être supprimé. Actualisation...');
+                await this.loadData();
+            } else {
+                this.errorHandler.handle(error, 'deleteMonitoringRecord', 'Erreur lors de la suppression');
+            }
         } finally {
             this.loadingIndicator.hide('deleteMonitoring');
         }
@@ -2146,8 +2672,8 @@ class AdminPage {
 
     async editMonitoringRecord(id) {
         // Convertir l'ID en nombre pour éviter les problèmes de type
-        const tempsId = parseInt(id, 10);
-        if (isNaN(tempsId)) {
+        const tempsId = Number.parseInt(id, 10);
+        if (Number.isNaN(tempsId)) {
             this.logger.error('❌ ID invalide:', id);
             this.notificationManager.error('ID d\'enregistrement invalide');
             return;
@@ -2341,10 +2867,10 @@ class AdminPage {
         
         if (parts.length < 2) return null;
         
-        const hours = parseInt(parts[0], 10);
-        const minutes = parseInt(parts[1], 10);
+        const hours = Number.parseInt(parts[0], 10);
+        const minutes = Number.parseInt(parts[1], 10);
         
-        if (isNaN(hours) || isNaN(minutes) || hours < 0 || hours > 23 || minutes < 0 || minutes > 59) {
+        if (Number.isNaN(hours) || Number.isNaN(minutes) || hours < 0 || hours > 23 || minutes < 0 || minutes > 59) {
             return null;
         }
         
@@ -2440,7 +2966,7 @@ class AdminPage {
         this.logger.log('🔧 Édition inline de l\'opération:', id, 'Type:', typeof id);
         
         // Convertir l'ID en nombre si nécessaire pour la comparaison
-        const numericId = typeof id === 'string' ? parseInt(id, 10) : id;
+        const numericId = typeof id === 'string' ? Number.parseInt(id, 10) : id;
         
         // Trouver la ligne correspondante - essayer plusieurs méthodes
         let row = document.querySelector(`tr[data-operation-id="${id}"]`);
@@ -2614,7 +3140,7 @@ class AdminPage {
         // Sinon, essayer de formater comme une date complète avec fuseau horaire Paris
         try {
             const date = new Date(dateString);
-            if (!isNaN(date.getTime())) {
+            if (!Number.isNaN(date.getTime())) {
                 // Utiliser fuseau horaire français (Europe/Paris)
                 const result = date.toLocaleTimeString('fr-FR', {
                     timeZone: 'Europe/Paris',
@@ -2912,7 +3438,7 @@ class AdminPage {
         if (typeof timeString === 'string' && timeString.includes('T')) {
             try {
                 const date = new Date(timeString);
-                if (!isNaN(date.getTime())) {
+                if (!Number.isNaN(date.getTime())) {
                     // Utiliser toLocaleTimeString avec fuseau horaire français
                     const formattedTime = date.toLocaleTimeString('fr-FR', {
                         timeZone: 'Europe/Paris',
@@ -2951,13 +3477,13 @@ class AdminPage {
         if (typeof dateString === 'string' && /^\d{2}:\d{2}$/.test(dateString)) {
             const today = new Date();
             const [hours, minutes] = dateString.split(':');
-            today.setHours(parseInt(hours), parseInt(minutes), 0, 0);
+            today.setHours(Number.parseInt(hours), Number.parseInt(minutes), 0, 0);
             return today.toISOString().slice(0, 16); // Format YYYY-MM-DDTHH:mm
         }
         
         // Sinon, essayer de traiter comme une date complète
         const date = new Date(dateString);
-        if (isNaN(date.getTime())) {
+        if (Number.isNaN(date.getTime())) {
             this.logger.warn('Date invalide reçue:', dateString);
             return '';
         }
@@ -3174,7 +3700,7 @@ class AdminPage {
 
             // Vérifier si c'est un enregistrement de monitoring (ABTEMPS_OPERATEURS) ou historique (ABHISTORIQUE_OPERATEURS)
             // Utiliser la ligne déjà trouvée (row déclarée plus haut)
-            const tempsIdFromRow = row?.dataset?.tempsId ? parseInt(row.dataset.tempsId, 10) : null;
+            const tempsIdFromRow = row?.dataset?.tempsId ? Number.parseInt(row.dataset.tempsId, 10) : null;
             const eventIdFromRow = row?.dataset?.eventId || null;
             const isUnconsolidatedFromRow = row?.dataset?.unconsolidated === 'true';
             
@@ -3403,8 +3929,8 @@ class AdminPage {
         // Vérifier le format HH:mm
         const timeMatch = cleanTime.match(/^(\d{1,2}):(\d{2})$/);
         if (timeMatch) {
-            const hours = parseInt(timeMatch[1]);
-            const minutes = parseInt(timeMatch[2]);
+            const hours = Number.parseInt(timeMatch[1]);
+            const minutes = Number.parseInt(timeMatch[2]);
             
             // Validation des valeurs
             if (hours < 0 || hours > 23) {
@@ -3439,8 +3965,8 @@ class AdminPage {
         const parts = timeString.split(':');
         if (parts.length < 2) return 0;
         
-        const hours = parseInt(parts[0]) || 0;
-        const minutes = parseInt(parts[1]) || 0;
+        const hours = Number.parseInt(parts[0]) || 0;
+        const minutes = Number.parseInt(parts[1]) || 0;
         
         return hours * 60 + minutes;
     }
@@ -3712,4 +4238,10 @@ class AdminPage {
     }
 }
 
+export {
+    getAdminStepColumnDisplay,
+    compareAdminTimelineRows,
+    getAdminRowSortTimestamp,
+    formatAdminRowDate
+};
 export default AdminPage;

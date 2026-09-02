@@ -78,7 +78,32 @@ class OperationStopService {
             }
         }
 
+        if (lastConsolidation?.tempsId) {
+            lastConsolidation = await OperationStopService._validateConsolidationForSilog(lastConsolidation);
+        }
+
         return { consolidation: lastConsolidation, alreadyFinished };
+    }
+
+    static async _validateConsolidationForSilog(consolidationResult) {
+        if (
+            !consolidationResult?.tempsId ||
+            consolidationResult?.skipped ||
+            consolidationResult?.success === false
+        ) {
+            return consolidationResult;
+        }
+        try {
+            const MonitoringService = require('./MonitoringService');
+            const v = await MonitoringService.validateTempsIdForSilog(consolidationResult.tempsId);
+            consolidationResult.silogValidated = v?.validated === true;
+            if (v?.reason && !v?.validated) {
+                consolidationResult.silogValidateReason = v.reason;
+            }
+        } catch (e) {
+            console.warn('Validation SILOG auto après FIN (non bloquant):', e?.message || e);
+        }
+        return consolidationResult;
     }
 }
 

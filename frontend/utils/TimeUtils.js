@@ -21,13 +21,13 @@ class TimeUtils {
 
         const parts = durationString.split(':');
         if (parts.length === 3) {
-            const hours = parseInt(parts[0]) || 0;
-            const minutes = parseInt(parts[1]) || 0;
-            const seconds = parseInt(parts[2]) || 0;
+            const hours = Number.parseInt(parts[0]) || 0;
+            const minutes = Number.parseInt(parts[1]) || 0;
+            const seconds = Number.parseInt(parts[2]) || 0;
             return hours * 3600 + minutes * 60 + seconds;
         } else if (parts.length === 2) {
-            const minutes = parseInt(parts[0]) || 0;
-            const seconds = parseInt(parts[1]) || 0;
+            const minutes = Number.parseInt(parts[0]) || 0;
+            const seconds = Number.parseInt(parts[1]) || 0;
             return minutes * 60 + seconds;
         }
 
@@ -39,7 +39,7 @@ class TimeUtils {
         if (!date) return '-';
         
         const d = new Date(date);
-        if (isNaN(d.getTime())) return '-';
+        if (Number.isNaN(d.getTime())) return '-';
 
         // Utiliser fuseau horaire français (Europe/Paris)
         const options = {
@@ -99,7 +99,7 @@ class TimeUtils {
         const start = new Date(startDate);
         const end = new Date(endDate);
         
-        if (isNaN(start.getTime()) || isNaN(end.getTime())) return 0;
+        if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime())) return 0;
         
         return Math.floor((end - start) / 1000); // en secondes
     }
@@ -195,7 +195,7 @@ class TimeUtils {
     static isValidDate(date) {
         if (!date) return false;
         const d = new Date(date);
-        return d instanceof Date && !isNaN(d.getTime());
+        return d instanceof Date && !Number.isNaN(d.getTime());
     }
 
     // Obtenir l'âge d'une date en jours

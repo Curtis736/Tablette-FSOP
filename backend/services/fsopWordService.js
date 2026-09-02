@@ -234,7 +234,7 @@ async function resolveLtRoot(traceRoot, launchNumber) {
     }
 
     // Try 2: Search recursively up to FSOP_SEARCH_DEPTH (default 3)
-    const maxDepth = Math.max(1, Math.min(parseInt(process.env.FSOP_SEARCH_DEPTH || '3', 10) || 3, 5));
+    const maxDepth = Math.max(1, Math.min(Number.parseInt(process.env.FSOP_SEARCH_DEPTH || '3', 10) || 3, 5));
     log.debug(`resolveLtRoot: recherche "${launchNumber}" dans "${traceRoot}" (profondeur max: ${maxDepth})`);
 
     // Iterative BFS to avoid stack overflow on large trees
@@ -480,7 +480,7 @@ function injectTableData(xml, tableData) {
         }
         
         // If we have data for this table, inject it
-        const targetTableIndex = parseInt(tableId, 10);
+        const targetTableIndex = Number.parseInt(tableId, 10);
         if (targetTableIndex >= 0 && targetTableIndex < tables.length) {
             const table = tables[targetTableIndex];
             let tableXml = table.content;
@@ -503,7 +503,7 @@ function injectTableData(xml, tableData) {
             
             // Inject data into rows (skip header row, index 0)
             for (const [rowId, cells] of Object.entries(rows)) {
-                const targetRowIndex = parseInt(rowId, 10) + 1; // +1 to skip header
+                const targetRowIndex = Number.parseInt(rowId, 10) + 1; // +1 to skip header
                 if (targetRowIndex > 0 && targetRowIndex < tableRows.length) {
                     const row = tableRows[targetRowIndex];
                     let rowXml = row.content;
@@ -529,7 +529,7 @@ function injectTableData(xml, tableData) {
                     const cellReplacements = new Map();
                     
                     for (const [columnIndex, value] of Object.entries(cells)) {
-                        const targetCellIndex = parseInt(columnIndex, 10);
+                        const targetCellIndex = Number.parseInt(columnIndex, 10);
                         if (targetCellIndex >= 0 && targetCellIndex < rowCells.length) {
                             const cell = rowCells[targetCellIndex];
                             const escapedValue = escapeXml(String(value || ''));
@@ -673,7 +673,7 @@ function injectTextFieldsData(xml, textFieldsData) {
                 // Extended to also support FSOP patterns like "... ind _____" (without a colon).
                 // This is a simplified approach - in a more sophisticated implementation,
                 // we would store the label and match it exactly.
-                const underscorePattern = /((?:[^:]+:)|ind)\s*_{3,}/gi;
+                const underscorePattern = /(?:(?:[^:\n]+:)|ind)[ \t]*_{3,}/gi;
                 let match;
                 let matchCount = 0;
                 const matches = [];
@@ -690,7 +690,7 @@ function injectTextFieldsData(xml, textFieldsData) {
                 
                 // Replace the match at the specified fieldIndex
                 if (fieldIndex < matches.length) {
-                    const targetMatch = matches[parseInt(fieldIndex, 10)];
+                    const targetMatch = matches[Number.parseInt(fieldIndex, 10)];
                     if (targetMatch) {
                         const replacement = `${targetMatch.label} ${value}`;
                         xml = xml.replace(targetMatch.fullMatch, replacement);
@@ -713,14 +713,14 @@ function injectCheckboxData(xml, checkboxData) {
         for (const [checkboxId, checked] of Object.entries(checkboxes)) {
             if (checked) {
                 // Replace ☐ with ☑ (checked)
-                xml = xml.replace(/☐/g, '☑');
+                xml = xml.replaceAll('☐', '☑');
                 // Also handle [ ] -> [x]
-                xml = xml.replace(/\[\s*\]/g, '[x]');
+                xml = xml.replaceAll(/\[\s*\]/g, '[x]');
             } else {
                 // Replace ☑ with ☐ (unchecked)
-                xml = xml.replace(/☑/g, '☐');
+                xml = xml.replaceAll('☑', '☐');
                 // Also handle [x] -> [ ]
-                xml = xml.replace(/\[x\]/g, '[ ]');
+                xml = xml.replaceAll('[x]', '[ ]');
             }
         }
     }
@@ -733,11 +733,11 @@ function injectCheckboxData(xml, checkboxData) {
  */
 function escapeXml(str) {
     return String(str)
-        .replace(/&/g, '&amp;')
-        .replace(/</g, '&lt;')
-        .replace(/>/g, '&gt;')
-        .replace(/"/g, '&quot;')
-        .replace(/'/g, '&apos;');
+        .replaceAll('&', '&amp;')
+        .replaceAll('<', '&lt;')
+        .replaceAll('>', '&gt;')
+        .replaceAll('"', '&quot;')
+        .replaceAll("'", '&apos;');
 }
 
 /**

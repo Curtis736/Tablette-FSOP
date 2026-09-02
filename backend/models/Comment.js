@@ -9,7 +9,7 @@ class Comment {
         this.comment = data.comment;
         this.timestamp = data.timestamp;
         this.createdAt = data.createdAt;
-        this.qteNonConforme = data.qteNonConforme !== undefined ? parseFloat(data.qteNonConforme) : null;
+        this.qteNonConforme = data.qteNonConforme !== undefined ? Number.parseFloat(data.qteNonConforme) : null;
         this.statut = data.statut || null;
     }
 
@@ -34,7 +34,7 @@ class Comment {
             if (qteNonConforme !== undefined && qteNonConforme !== null) {
                 columns.push('QteNonConforme');
                 values.push('@qteNonConforme');
-                params.qteNonConforme = parseFloat(qteNonConforme);
+                params.qteNonConforme = Number.parseFloat(qteNonConforme);
             }
             
             // Ajouter Statut si fourni
@@ -222,20 +222,19 @@ class Comment {
     getFormattedTimestamp() {
         if (!this.timestamp) return 'N/A';
         
-        try {
-            const date = new Date(this.timestamp);
-            return date.toLocaleString('fr-FR', {
-                timeZone: 'Europe/Paris',
-                year: 'numeric',
-                month: '2-digit',
-                day: '2-digit',
-                hour: '2-digit',
-                minute: '2-digit',
-                second: '2-digit'
-            });
-        } catch (error) {
+        const date = new Date(this.timestamp);
+        if (Number.isNaN(date.getTime())) {
             return this.timestamp;
         }
+        return date.toLocaleString('fr-FR', {
+            timeZone: 'Europe/Paris',
+            year: 'numeric',
+            month: '2-digit',
+            day: '2-digit',
+            hour: '2-digit',
+            minute: '2-digit',
+            second: '2-digit'
+        });
     }
 }
 

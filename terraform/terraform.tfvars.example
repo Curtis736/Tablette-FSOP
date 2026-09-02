@@ -1,0 +1,43 @@
+# Copier vers terraform.tfvars (non versionné) et adapter si besoin.
+#   cp terraform.tfvars.example terraform.tfvars
+#
+# Contexte SEDI (une seule machine Linux) :
+# - prod + test FSOP + Jenkins/CI = 192.168.1.26 (serveurproduction)
+# - SILOG = hôte Windows SVC_SILOG (DNS ; remplacer par l'IP si le DNS ne résout pas)
+
+ssh_user_default             = "maintenance"
+ssh_private_key_path_default = "/home/maintenance/.ssh/id_ed25519"
+
+hosts = {
+  prod = {
+    hostname = "serveurproduction"
+    address  = "192.168.1.26"
+    os       = "linux"
+    role     = "prod"
+    enabled  = true
+  }
+
+  test = {
+    hostname = "serveurproduction"
+    address  = "192.168.1.26"
+    os       = "linux"
+    role     = "test"
+    enabled  = true
+  }
+
+  ci = {
+    hostname = "serveurproduction"
+    address  = "192.168.1.26"
+    os       = "linux"
+    role     = "ci"
+    enabled  = true
+  }
+
+  silog = {
+    hostname = "svc_silog"
+    address  = "SVC_SILOG"
+    os       = "windows"
+    role     = "silog"
+    enabled  = true
+  }
+}
