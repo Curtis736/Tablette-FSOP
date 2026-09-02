@@ -29,7 +29,7 @@ function colToNum(col) {
   // A=1, Z=26, AA=27...
   let n = 0;
   for (const ch of col.toUpperCase()) {
-    n = n * 26 + (ch.charCodeAt(0) - 64);
+    n = n * 26 + (ch.codePointAt(0) - 64);
   }
   return n;
 }

@@ -31,6 +31,13 @@ export const ADMIN_CONFIG = {
     SLEEP_WAKE_MIN_HIDDEN_MS: 2000,
     /** Délai (ms) avant de rafraîchir après réveil (laisse le réseau se rétablir) */
     SLEEP_WAKE_REFRESH_DELAY_MS: 400,
+
+    /**
+     * Lignes consolidées en StatutTraitement = 'T' (transmis) restent visibles sur le dashboard admin
+     * pendant ce nombre de jours à partir de DateCreation (ABTEMPS). Au-delà, elles sont masquées côté UI.
+     * L’historique tablette opérateur ne les affiche jamais (filtre API dédié).
+     */
+    TRANSMITTED_VISIBLE_DAYS: 30,
 };
 
 export const STATUS_CODES = {

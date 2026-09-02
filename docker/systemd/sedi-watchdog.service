@@ -1,0 +1,10 @@
+[Unit]
+Description=FSOP proactive watchdog (DB / templates / SILOG stale O)
+After=docker.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/home/Tablette-FSOP/docker/scripts/run-proactive-watchdog.sh
+Environment=FSOP_ROOT=/home/Tablette-FSOP
+SuccessExitStatus=0 1

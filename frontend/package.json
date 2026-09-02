@@ -8,6 +8,7 @@
     "test": "vitest",
     "test:run": "vitest run",
     "test:coverage": "vitest run --coverage",
+    "test:coverage:sonar": "vitest run --config vitest.sonar.mjs --coverage",
     "test:ui": "vitest --ui",
     "test:watch": "vitest --watch"
   },
@@ -25,6 +26,7 @@
     "@vitest/ui": "^4.1.10",
     "happy-dom": "^20.0.11",
     "http-server": "^14.1.1",
+    "iconv-lite": "^0.7.3",
     "jsdom": "^27.2.0",
     "vitest": "^4.1.10"
   }

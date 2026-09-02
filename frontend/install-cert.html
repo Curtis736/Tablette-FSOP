@@ -3,6 +3,8 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+    <meta http-equiv="Pragma" content="no-cache">
     <title>Installer le certificat SEDI-ATI</title>
     <style>
         * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -89,13 +91,15 @@
     <div class="steps">
         <h3>📱 Installation Android</h3>
         <div class="step"><div class="step-num">1</div><span>Scanne le QR code ou appuie sur le bouton</span></div>
-        <div class="step"><div class="step-num">2</div><span>Le fichier <strong>SEDI-ATI-CA.crt</strong> se télécharge</span></div>
+        <div class="step"><div class="step-num">2</div><span>Télécharge <strong>SEDI-ATI-CA.cer</strong> (recommandé Android) ou <strong>.crt</strong></span></div>
         <div class="step"><div class="step-num">3</div><span><strong>Paramètres → Sécurité → Installer un certificat → Certificat CA</strong></span></div>
-        <div class="step"><div class="step-num">4</div><span>Sélectionne le fichier téléchargé et accepte</span></div>
+        <div class="step"><div class="step-num">4</div><span>Sélectionne le fichier téléchargé, puis ouvre l'app en <strong>https://</strong></span></div>
     </div>
 
-    <a class="btn-download" id="btn-dl" href="#">⬇️ Télécharger le certificat</a>
-    <p class="note">Ce certificat supprime l'avertissement de sécurité sur le site SEDI-ATI.<br>Valide 10 ans — ne donne accès à aucune donnée personnelle.</p>
+    <a class="btn-download" id="btn-dl-cer" href="#">⬇️ Télécharger .cer (Android)</a>
+    <br><br>
+    <a class="btn-download" id="btn-dl-crt" href="#" style="background:#0f3460;box-shadow:none;">⬇️ Télécharger .crt</a>
+    <p class="note">Installe uniquement le certificat <strong>public</strong> de la CA SEDI-ATI.<br>Ne mets jamais la clé privée du serveur sur une tablette.</p>
 </div>
 
 <script>
@@ -202,7 +206,7 @@ function placeFormat(m,ecl,mask){
 function encode(text){
   var bytes=[];
   for(var i=0;i<text.length;i++){
-    var c=text.charCodeAt(i);
+    var c=text.codePointAt(i);
     if(c<128)bytes.push(c);
     else if(c<2048){bytes.push(0xC0|(c>>6));bytes.push(0x80|(c&63));}
     else{bytes.push(0xE0|(c>>12));bytes.push(0x80|((c>>6)&63));bytes.push(0x80|(c&63));}
@@ -250,7 +254,7 @@ function encode(text){
     for(var upward=0;upward<2;upward++){
       for(var row=0;row<size;row++){
         var r=upward?(size-1-row):row;
-        var c=col-(upward?0:0); // will fix below
+        var c = col;
         for(var dc2=0;dc2<2;dc2++){
           var cc=col-dc2;
           if(matrix[r][cc]>=0)continue;
@@ -307,10 +311,13 @@ global.QR=QR;
 })(window);
 // ── End QR ──────────────────────────────────────────────────────────────────
 
-var certUrl = 'http://' + window.location.hostname + ':8080/ssl/SEDI-ATI-CA.crt';
-document.getElementById('cert-url-display').textContent = certUrl;
-document.getElementById('btn-dl').href = certUrl;
-QR.draw(certUrl, document.getElementById('qr'), 220);
+var baseUrl = window.location.protocol + '//' + window.location.host;
+var certCrtUrl = baseUrl + '/ssl/SEDI-ATI-CA.crt';
+var certCerUrl = baseUrl + '/ssl/SEDI-ATI-CA.cer';
+document.getElementById('cert-url-display').textContent = certCerUrl;
+document.getElementById('btn-dl-cer').href = certCerUrl;
+document.getElementById('btn-dl-crt').href = certCrtUrl;
+QR.draw(certCerUrl, document.getElementById('qr'), 220);
 </script>
 </body>
 </html>

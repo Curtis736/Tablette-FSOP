@@ -75,8 +75,15 @@ describe('OperateurInterface', () => {
             closeScannerBtn: document.createElement('button'),
             scannerVideo: document.createElement('video'),
             scannerCanvas: document.createElement('canvas'),
-            scannerStatus: document.createElement('div')
+            scannerStatus: document.createElement('div'),
+            lancementHelpText: document.createElement('small')
         };
+
+        const inputGroup = document.createElement('div');
+        inputGroup.className = 'input-group with-scanner with-fsop';
+        inputGroup.appendChild(mockElements.lancementSearch);
+        inputGroup.appendChild(mockElements.scanBarcodeBtn);
+        document.body.appendChild(inputGroup);
 
         // Configurer les éléments
         mockElements.lancementSearch.id = 'lancementSearch';
@@ -103,10 +110,11 @@ describe('OperateurInterface', () => {
         mockElements.scannerVideo.id = 'scannerVideo';
         mockElements.scannerCanvas.id = 'scannerCanvas';
         mockElements.scannerStatus.id = 'scannerStatus';
+        mockElements.lancementHelpText.id = 'lancementHelpText';
 
         // Ajouter au DOM
         Object.values(mockElements).forEach(el => {
-            if (el && el.id) {
+            if (el && el.id && el.id !== 'lancementSearch' && el.id !== 'scanBarcodeBtn') {
                 document.body.appendChild(el);
             }
         });
@@ -236,6 +244,69 @@ describe('OperateurInterface', () => {
             operInterface.lancementInput = null;
             const result = operInterface.enforceNumericLancementInput();
             expect(result).toBe('LT');
+        });
+    });
+
+    describe('douchette code-barres (wedge scanner)', () => {
+        beforeEach(() => {
+            operInterface = new OperateurInterface(mockOperator, mockApp);
+            operInterface.isRunning = false;
+            operInterface.validateAndSelectLancement = vi.fn();
+            mockElements.lancementSearch.value = 'LT';
+            mockElements.lancementSearch.focus = vi.fn();
+            mockElements.lancementSearch.setSelectionRange = vi.fn();
+        });
+
+        it('devrait appliquer un code scanné rapidement avec Entrée', () => {
+            const now = vi.spyOn(Date, 'now');
+            now.mockReturnValueOnce(1000).mockReturnValueOnce(1020).mockReturnValueOnce(1040).mockReturnValueOnce(1060);
+
+            operInterface.trackWedgeKey('2', { preventDefault: vi.fn(), key: '2' });
+            operInterface.trackWedgeKey('5', { preventDefault: vi.fn(), key: '5' });
+            operInterface.trackWedgeKey('0', { preventDefault: vi.fn(), key: '0' });
+
+            const enterEvent = { key: 'Enter', preventDefault: vi.fn() };
+            operInterface._wedgeBuffer = '25011457';
+            operInterface._wedgeFirstKeyTime = 1000;
+            operInterface._wedgeLastKeyTime = 1060;
+
+            operInterface.tryFlushWedgeScan(enterEvent);
+
+            expect(mockElements.lancementSearch.value).toBe('LT25011457');
+            expect(operInterface.validateAndSelectLancement).toHaveBeenCalled();
+            expect(enterEvent.preventDefault).toHaveBeenCalled();
+            now.mockRestore();
+        });
+
+        it('devrait accepter un code complet LT... envoyé par la douchette', () => {
+            operInterface.applyWedgeBarcode('LT2501145');
+
+            expect(mockElements.lancementSearch.value).toBe('LT2501145');
+            expect(operInterface.validateAndSelectLancement).toHaveBeenCalled();
+            expect(mockNotificationManager.success).toHaveBeenCalled();
+        });
+
+        it('ne devrait pas interpréter une saisie manuelle lente comme un scan', () => {
+            operInterface._wedgeBuffer = '2';
+            operInterface._wedgeFirstKeyTime = 1000;
+            operInterface._wedgeLastKeyTime = 1500;
+
+            const enterEvent = { key: 'Enter', preventDefault: vi.fn() };
+            const flushed = operInterface.tryFlushWedgeScan(enterEvent);
+
+            expect(flushed).toBe(false);
+            expect(operInterface.validateAndSelectLancement).not.toHaveBeenCalled();
+        });
+
+        it('devrait masquer le bouton caméra hors contexte sécurisé', () => {
+            const secure = window.isSecureContext;
+            Object.defineProperty(window, 'isSecureContext', { configurable: true, value: false });
+
+            operInterface.configureLancementScannerUI();
+
+            expect(mockElements.scanBarcodeBtn.style.display).toBe('none');
+
+            Object.defineProperty(window, 'isSecureContext', { configurable: true, value: secure });
         });
     });
 
@@ -411,7 +482,6 @@ describe('OperateurInterface', () => {
             operInterface.currentLancement = { CodeLancement: 'LT1234567' };
             operInterface.isRunning = true;
             operInterface.canPerformAction = vi.fn(() => true);
-            operInterface.setFinalEndTime = vi.fn();
             operInterface.stopTimer = vi.fn();
             operInterface.resetControls = vi.fn();
             operInterface.loadOperatorHistory = vi.fn();
@@ -423,7 +493,6 @@ describe('OperateurInterface', () => {
             await operInterface.handleStop();
             
             expect(mockApiService.stopOperation).toHaveBeenCalledWith('OP001', 'LT1234567', {});
-            expect(operInterface.setFinalEndTime).toHaveBeenCalled();
             expect(operInterface.resetControls).toHaveBeenCalled();
             expect(mockNotificationManager.success).toHaveBeenCalled();
         });
@@ -434,6 +503,45 @@ describe('OperateurInterface', () => {
             await operInterface.handleStop();
             
             expect(mockApiService.stopOperation).not.toHaveBeenCalled();
+        });
+    });
+
+    describe('restauration après reconnexion', () => {
+        beforeEach(() => {
+            operInterface = new OperateurInterface(mockOperator, mockApp);
+            // Simuler l'état grisé laissé par un reset/reconnexion
+            mockElements.pauseBtn.disabled = true;
+            mockElements.startBtn.disabled = true;
+            mockElements.stopBtn.disabled = true;
+        });
+
+        it('resumeRunningOperation devrait réactiver le bouton Pause (bug reconnexion)', () => {
+            operInterface.resumeRunningOperation({
+                lancementCode: 'LT1234567',
+                startedAt: new Date().toISOString()
+            });
+
+            expect(operInterface.isRunning).toBe(true);
+            expect(operInterface.isPaused).toBe(false);
+            expect(mockElements.pauseBtn.disabled).toBe(false);
+            expect(mockElements.startBtn.disabled).toBe(true);
+            expect(mockElements.stopBtn.disabled).toBe(false);
+            expect(mockElements.statusDisplay.textContent).toBe('En cours');
+        });
+
+        it('resumePausedOperation devrait garder le bouton Pause grisé et proposer Reprendre', () => {
+            operInterface.resumePausedOperation({
+                lancementCode: 'LT1234567',
+                startedAt: new Date().toISOString()
+            });
+
+            expect(operInterface.isRunning).toBe(false);
+            expect(operInterface.isPaused).toBe(true);
+            expect(mockElements.pauseBtn.disabled).toBe(true);
+            expect(mockElements.startBtn.disabled).toBe(false);
+            expect(mockElements.startBtn.innerHTML).toContain('Reprendre');
+            expect(mockElements.stopBtn.disabled).toBe(false);
+            expect(mockElements.statusDisplay.textContent).toBe('En pause');
         });
     });
 
@@ -511,6 +619,11 @@ describe('OperateurInterface', () => {
         beforeEach(() => {
             operInterface = new OperateurInterface(mockOperator, mockApp);
             operInterface.scannerManager.start = vi.fn().mockResolvedValue();
+            // openScanner exige un contexte sécurisé (HTTPS) — mock CI/happy-dom
+            Object.defineProperty(window, 'isSecureContext', {
+                configurable: true,
+                get: () => true
+            });
         });
 
         it('devrait ouvrir le scanner et démarrer la caméra', async () => {
@@ -528,6 +641,18 @@ describe('OperateurInterface', () => {
             await operInterface.openScanner();
             
             expect(mockNotificationManager.error).toHaveBeenCalled();
+        });
+
+        it('devrait refuser le scan hors contexte sécurisé', async () => {
+            Object.defineProperty(window, 'isSecureContext', {
+                configurable: true,
+                get: () => false
+            });
+
+            await operInterface.openScanner();
+
+            expect(mockNotificationManager.error).toHaveBeenCalled();
+            expect(operInterface.scannerManager.start).not.toHaveBeenCalled();
         });
     });
 

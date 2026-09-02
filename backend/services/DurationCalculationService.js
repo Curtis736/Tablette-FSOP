@@ -62,7 +62,7 @@ class DurationCalculationService {
                         if (typeof timeValue === 'string') {
                             const match = timeValue.match(/^(\d{1,2}):(\d{2})(?::(\d{2}))?$/);
                             if (match) {
-                                return { hour: parseInt(match[1], 10), minute: parseInt(match[2], 10) };
+                                return { hour: Number.parseInt(match[1], 10), minute: Number.parseInt(match[2], 10) };
                             }
                         }
                         
@@ -77,8 +77,8 @@ class DurationCalculationService {
                         // Si c'est un objet avec des propriétés hour/minute
                         if (typeof timeValue === 'object' && timeValue.hour !== undefined && timeValue.minute !== undefined) {
                             return {
-                                hour: parseInt(timeValue.hour, 10),
-                                minute: parseInt(timeValue.minute, 10)
+                                hour: Number.parseInt(timeValue.hour, 10),
+                                minute: Number.parseInt(timeValue.minute, 10)
                             };
                         }
                         

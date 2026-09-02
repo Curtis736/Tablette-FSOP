@@ -4,6 +4,18 @@
 
 const { executeQuery, executeProcedure } = require('../config/database');
 
+function operatorCodeFromRequest(req) {
+    const fromParams = req.params?.operatorCode;
+    if (fromParams) return fromParams;
+    const pathMatch = req.path?.match(/\/operators\/(\d+)/);
+    if (pathMatch) {
+        req.params = req.params || {};
+        req.params.operatorCode = pathMatch[1];
+        return pathMatch[1];
+    }
+    return undefined;
+}
+
 class DataIsolationManager {
     constructor() {
         this.operatorCache = new Map();
@@ -16,19 +28,9 @@ class DataIsolationManager {
     async validateDataAccess(req, res, next) {
         try {
             // Handle case where req.params might be undefined
-            const operatorCode = req.params?.operatorCode;
             const requestedOperatorCode = req.query?.operatorCode || req.body?.operatorCode;
-            
-            // If no operatorCode in params, try to get it from the route path
-            if (!operatorCode && req.path) {
-                const pathMatch = req.path.match(/\/operators\/(\d+)/);
-                if (pathMatch) {
-                    req.params = req.params || {};
-                    req.params.operatorCode = pathMatch[1];
-                }
-            }
-            
-            const finalOperatorCode = req.params?.operatorCode || operatorCode;
+            const finalOperatorCode = operatorCodeFromRequest(req);
+            const operatorCode = finalOperatorCode;
 
             // Si un opérateur demande des données d'un autre opérateur
             if (requestedOperatorCode && requestedOperatorCode !== finalOperatorCode) {
@@ -232,8 +234,6 @@ class DataIsolationManager {
                 }
             }
             
-            const userAgent = req.get('User-Agent');
-            
             console.log(`🔍 Accès aux données - Opérateur: ${finalOperatorCode || 'unknown'}, IP: ${ip}, Endpoint: ${req.path}`);
             
             // Log détaillé pour les tentatives suspectes
@@ -252,6 +252,7 @@ class DataIsolationManager {
 const dataIsolationManager = new DataIsolationManager();
 
 module.exports = {
+    operatorCodeFromRequest,
     validateDataAccess: dataIsolationManager.validateDataAccess.bind(dataIsolationManager),
     filterDataByOperator: dataIsolationManager.filterDataByOperator.bind(dataIsolationManager),
     validateLancementOwnership: dataIsolationManager.validateLancementOwnership.bind(dataIsolationManager),

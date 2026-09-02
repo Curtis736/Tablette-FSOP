@@ -34,6 +34,8 @@ class DOMCache {
             'selectAllRows',
             'paginationInfo',
             'activeOperatorsIndicator',
+            'adminDatePicker',
+            'adminDatePickerGroup',
             'pauseCount',
             'tempCount',
             'pauseTableBody',

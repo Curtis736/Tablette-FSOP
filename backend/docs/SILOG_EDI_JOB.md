@@ -20,9 +20,9 @@
 | Étape | Qui | Action | StatutTraitement |
 |-------|-----|--------|-----------------|
 | 1 | Backend (opérations) | INSERT dans ABTEMPS_OPERATEURS | `NULL` |
-| 2 | Backend (auto 20h ou admin) | UPDATE StatutTraitement = 'O' | `NULL` → `'O'` |
+| 2 | Admin « Transfert » (ou auto **20h**) | UPDATE StatutTraitement = 'O' | `NULL` → `'O'` |
 | 3 | V_REMONTE_TEMPS | Expose les lignes 'O' + ProductiveDuration > 0 | `'O'` |
-| 4 | SEDI_ETDIFF (SVC_SILOG) | Lit V_REMONTE_TEMPS, intègre dans SILOG | `'O'` |
+| 4 | SEDI_ETDIFF (SVC_SILOG, **en continu**) | Lit V_REMONTE_TEMPS, intègre dans SILOG | `'O'` |
 | 5 | SILOG / fin de job SEDI_ETDIFF | Mise à jour du statut côté base après intégration (voir retour Franck MAILLARD, avril 2026) | `'O'` → `'T'` (ou équivalent métier) |
 
 ### Point critique : passage en 'T' (statut après intégration SILOG)
@@ -48,7 +48,9 @@ Le backend FSOP continue d’écrire `TempsID` (identité technique SQL) ; **ne 
 ### Fréquence d’exécution EDI
 
 - Ancienne observation (mars 2026) : exécutions très fréquentes sur `SVC_SILOG`.
-- **Depuis le 01/04/2026** : la tâche EDI ne tourne plus qu’**une fois par jour** (paramétrage planificateur / SILOG — hors code FSOP). Adapter les attentes métier et le seuil `SILOG_STALE_THRESHOLD_HOURS` si besoin.
+- **Depuis le 01/04/2026** : la tâche EDI ne tourne plus qu’**une fois par jour** (paramétrage planificateur / SILOG — hors code FSOP).
+- **Besoin métier (SEDI, juillet 2026)** : visibilité des temps **à tout moment dans SILOG** → faire tourner **SEDI_ETDIFF en continu** sur `SVC_SILOG` (action Franck / infra).
+- La validation `NULL` → `'O'` reste manuelle via **Transfert admin** (évite les doublons côté SILOG). Filet auto à **20h**.
 
 ### Lancements soldés et lignes non validées
 
@@ -58,12 +60,18 @@ Le backend FSOP continue d’écrire `TempsID` (identité technique SQL) ; **ne 
 
 ## Infrastructure
 
+### Prérequis Ansible (runner SSH)
+
+Voir [`ansible/README.md`](../../ansible/README.md) : playbook pour installer OpenSSH sur `SVC_SILOG`, déployer la clé FSOP, vérifier `SILOG.exe`, créer la tâche filet. Le **déclenchement au clic** reste `SILOG_REMOTE_MODE=ssh` côté backend.
+
 ### Poste d'exécution
 
 - **Poste** : `SVC_SILOG` (et NON `SERVEURERP`)
 - **Utilisateur SILOG** : `Production8`
 - **Planificateur de tâches** : sur `SVC_SILOG` (accès requis pour vérifier la fréquence)
-- **Fréquence** : en mars 2026, observation ponctuelle ~1 exécution/minute ; **depuis le 01/04/2026**, exécution **quotidienne** selon retour exploitation (à confirmer sur la tâche planifiée réelle).
+- **Fréquence SEDI_ETDIFF (tablettes CURTIS)** : **~17h15** actuellement — **à faire évoluer** vers une exécution **en continu** (visibilité SILOG permanente).
+- **Fréquence SIL_ETDIFF (Itium / saisie SILOG native)** : flux distinct, ne pas confondre.
+- Ancienne observation (mars 2026) : exécutions très fréquentes ; depuis avril 2026 observation **quotidienne** pour SEDI_ETDIFF.
 
 ### Commande de référence
 
@@ -88,7 +96,7 @@ start-process -FilePath "\\SERVEURERP\SILOG8\SILOG.exe" `
 Le backend est en mode `SILOG_REMOTE_MODE=scheduled` : il **ne déclenche pas** SILOG.exe.
 Il se contente de :
 1. Écrire dans `ABTEMPS_OPERATEURS`
-2. Passer `StatutTraitement = 'O'` (validation auto à 20h ou manuelle)
+2. Passer `StatutTraitement = 'O'` via **Transfert admin** ou validation auto à 20h
 3. Surveiller que les enregistrements 'O' sont consommés (watchdog)
 
 ### Variables d'environnement pertinentes
@@ -99,6 +107,8 @@ SILOG_REMOTE_MODE=scheduled
 # Validation automatique des temps
 ENABLE_AUTO_VALIDATE_TEMPS=true
 AUTO_VALIDATE_TEMPS_HOUR=20
+# Désactivé par défaut — validation via Transfert admin
+AUTO_VALIDATE_ON_FIN=false
 
 # Watchdog : alerte si des enregistrements 'O' ne sont pas passés 'T' après X heures
 SILOG_STALE_THRESHOLD_HOURS=24

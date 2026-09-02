@@ -1,0 +1,11 @@
+[Unit]
+Description=FSOP backend health check (alert if down)
+After=docker.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/home/Tablette-FSOP/docker/scripts/check-backend-alive.sh
+Environment=FSOP_ROOT=/home/Tablette-FSOP
+# Ne pas faire échouer le timer sur KO (on veut juste alerter)
+SuccessExitStatus=0 1

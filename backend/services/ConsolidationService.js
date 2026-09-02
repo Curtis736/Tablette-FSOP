@@ -13,12 +13,38 @@ class ConsolidationService {
      */
     static _localDateKey(value) {
         if (!value) return null;
-        const d = value instanceof Date ? new Date(value) : new Date(value);
+        const d = value instanceof Date ? value : new Date(value);
         if (Number.isNaN(d.getTime())) return null;
         const yyyy = d.getFullYear();
         const mm = String(d.getMonth() + 1).padStart(2, '0');
         const dd = String(d.getDate()).padStart(2, '0');
         return `${yyyy}-${mm}-${dd}`;
+    }
+
+    /**
+     * Validation SILOG (NULL → 'O') après consolidation hors transaction.
+     */
+    static async _finishConsolidation(result, options = {}) {
+        if (
+            result?.success &&
+            result?.tempsId &&
+            !options?.db &&
+            options?.skipSilogValidate !== true
+        ) {
+            try {
+                const MonitoringService = require('./MonitoringService');
+                const v = await MonitoringService.validateTempsIdForSilog(result.tempsId);
+                if (v) {
+                    result.silogValidated = v.validated === true;
+                    if (v.reason && !v.validated) {
+                        result.silogValidateReason = v.reason;
+                    }
+                }
+            } catch (e) {
+                console.warn('Validation SILOG auto après consolidation (non bloquant):', e?.message || e);
+            }
+        }
+        return result;
     }
 
     /**
@@ -214,52 +240,103 @@ class ConsolidationService {
             })();
 
             // 6. Déterminer Phase et CodeRubrique (clés ERP)
-            // - Si les événements contiennent déjà Phase/CodeRubrique (issus de l'ERP), on les utilise.
-            // - Sinon, fallback historique : récupérer depuis V_LCTC.
+            // ABTEMPS.Phase/CodeRubrique sont NOT NULL : on n'insère JAMAIS NULL,
+            // et on n'invente JAMAIS 'PRODUCTION' (rejeté par SILOG).
+            // Sans clés ERP résolues → skip consolidation (FIN reste écrit, stop OK).
+            const EVENT_MARKER_PHASES = new Set(['PRODUCTION', 'PAUSE', 'REPRISE', 'TERMINE', 'TERMINÉE', 'ADMIN']);
+            const isEventMarkerPhase = (value) =>
+                EVENT_MARKER_PHASES.has(String(value || '').trim().toUpperCase());
+            const looksLikeErpKeys = (ph, rub) => {
+                const p = String(ph || '').trim();
+                const r = String(rub || '').trim();
+                if (!p || !r) return false;
+                if (isEventMarkerPhase(p)) return false;
+                // Ancienne implémentation mettait CodeRubrique = operatorCode => ignorer ce cas
+                if (r === String(operatorCode || '').trim()) return false;
+                return true;
+            };
+
             phase = debutEvent?.Phase || null;
             codeRubrique = debutEvent?.CodeRubrique || null;
 
-            const hasErpKeysFromEvents = Boolean(
-                phase &&
-                codeRubrique &&
-                String(codeRubrique).trim() !== '' &&
-                String(phase).trim() !== '' &&
-                // Ancienne implémentation mettait CodeRubrique = operatorCode => ignorer ce cas
-                String(codeRubrique).trim() !== String(operatorCode).trim()
-            );
-            
-            if (!hasErpKeysFromEvents) {
-            try {
-                const vlctcQuery = `
-                    SELECT TOP 1 Phase, CodeRubrique
-                    FROM [SEDI_APP_INDEPENDANTE].[dbo].[V_LCTC]
-                    WHERE CodeLancement = @lancementCode
-                `;
-                
-                const vlctcResult = await db.executeQuery(vlctcQuery, { lancementCode });
-                
-                if (vlctcResult && vlctcResult.length > 0) {
-                    // Prendre les valeurs EXACTEMENT telles quelles depuis V_LCTC (sans transformation)
-                    phase = vlctcResult[0].Phase;
-                    codeRubrique = vlctcResult[0].CodeRubrique;
-                    console.log(`✅ Phase et CodeRubrique récupérés depuis V_LCTC: Phase=${phase}, CodeRubrique=${codeRubrique}`);
-                } else {
-                    console.warn(`⚠️ Lancement ${lancementCode} non trouvé dans V_LCTC`);
-                    console.warn(`⚠️ Raisons possibles: TypeRubrique <> 'O' (composant), LancementSolde <> 'N' (soldé), ou lancement inexistant dans SEDI_ERP`);
-                    // Fallback opérationnel: ne pas bloquer la transmission si V_LCTC manque.
-                    // On reprend le comportement historique tolérant en posant des valeurs par défaut.
-                    phase = phase || 'PRODUCTION';
-                    codeRubrique = codeRubrique || String(operatorCode || '').trim() || 'UNKNOWN';
-                    console.warn(`⚠️ Fallback consolidation appliqué: Phase=${phase}, CodeRubrique=${codeRubrique}`);
-                }
-            } catch (error) {
-                console.error(`❌ Erreur lors de la récupération de Phase/CodeRubrique depuis V_LCTC:`, error);
-                phase = phase || 'PRODUCTION';
-                codeRubrique = codeRubrique || String(operatorCode || '').trim() || 'UNKNOWN';
-                console.warn(`⚠️ Fallback consolidation après erreur V_LCTC: Phase=${phase}, CodeRubrique=${codeRubrique}`);
+            if (!looksLikeErpKeys(phase, codeRubrique)) {
+                phase = null;
+                codeRubrique = null;
+
+                // Prefer keys passed by /stop (étape réellement choisie / résolue)
+                const optPhase = options.phase ?? options.Phase ?? null;
+                const optRub = options.codeRubrique ?? options.CodeRubrique ?? null;
+                if (looksLikeErpKeys(optPhase, optRub)) {
+                    phase = String(optPhase).trim();
+                    codeRubrique = String(optRub).trim();
+                    console.log(`✅ Phase/CodeRubrique depuis options stop: Phase=${phase}, CodeRubrique=${codeRubrique}`);
                 }
             } else {
+                phase = String(phase).trim();
+                codeRubrique = String(codeRubrique).trim();
                 console.log(`✅ Phase/CodeRubrique déjà présents dans les événements: Phase=${phase}, CodeRubrique=${codeRubrique}`);
+            }
+
+            if (!looksLikeErpKeys(phase, codeRubrique)) {
+                try {
+                    // 1) V_LCTC (lancements non soldés, TypeRubrique='O')
+                    let rows = await db.executeQuery(
+                        `
+                        SELECT TOP 1 Phase, CodeRubrique
+                        FROM [SEDI_APP_INDEPENDANTE].[dbo].[V_LCTC]
+                        WHERE CodeLancement = @lancementCode
+                        `,
+                        { lancementCode }
+                    );
+
+                    // 2) LCTC brut si V_LCTC muet (ex: lancement soldé entre-temps)
+                    if (!rows?.length) {
+                        rows = await db.executeQuery(
+                            `
+                            SELECT TOP 1
+                                LTRIM(RTRIM(Phase)) AS Phase,
+                                LTRIM(RTRIM(CodeRubrique)) AS CodeRubrique
+                            FROM [SEDI_ERP].[dbo].[LCTC]
+                            WHERE CodeLancement = @lancementCode
+                              AND TypeRubrique = 'O'
+                            ORDER BY Phase, CodeRubrique
+                            `,
+                            { lancementCode }
+                        );
+                        if (rows?.length) {
+                            console.warn(`⚠️ Lancement ${lancementCode} absent de V_LCTC — clés reprises depuis LCTC`);
+                        }
+                    }
+
+                    if (rows?.length && looksLikeErpKeys(rows[0].Phase, rows[0].CodeRubrique)) {
+                        phase = String(rows[0].Phase).trim();
+                        codeRubrique = String(rows[0].CodeRubrique).trim();
+                        console.log(`✅ Phase et CodeRubrique récupérés ERP: Phase=${phase}, CodeRubrique=${codeRubrique}`);
+                    } else {
+                        console.warn(`⚠️ Lancement ${lancementCode}: impossible de résoudre Phase/CodeRubrique ERP`);
+                        console.warn(`⚠️ Raisons possibles: TypeRubrique <> 'O', lancement inexistant, ou clés marqueur uniquement`);
+                        return {
+                            success: false,
+                            skipped: true,
+                            skipReason: 'VLCTC_MISSING',
+                            tempsId: null,
+                            error: null,
+                            message: `Clés ERP introuvables pour ${lancementCode} — consolidation reportée (FIN enregistrée)`,
+                            warnings: ['Phase/CodeRubrique non résolus — pas d\'insertion ABTEMPS (colonnes NOT NULL)']
+                        };
+                    }
+                } catch (error) {
+                    console.error(`❌ Erreur résolution Phase/CodeRubrique ERP:`, error);
+                    return {
+                        success: false,
+                        skipped: true,
+                        skipReason: 'VLCTC_MISSING',
+                        tempsId: null,
+                        error: null,
+                        message: `Erreur résolution clés ERP pour ${lancementCode} — consolidation reportée`,
+                        warnings: [error.message]
+                    };
+                }
             }
             
             // 7. Préparer les valeurs pour l'insertion
@@ -269,14 +346,14 @@ class ConsolidationService {
                 if (typeof timeValue === 'string') {
                     const match = timeValue.trim().match(/^(\d{1,2}):(\d{2})(?::(\d{2}))?$/);
                     if (match) {
-                        return { hour: parseInt(match[1], 10), minute: parseInt(match[2], 10) };
+                        return { hour: Number.parseInt(match[1], 10), minute: Number.parseInt(match[2], 10) };
                     }
                 }
                 if (timeValue instanceof Date) {
                     return { hour: timeValue.getHours(), minute: timeValue.getMinutes() };
                 }
                 if (typeof timeValue === 'object' && timeValue.hour !== undefined && timeValue.minute !== undefined) {
-                    return { hour: parseInt(timeValue.hour, 10), minute: parseInt(timeValue.minute, 10) };
+                    return { hour: Number.parseInt(timeValue.hour, 10), minute: Number.parseInt(timeValue.minute, 10) };
                 }
                 return null;
             };
@@ -286,12 +363,12 @@ class ConsolidationService {
                 const createdAt = event.CreatedAt || event.createdAt;
                 if (createdAt) {
                     const d = new Date(createdAt);
-                    if (!isNaN(d.getTime())) return d;
+                    if (!Number.isNaN(d.getTime())) return d;
                 }
 
                 // 2) Use DateCreation as date + HeureDebut/HeureFin as time
                 const base = new Date(event.DateCreation || event.dateCreation);
-                if (!isNaN(base.getTime())) {
+                if (!Number.isNaN(base.getTime())) {
                     const t = extractTime(kind === 'start' ? event.HeureDebut : event.HeureFin);
                     if (t) {
                         base.setHours(t.hour, t.minute, 0, 0);
@@ -324,13 +401,13 @@ class ConsolidationService {
                     const rows = await db.executeQuery(byStartQuery, { operatorCode, lancementCode, startTime });
                     if (rows && rows.length > 0) {
                         console.log(`ℹ️ Opération déjà consolidée (StartTime match): TempsId=${rows[0].TempsId}`);
-                        return {
+                        return await ConsolidationService._finishConsolidation({
                             success: true,
                             tempsId: rows[0].TempsId,
                             error: null,
                             warnings: ['Opération déjà consolidée (StartTime)'],
                             alreadyExists: true
-                        };
+                        }, options);
                     }
                 } catch (e) {
                     // best-effort: ne pas bloquer si ce check échoue
@@ -357,13 +434,13 @@ class ConsolidationService {
                 });
                 if (existing.length > 0) {
                     console.log(`ℹ️ Opération déjà consolidée: TempsId=${existing[0].TempsId}`);
-                    return {
+                    return await ConsolidationService._finishConsolidation({
                         success: true,
                         tempsId: existing[0].TempsId,
                         error: null,
                         warnings: ['Opération déjà consolidée'],
                         alreadyExists: true
-                    };
+                    }, options);
                 }
             }
             
@@ -409,7 +486,9 @@ class ConsolidationService {
                          SET StartTime = @startTime, EndTime = @endTime,
                              TotalDuration = @totalDuration, PauseDuration = @pauseDuration,
                              ProductiveDuration = @productiveDuration, EventsCount = @eventsCount,
-                             Phase = @phase, CodeRubrique = @codeRubrique
+                             -- Ne pas écraser des clés ERP déjà corrigées par une reconsolidation sans V_LCTC
+                             Phase = COALESCE(@phase, Phase),
+                             CodeRubrique = COALESCE(@codeRubrique, CodeRubrique)
                          WHERE TempsId = @tempsId`,
                         { ...durationParams, tempsId }
                     );
@@ -439,13 +518,13 @@ class ConsolidationService {
             
             console.log(`✅ Consolidation réussie: TempsId=${tempsId}, Durée=${durations.totalDuration}min (${durations.productiveDuration}min productif)`);
             
-            return {
+            return await ConsolidationService._finishConsolidation({
                 success: true,
                 tempsId,
                 error: null,
                 warnings: validation.warnings || [],
                 durations
-            };
+            }, options);
             
         } catch (error) {
             console.error(`❌ Erreur lors de la consolidation de ${operatorCode}/${lancementCode}:`, error);
@@ -465,13 +544,13 @@ class ConsolidationService {
                         `;
                         const byStart = await db.executeQuery(byStartQuery, { operatorCode, lancementCode, startTime });
                         if (byStart && byStart.length > 0) {
-                            return {
+                            return await ConsolidationService._finishConsolidation({
                                 success: true,
                                 tempsId: byStart[0].TempsId,
                                 error: null,
                                 warnings: ['Opération déjà consolidée (détecté via StartTime après erreur UNIQUE)'],
                                 alreadyExists: true
-                            };
+                            }, options);
                         }
                     }
                 } catch (e) {
@@ -498,13 +577,13 @@ class ConsolidationService {
                         dateCreation: opDate
                     });
                     if (existing.length > 0) {
-                        return {
+                        return await ConsolidationService._finishConsolidation({
                             success: true,
                             tempsId: existing[0].TempsId,
                             error: null,
                             warnings: ['Opération déjà consolidée (détecté après erreur)'],
                             alreadyExists: true
-                        };
+                        }, options);
                     }
                 } catch (queryError) {
                     // Ignorer l'erreur de requête

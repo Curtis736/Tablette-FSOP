@@ -1,0 +1,10 @@
+[Unit]
+Description=FSOP Docker volumes + .env backup
+After=docker.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/home/Tablette-FSOP/docker/scripts/backup-fsop.sh
+Environment=FSOP_ROOT=/home/Tablette-FSOP
+Environment=FSOP_BACKUP_DIR=/var/backups/tablette-fsop

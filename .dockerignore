@@ -100,8 +100,10 @@ Dockerfile*
 docker-compose*.yml
 .dockerignore
 
-# Documentation
-docs/
+# Documentation (sauf docs/web servie par le frontend)
+docs/**
+!docs/web/
+!docs/web/**
 *.md
 
 # Tests

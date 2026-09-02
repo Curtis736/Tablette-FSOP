@@ -7,7 +7,7 @@ router.get('/', async (req, res) => {
     try {
         const { search, limit = 100 } = req.query;
         
-        const limitNum = Math.max(1, Math.min(parseInt(limit, 10) || 100, 500));
+        const limitNum = Math.max(1, Math.min(Number.parseInt(limit, 10) || 100, 500));
         let query = `
             SELECT TOP (@limitNum)
                 t.NoEnreg,

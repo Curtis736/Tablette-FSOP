@@ -1,0 +1,105 @@
+# Stack CI interne SEDI — Jenkins + SonarQube + Postgres
+# Usage (serveur CI dédié, PAS la prod FSOP) :
+#   cp .env.example .env
+#   docker compose --env-file .env up -d
+#
+# Ports par défaut : Jenkins 8085, Sonar 9000
+
+services:
+  jenkins:
+    build:
+      context: .
+      dockerfile: Dockerfile.jenkins
+    image: sedi-jenkins:lts-tools
+    container_name: sedi-jenkins
+    user: root
+    ports:
+      - "${JENKINS_HTTP_PORT:-8085}:8080"
+      - "${JENKINS_AGENT_PORT:-50000}:50000"
+    environment:
+      - TZ=Europe/Paris
+      - JAVA_OPTS=-Djenkins.install.runSetupWizard=true
+    volumes:
+      - jenkins_home:/var/jenkins_home
+      # Build / deploy Docker depuis les jobs
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ${HOST_REPO_CACHE:-/var/lib/sedi-ci/repos}:/var/lib/sedi-ci/repos
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    networks:
+      - sedi-ci
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:8080/login >/dev/null || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 10
+      start_period: 120s
+
+  sonarqube:
+    image: sonarqube:community
+    container_name: sedi-sonarqube
+    depends_on:
+      sonar-db:
+        condition: service_healthy
+    ports:
+      - "${SONAR_HTTP_PORT:-9000}:9000"
+    environment:
+      - TZ=Europe/Paris
+      - SONAR_JDBC_URL=jdbc:postgresql://sonar-db:5432/sonar
+      - SONAR_JDBC_USERNAME=sonar
+      - SONAR_JDBC_PASSWORD=${SONAR_DB_PASSWORD:-sonar}
+      - SONAR_ES_BOOTSTRAP_CHECKS_DISABLE=true
+    volumes:
+      - sonarqube_data:/opt/sonarqube/data
+      - sonarqube_extensions:/opt/sonarqube/extensions
+      - sonarqube_logs:/opt/sonarqube/logs
+    networks:
+      - sedi-ci
+    restart: unless-stopped
+    mem_limit: ${SONAR_MEM_LIMIT:-3g}
+    ulimits:
+      nofile:
+        soft: 65536
+        hard: 65536
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:9000/api/system/status | grep -q UP || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 20
+      start_period: 180s
+
+  sonar-db:
+    image: postgres:16-alpine
+    container_name: sedi-sonar-db
+    environment:
+      - POSTGRES_USER=sonar
+      - POSTGRES_PASSWORD=${SONAR_DB_PASSWORD:-sonar}
+      - POSTGRES_DB=sonar
+      - TZ=Europe/Paris
+    volumes:
+      - sonar_db_data:/var/lib/postgresql/data
+    networks:
+      - sedi-ci
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U sonar -d sonar"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+networks:
+  sedi-ci:
+    name: sedi-ci-network
+
+volumes:
+  jenkins_home:
+    name: sedi-jenkins-home
+  sonarqube_data:
+    name: sedi-sonarqube-data
+  sonarqube_extensions:
+    name: sedi-sonarqube-extensions
+  sonarqube_logs:
+    name: sedi-sonarqube-logs
+  sonar_db_data:
+    name: sedi-sonar-db-data

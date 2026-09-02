@@ -1,0 +1,6 @@
+# Sur serveurproduction, state hors du clone git :
+#   mkdir -p /home/maintenance/terraform-state/fsop
+#   cp backend.local.hcl.example backend.local.hcl
+#   terraform init -reconfigure -backend-config=backend.local.hcl
+
+path = "/home/maintenance/terraform-state/fsop/terraform.tfstate"

@@ -1,0 +1,19 @@
+---
+# Prérequis runner Windows pour EDI SILOG (SSH + chemins + tâche filet)
+#
+# Depuis le serveur tablette (contrôle Ansible Linux) :
+#   export SILOG_ANSIBLE_HOST=192.168.x.x   # IP de SVC_SILOG
+#   export SILOG_ANSIBLE_USER=maintenance
+#   export SILOG_ANSIBLE_PASSWORD='***'     # WinRM bootstrap
+#   export SILOG_SSH_PUBLIC_KEY_FILE=/home/maintenance/.ssh/id_ed25519.pub
+#
+#   ansible-playbook -i inventories/production.yml playbooks/silog-runner-prereqs.yml
+#
+# Après OpenSSH OK, tester en SSH :
+#   SILOG_ANSIBLE_CONNECTION=ssh ansible-playbook -i inventories/production.yml playbooks/silog-runner-verify.yml
+
+- name: Prérequis runner SILOG (SVC_SILOG)
+  hosts: silog_runners
+  gather_facts: true
+  roles:
+    - role: silog_ssh_runner

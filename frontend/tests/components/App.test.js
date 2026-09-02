@@ -119,9 +119,9 @@ describe('App', () => {
   });
 
   describe('showAdminScreen', () => {
-    it('should show admin screen', async () => {
+    it('should show admin screen', () => {
       app = new App();
-      await app.showAdminScreen();
+      app.showAdminScreen();
       expect(document.getElementById('adminScreen').classList.contains('active')).toBe(true);
       expect(app.currentScreen).toBe('admin');
     });

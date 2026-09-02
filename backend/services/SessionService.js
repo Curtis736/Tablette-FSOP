@@ -7,7 +7,7 @@ const { executeQuery, executeNonQuery } = require('../config/database');
 
 class SessionService {
     static _getTtlHours() {
-        const ttlRaw = parseInt(process.env.OPERATOR_SESSION_TTL_HOURS || '12', 10);
+        const ttlRaw = Number.parseInt(process.env.OPERATOR_SESSION_TTL_HOURS || '12', 10);
         return Number.isFinite(ttlRaw) && ttlRaw > 0 ? Math.min(ttlRaw, 72) : 12;
     }
 

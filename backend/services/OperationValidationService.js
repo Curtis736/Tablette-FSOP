@@ -3,10 +3,200 @@
  * Valide la cohérence des événements, détecte les problèmes et les corrige automatiquement
  */
 
-const { executeQuery, executeNonQuery } = require('../config/database');
+const db = require('../config/database');
 const DurationCalculationService = require('./DurationCalculationService');
 
+// Indirection volontaire : résout les fonctions au moment de l'appel
+// (sinon une destructuration fige la référence et les mocks ne s'appliquent plus).
+const executeQuery = (...args) => db.executeQuery(...args);
+const executeNonQuery = (...args) => db.executeNonQuery(...args);
+
 class OperationValidationService {
+    /**
+     * Clause SQL : la ligne ABTEMPS correspond à une entrée LCTC SILOG.
+     * @param {string} tableAlias - Alias de ABTEMPS_OPERATEURS (ex: t)
+     */
+    static getLctcExistsClause(tableAlias = 't') {
+        const a = tableAlias.trim();
+        return `EXISTS (
+            SELECT 1
+            FROM [SEDI_ERP].[dbo].[LCTC] AS LCTC
+            WHERE LCTC.CodeLancement = ${a}.LancementCode
+              AND LCTC.Phase = ${a}.Phase
+              AND LCTC.CodeRubrique = ${a}.CodeRubrique
+        )`;
+    }
+
+    /**
+     * Vérifie que LancementCode + Phase + CodeRubrique existent dans SEDI_ERP.LCTC.
+     * @param {Object} record - Ligne ABTEMPS_OPERATEURS
+     */
+    static async checkLctcCoherence(record) {
+        const errors = [];
+        if (!record?.LancementCode) {
+            errors.push('LancementCode manquant');
+        }
+        if (!record?.Phase) {
+            errors.push('Phase manquante');
+        }
+        if (!record?.CodeRubrique) {
+            errors.push('CodeRubrique manquant');
+        }
+        if (errors.length > 0) {
+            return { valid: false, errors };
+        }
+
+        const rows = await executeQuery(
+            `
+            SELECT CASE WHEN EXISTS (
+                SELECT 1
+                FROM [SEDI_ERP].[dbo].[LCTC] AS LCTC
+                WHERE LCTC.CodeLancement = @lancementCode
+                  AND LCTC.Phase = @phase
+                  AND LCTC.CodeRubrique = @codeRubrique
+            ) THEN 1 ELSE 0 END AS ok
+            `,
+            {
+                lancementCode: record.LancementCode,
+                phase: record.Phase,
+                codeRubrique: record.CodeRubrique
+            }
+        );
+
+        if (!rows?.[0]?.ok) {
+            errors.push(
+                `Combinaison incompatible SILOG LCTC (CodeLancement=${record.LancementCode}, Phase=${record.Phase}, CodeRubrique=${record.CodeRubrique})`
+            );
+        }
+
+        return { valid: errors.length === 0, errors };
+    }
+
+    /**
+     * Validation avant passage StatutTraitement NULL → 'O' (ne exige pas déjà 'O').
+     * @param {number} tempsId
+     */
+    static async validateForSilogValidation(tempsId) {
+        try {
+            const records = await executeQuery(
+                `
+                SELECT *
+                FROM [SEDI_APP_INDEPENDANTE].[dbo].[ABTEMPS_OPERATEURS]
+                WHERE TempsId = @tempsId
+                `,
+                { tempsId }
+            );
+
+            if (!records?.length) {
+                return {
+                    valid: false,
+                    errors: [`Enregistrement ${tempsId} non trouvé`],
+                    record: null
+                };
+            }
+
+            const record = records[0];
+            const errors = [];
+            const status = record.StatutTraitement == null
+                ? null
+                : String(record.StatutTraitement).trim().toUpperCase();
+
+            if (status === 'T') {
+                errors.push('Enregistrement déjà transmis (StatutTraitement = T)');
+            }
+            if (status === 'A') {
+                errors.push('Enregistrement en attente (StatutTraitement = A)');
+            }
+
+            const productiveDuration = record.ProductiveDuration || 0;
+            if (productiveDuration <= 0) {
+                errors.push(
+                    `ProductiveDuration doit être > 0 pour SILOG (actuel: ${productiveDuration})`
+                );
+            }
+
+            if (!record.OperatorCode) errors.push('OperatorCode manquant');
+            if (!record.LancementCode) errors.push('LancementCode manquant');
+            if (!record.StartTime) errors.push('StartTime manquant');
+            if (!record.EndTime) errors.push('EndTime manquant');
+
+            const lctc = await this.checkLctcCoherence(record);
+            if (!lctc.valid) {
+                errors.push(...lctc.errors);
+            }
+
+            return {
+                valid: errors.length === 0,
+                errors,
+                record
+            };
+        } catch (error) {
+            console.error('❌ Erreur validateForSilogValidation:', error);
+            return {
+                valid: false,
+                errors: [`Erreur: ${error.message}`],
+                record: null
+            };
+        }
+    }
+
+    /**
+     * Liste les temps terminés non cohérents avec LCTC (diagnostic admin).
+     */
+    static async listLctcIncoherentRecords(filters = {}) {
+        const { dateStart, dateEnd, operatorCode, statutTraitement } = filters;
+        const where = ['t.ProductiveDuration > 0', 't.EndTime IS NOT NULL'];
+        const params = {};
+
+        if (operatorCode) {
+            where.push('t.OperatorCode = @operatorCode');
+            params.operatorCode = operatorCode;
+        }
+        if (dateStart) {
+            where.push('CAST(t.DateCreation AS DATE) >= @dateStart');
+            params.dateStart = dateStart;
+        }
+        if (dateEnd) {
+            where.push('CAST(t.DateCreation AS DATE) <= @dateEnd');
+            params.dateEnd = dateEnd;
+        }
+        if (statutTraitement === null || statutTraitement === 'NULL') {
+            where.push('t.StatutTraitement IS NULL');
+        } else if (statutTraitement) {
+            where.push('t.StatutTraitement = @statutTraitement');
+            params.statutTraitement = statutTraitement;
+        }
+
+        where.push(`NOT (${this.getLctcExistsClause('t')})`);
+
+        const rows = await executeQuery(
+            `
+            SELECT
+                t.TempsId,
+                t.OperatorCode,
+                t.LancementCode,
+                t.Phase,
+                t.CodeRubrique,
+                t.DateCreation,
+                t.StatutTraitement,
+                t.ProductiveDuration,
+                t.StartTime,
+                t.EndTime,
+                CASE
+                    WHEN t.Phase IS NULL OR t.CodeRubrique IS NULL
+                        THEN 'Cles ERP non resolues (lancement absent de V_LCTC au moment du pointage)'
+                    ELSE 'Combinaison CodeLancement/Phase/CodeRubrique absente de LCTC'
+                END AS Motif
+            FROM [SEDI_APP_INDEPENDANTE].[dbo].[ABTEMPS_OPERATEURS] t
+            WHERE ${where.join(' AND ')}
+            ORDER BY t.DateCreation DESC, t.TempsId DESC
+            `,
+            params
+        );
+
+        return rows;
+    }
+
     /**
      * Valide l'ordre et la cohérence des événements d'une opération
      * @param {Array} events - Liste des événements
@@ -317,6 +507,11 @@ class OperationValidationService {
             if (!record.EndTime) {
                 errors.push('EndTime manquant');
             }
+
+            const lctc = await this.checkLctcCoherence(record);
+            if (!lctc.valid) {
+                errors.push(...lctc.errors);
+            }
             
             return {
                 valid: errors.length === 0,
@@ -446,10 +641,10 @@ class OperationValidationService {
         
         if (parts.length < 2) return null;
         
-        const hours = parseInt(parts[0], 10);
-        const minutes = parseInt(parts[1], 10);
+        const hours = Number.parseInt(parts[0], 10);
+        const minutes = Number.parseInt(parts[1], 10);
         
-        if (isNaN(hours) || isNaN(minutes) || hours < 0 || hours > 23 || minutes < 0 || minutes > 59) {
+        if (Number.isNaN(hours) || Number.isNaN(minutes) || hours < 0 || hours > 23 || minutes < 0 || minutes > 59) {
             return null;
         }
         
@@ -469,11 +664,11 @@ class OperationValidationService {
         
         if (parts.length < 2) return timeStr; // Ne peut pas corriger
         
-        let hours = parseInt(parts[0], 10);
-        let minutes = parseInt(parts[1], 10);
+        let hours = Number.parseInt(parts[0], 10);
+        let minutes = Number.parseInt(parts[1], 10);
         
-        if (isNaN(hours)) hours = 0;
-        if (isNaN(minutes)) minutes = 0;
+        if (Number.isNaN(hours)) hours = 0;
+        if (Number.isNaN(minutes)) minutes = 0;
         
         // Normaliser les heures et minutes
         hours = Math.max(0, Math.min(23, hours));

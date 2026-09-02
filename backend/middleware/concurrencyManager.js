@@ -3,6 +3,8 @@
  * Assure l'isolation des données entre opérateurs
  */
 
+const crypto = require('node:crypto');
+
 class ConcurrencyManager {
     constructor() {
         this.activeOperations = new Map(); // Map des opérations actives par opérateur
@@ -190,7 +192,7 @@ class ConcurrencyManager {
      */
     validateConcurrency(req, res, next) {
         const { operatorId, lancementCode } = req.body;
-        const operationId = req.params.id || `op_${Date.now()}_${Math.random()}`;
+        const operationId = req.params.id || `op_${Date.now()}_${crypto.randomBytes(4).toString('hex')}`;
 
         // Validation de l'isolation des données
         const isolationCheck = this.validateDataIsolation(operatorId, req.query.operatorCode);

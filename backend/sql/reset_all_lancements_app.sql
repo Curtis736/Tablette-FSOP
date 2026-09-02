@@ -5,8 +5,8 @@
 --   NON CONCERNÉ : SEDI_ERP (SILOG), GPSQL.abetemps_temp, dbo.LCTE — intouchés.
 --
 -- ⚠️  DESTRUCTIF — perte totale de l'historique applicatif FSOP.
---     Le script est en mode "DRY RUN" par défaut (ROLLBACK à la fin).
---     Pour exécuter réellement : changer ROLLBACK TRAN en COMMIT TRAN à la fin.
+--     Les DELETE sont validés en base (COMMIT en fin de script).
+--     Pour un essai sans rien écrire : remplacer COMMIT TRAN par ROLLBACK TRAN à la fin.
 --
 -- Recommandé : faire une sauvegarde SQL de SEDI_APP_INDEPENDANTE AVANT :
 --     BACKUP DATABASE [SEDI_APP_INDEPENDANTE]
@@ -60,11 +60,10 @@ UNION ALL SELECT 'ABTEMPS_OPERATEURS',           COUNT(*)          FROM [dbo].[A
 
 PRINT '';
 PRINT '================================================================';
-PRINT '  MODE DRY-RUN : ROLLBACK par défaut.';
-PRINT '  Pour APPLIQUER : remplacer ROLLBACK TRAN par COMMIT TRAN ci-dessous.';
+PRINT '  VALIDATION : COMMIT — les lignes sont supprimées définitivement.';
 PRINT '================================================================';
 
-ROLLBACK TRAN;   -- ⚠️ changer en COMMIT TRAN pour appliquer réellement
+COMMIT TRAN;
 
 -- -------------------------------------------------------------------------
 -- (Optionnel) Reset des identités IDENTITY après suppression :

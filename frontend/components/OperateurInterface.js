@@ -1,8 +1,8 @@
 // Interface simplifiée pour les opérateurs - v20260309-no-cache-issues
 import TimeUtils from '../utils/TimeUtils.js';
-import ScannerManager from '../utils/ScannerManager.js?v=20260309-cache-bust';
-import FsopForm from './FsopForm.js?v=20260407-fsop-blanks-v4';
-import Logger from '../utils/Logger.js?v=20260318-loglevel1';
+import ScannerManager from '../utils/ScannerManager.js?v=20260706.1';
+import FsopForm from './FsopForm.js?v=20260826.1';
+import Logger from '../utils/Logger.js?v=20260512.1';
 
 class OperateurInterface {
     constructor(operator, app) {
@@ -20,6 +20,9 @@ class OperateurInterface {
         this.pendingForceReplace = false; // Flag pour forcer le remplacement après confirmation
         this.cachedOperators = null; // Cache pour la liste des opérateurs
         this.startRequestInFlight = false;
+        this.shiftTargetSeconds = 8 * 60 * 60; // Objectif opérateur: 8h
+        this.dailyWorkedSecondsFromHistory = 0;
+        this.tempsRestantData = null;
 
         // Debouncing pour éviter les clics répétés
         this.lastActionTime = 0;
@@ -27,9 +30,16 @@ class OperateurInterface {
 
         // Intervalles internes (nettoyés par destroy())
         this._syncInterval = null;
+        this._presenceInterval = null;
 
         this.LANCEMENT_PREFIX = 'LT';
         this.MAX_LANCEMENT_DIGITS = 8;
+        this.WEDGE_SCAN_GAP_MS = 120;
+        this.WEDGE_SCAN_MAX_MS = 400;
+        this.WEDGE_MIN_CHARS = 3;
+        this._wedgeBuffer = '';
+        this._wedgeFirstKeyTime = 0;
+        this._wedgeLastKeyTime = 0;
 
         this.log = Logger.child('OperateurInterface');
         this._sessionExpiredHandled = false;
@@ -39,6 +49,7 @@ class OperateurInterface {
         this.setupEventListeners();
         window.addEventListener('sedi:session-expired', this._onSessionExpired);
         this.initializeLancementInput();
+        this.updateShiftCountdownDisplay();
         // Important: on part toujours d'un écran neutre à la connexion.
         // Évite d'afficher un LT "résiduel" (champ conservé par le DOM / cache) quand aucune opération n'est en cours.
         this.resetControls();
@@ -46,10 +57,14 @@ class OperateurInterface {
             this.lancementInput.disabled = false;
             this.lancementInput.value = '';
         }
-        if (this.selectedLancement) this.selectedLancement.textContent = '';
+        if (this.selectedLancement) this.selectedLancement.textContent = '\u00A0';
         if (this.controlsSection) this.controlsSection.style.display = 'none';
-        this.checkCurrentOperation({ promptIfRunning: false });
-        this.loadOperatorHistory();
+
+        // Hors constructeur (Sonar S7059) — appels async différés
+        queueMicrotask(() => {
+            this.checkCurrentOperation({ promptIfRunning: false });
+            this.loadOperatorHistory();
+        });
 
         // Synchronisation périodique UI ↔ DB (toutes les 30s)
         // Détecte les désynchronisations (coupure réseau, refresh partiel, etc.)
@@ -80,7 +95,29 @@ class OperateurInterface {
     isSessionRequiredResponse(data, statusCode = null) {
         const security = String(data?.security || '').toUpperCase();
         const errorCode = String(data?.error || '').toUpperCase();
-        return Number(statusCode) === 401 || security === 'SESSION_REQUIRED' || errorCode === 'SESSION_REQUIRED';
+        return Number(statusCode) === 401
+            || security === 'SESSION_REQUIRED'
+            || errorCode === 'SESSION_REQUIRED'
+            || security === 'SESSION_CONTEXT_REQUIRED'
+            || errorCode === 'SESSION_CONTEXT_REQUIRED'
+            || security === 'SESSION_MISMATCH'
+            || errorCode === 'SESSION_MISMATCH'
+            || security === 'DEVICE_MISMATCH'
+            || errorCode === 'DEVICE_MISMATCH';
+    }
+
+    getFsopRequestHeaders() {
+        const headers = { 'Content-Type': 'application/json' };
+        try {
+            this.apiService.syncOperatorContextWithLocalStorage?.();
+            const ctx = this.apiService.currentOperatorContext || null;
+            if (ctx?.code) headers['x-operator-code'] = ctx.code;
+            if (ctx?.sessionId) headers['x-operator-session-id'] = ctx.sessionId;
+            if (this.apiService.deviceId) headers['x-device-id'] = this.apiService.deviceId;
+        } catch (_) {
+            // non bloquant
+        }
+        return headers;
     }
 
     handleSessionExpired(detail = {}) {
@@ -95,7 +132,7 @@ class OperateurInterface {
                 this.lancementInput.disabled = false;
                 this.lancementInput.value = '';
             }
-            if (this.selectedLancement) this.selectedLancement.textContent = '';
+            if (this.selectedLancement) this.selectedLancement.textContent = '\u00A0';
             if (this.controlsSection) this.controlsSection.style.display = 'none';
 
             if (operatorCode) this.apiService.setOperatorSessionActive(operatorCode, false);
@@ -220,12 +257,16 @@ class OperateurInterface {
         this.lancementDetails = document.getElementById('lancementDetails');
         this.operationStepGroup = document.getElementById('operationStepGroup');
         this.operationStepSelect = document.getElementById('operationStepSelect');
+        this.tempsRestantBlock = document.getElementById('tempsRestantBlock');
+        this.tempsRestantTotalDisplay = document.getElementById('tempsRestantTotalDisplay');
         this.startBtn = document.getElementById('startBtn');
         this.pauseBtn = document.getElementById('pauseBtn');
         this.stopBtn = document.getElementById('stopBtn');
         this.timerDisplay = document.getElementById('timerDisplay');
         this.statusDisplay = document.getElementById('statusDisplay');
         this.endTimeDisplay = document.getElementById('endTimeDisplay');
+        this.shiftWorkedDisplay = document.getElementById('shiftWorkedDisplay');
+        this.shiftRemainingDisplay = document.getElementById('shiftRemainingDisplay');
         
         // Éléments pour l'historique
         this.refreshHistoryBtn = document.getElementById('refreshHistoryBtn');
@@ -238,7 +279,8 @@ class OperateurInterface {
         this.commentCharCount = document.getElementById('commentCharCount');
         this.commentsList = document.getElementById('commentsList');
         
-        // Éléments pour le scanner
+        // Éléments pour le scanner / douchette
+        this.lancementHelpText = document.getElementById('lancementHelpText');
         this.scanBarcodeBtn = document.getElementById('scanBarcodeBtn');
         this.scannerModal = document.getElementById('barcodeScannerModal');
         this.closeScannerBtn = document.getElementById('closeScannerBtn');
@@ -285,14 +327,34 @@ class OperateurInterface {
         console.log('operatorHistoryTableBody trouvé:', !!this.operatorHistoryTableBody);
         console.log('endTimeDisplay trouvé:', !!this.endTimeDisplay);
         
-        // Modifier le placeholder pour indiquer la saisie manuelle
-        if (this.lancementInput) {
-            this.lancementInput.placeholder = "Saisir le code de lancement...";
-        }
+        this.configureLancementScannerUI();
         
         // Cacher la liste des lancements
         if (this.lancementList) {
             this.lancementList.style.display = 'none';
+        }
+    }
+
+    /**
+     * Adapte l'UI : douchette toujours active, caméra uniquement en HTTPS.
+     */
+    configureLancementScannerUI() {
+        const inputGroup = this.lancementInput?.closest('.input-group');
+        const cameraAvailable = window.isSecureContext === true;
+
+        if (!cameraAvailable && this.scanBarcodeBtn) {
+            this.scanBarcodeBtn.style.display = 'none';
+            inputGroup?.classList.add('no-camera-btn');
+        }
+
+        if (this.lancementHelpText) {
+            const manualHint = '"LT" est pré-rempli — saisissez les chiffres au clavier';
+            const wedgeHint = 'ou scannez avec une douchette Bluetooth/USB (ex: LT2501145)';
+            const cameraHint = cameraAvailable
+                ? ' — la caméra est aussi disponible via le bouton à droite'
+                : '';
+            this.lancementHelpText.innerHTML =
+                `<i class="fas fa-info-circle"></i> ${manualHint} ${wedgeHint}${cameraHint}`;
         }
     }
 
@@ -335,6 +397,9 @@ class OperateurInterface {
         if (this.startBtn) this.startBtn.addEventListener('click', () => this.handleStart());
         if (this.pauseBtn) this.pauseBtn.addEventListener('click', () => this.handlePause());
         if (this.stopBtn) this.stopBtn.addEventListener('click', () => this.handleStop());
+        if (this.operationStepSelect) {
+            this.operationStepSelect.addEventListener('change', () => this.updateTempsRestantDisplay());
+        }
         
         // Bouton actualiser historique
         if (this.refreshHistoryBtn) this.refreshHistoryBtn.addEventListener('click', () => this.loadOperatorHistory());
@@ -590,18 +655,89 @@ class OperateurInterface {
         return null;
     }
 
-    hideOperationSteps() {
+    hideOperationSteps(clearTempsRestant = false) {
         if (this.operationStepGroup) this.operationStepGroup.style.display = 'none';
         if (this.operationStepSelect) {
             this.operationStepSelect.innerHTML = '<option value="">Choisir une étape (Phase)</option>';
+        }
+        if (clearTempsRestant) {
+            this.tempsRestantData = null;
+            this.updateTempsRestantDisplay();
+        }
+    }
+
+    formatTempsRestantLabel(restantH) {
+        const h = Number(restantH);
+        if (!Number.isFinite(h)) return '—';
+        if (h < 0) {
+            const overrunSeconds = Math.round(Math.abs(h) * 3600);
+            return `dépassé (+${TimeUtils.formatDuration(overrunSeconds)})`;
+        }
+        return TimeUtils.formatDuration(Math.round(h * 3600));
+    }
+
+    updateTempsRestantDisplay() {
+        const data = this.tempsRestantData;
+        if (!this.tempsRestantBlock) return;
+
+        const totalTheo = Number(data?.total?.theoH);
+        const totalConsomme = Number(data?.total?.consommeH);
+        const hasTheo = Number.isFinite(totalTheo) && totalTheo > 0;
+        const hasConsomme = Number.isFinite(totalConsomme) && totalConsomme > 0;
+        const hasEtapes = Array.isArray(data?.etapes) && data.etapes.length > 0;
+        if (!data || (!hasTheo && !hasConsomme && !hasEtapes)) {
+            this.tempsRestantBlock.style.display = 'none';
+            if (this.endTimeDisplay) {
+                this.endTimeDisplay.textContent = '—';
+                this.endTimeDisplay.classList.remove('temps-restant-overrun');
+            }
+            if (this.tempsRestantTotalDisplay) this.tempsRestantTotalDisplay.textContent = '—';
+            return;
+        }
+
+        this.tempsRestantBlock.style.display = 'block';
+
+        if (this.tempsRestantTotalDisplay) {
+            if (hasTheo) {
+                this.tempsRestantTotalDisplay.textContent = this.formatTempsRestantLabel(data.total?.restantH);
+                this.tempsRestantTotalDisplay.classList.toggle('temps-restant-overrun', Number(data.total?.restantH) < 0);
+            } else {
+                this.tempsRestantTotalDisplay.textContent = 'gamme LCTC sans temps';
+                this.tempsRestantTotalDisplay.classList.remove('temps-restant-overrun');
+            }
+        }
+
+        const selectedStep = this.operationStepSelect
+            ? String(this.operationStepSelect.value || '').trim()
+            : '';
+        let etape = selectedStep && data.byStepId ? data.byStepId[selectedStep] : null;
+
+        // Une seule étape visible / auto : prendre la première étape avec theo > 0
+        if (!etape && Array.isArray(data.etapes)) {
+            etape = data.etapes.find(s => Number(s?.theoH) > 0) || data.etapes[0] || null;
+        }
+
+        if (this.endTimeDisplay) {
+            if (etape && Number(etape.theoH) > 0) {
+                this.endTimeDisplay.textContent = this.formatTempsRestantLabel(etape.restantH);
+                this.endTimeDisplay.classList.toggle('temps-restant-overrun', Number(etape.restantH) < 0);
+            } else {
+                this.endTimeDisplay.textContent = 'n/a';
+                this.endTimeDisplay.classList.remove('temps-restant-overrun');
+            }
         }
     }
 
     renderOperationSteps(payload) {
         const steps = Array.isArray(payload?.steps) ? payload.steps : [];
-        if (!this.operationStepGroup || !this.operationStepSelect) return;
+        this.tempsRestantData = payload?.tempsRestant || null;
+        this.updateTempsRestantDisplay();
+
+        if (!this.operationStepGroup || !this.operationStepSelect) {
+            return;
+        }
         if (!steps.length) {
-            this.hideOperationSteps();
+            this.hideOperationSteps(false);
             return;
         }
 
@@ -617,7 +753,13 @@ class OperateurInterface {
 
         const items = Array.from(byId.values());
         if (items.length <= 1) {
-            this.hideOperationSteps();
+            if (this.operationStepGroup) this.operationStepGroup.style.display = 'none';
+            if (this.operationStepSelect) {
+                this.operationStepSelect.innerHTML = items.length === 1
+                    ? `<option value="${this.escapeHtml(items[0].id)}" selected>${this.escapeHtml(items[0].label)}</option>`
+                    : '<option value="">Choisir une étape (Phase)</option>';
+            }
+            this.updateTempsRestantDisplay();
             return;
         }
 
@@ -634,20 +776,25 @@ class OperateurInterface {
             items.map(it => `<option value="${this.escapeHtml(it.id)}">${this.escapeHtml(it.label)}</option>`).join('');
 
         this.operationStepGroup.style.display = 'block';
+        this.updateTempsRestantDisplay();
     }
 
     async loadOperationStepsForLaunch(lancementCode) {
         const code = String(lancementCode || '').trim().toUpperCase();
         if (!/^LT\d{7,8}$/.test(code)) {
-            this.hideOperationSteps();
+            this.hideOperationSteps(true);
             return;
         }
         try {
             const payload = await this.apiService.getLancementSteps(code);
+            if (!payload?.success && payload?.error) {
+                console.warn('Étapes LT:', payload.error);
+            }
             this.renderOperationSteps(payload);
         } catch (e) {
-            // Non bloquant: si l'API ne répond pas, on cache juste le select
-            this.hideOperationSteps();
+            // Non bloquant: masquer le select sans effacer le temps restant déjà affiché
+            console.warn('Étapes / temps restant indisponibles:', e?.message || e);
+            this.hideOperationSteps(false);
         }
     }
 
@@ -924,7 +1071,8 @@ class OperateurInterface {
             
             const res = await fetch(endpoint, {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
+                cache: 'no-store',
+                headers: this.getFsopRequestHeaders(),
                 body: JSON.stringify({
                     launchNumber: lt,
                     serialNumber: serialNumber,
@@ -961,7 +1109,8 @@ class OperateurInterface {
         try {
             const res = await fetch(endpoint, {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
+                cache: 'no-store',
+                headers: this.getFsopRequestHeaders(),
                 body: JSON.stringify({
                     launchNumber: lt,
                     templateCode,
@@ -1042,7 +1191,8 @@ class OperateurInterface {
             const _opId = this.operator?.code || this.operator?.id || this.operator?.coderessource;
             const res = await fetch(endpoint, {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
+                cache: 'no-store',
+                headers: this.getFsopRequestHeaders(),
                 body: JSON.stringify({
                     launchNumber: lt,
                     serialNumber: serialNumber,
@@ -1102,7 +1252,8 @@ class OperateurInterface {
             
             const res = await fetch(endpoint, {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
+                cache: 'no-store',
+                headers: this.getFsopRequestHeaders(),
                 body: JSON.stringify({
                     launchNumber: lt,
                     serialNumber: serialNumber,
@@ -1476,24 +1627,118 @@ class OperateurInterface {
         }
     }
 
+    isCompleteLancementCode(code) {
+        return /^LT\d{7,8}$/.test(code || '');
+    }
+
+    resetWedgeBuffer() {
+        this._wedgeBuffer = '';
+        this._wedgeFirstKeyTime = 0;
+        this._wedgeLastKeyTime = 0;
+    }
+
+    isWedgeScanInProgress() {
+        if (!this._wedgeBuffer || this._wedgeBuffer.length < this.WEDGE_MIN_CHARS) {
+            return false;
+        }
+        const duration = (this._wedgeLastKeyTime || 0) - (this._wedgeFirstKeyTime || 0);
+        return duration <= this.WEDGE_SCAN_MAX_MS;
+    }
+
+    trackWedgeKey(key, event) {
+        const now = Date.now();
+        const gap = this._wedgeLastKeyTime ? now - this._wedgeLastKeyTime : Infinity;
+
+        if (gap > this.WEDGE_SCAN_GAP_MS) {
+            this._wedgeBuffer = key;
+            this._wedgeFirstKeyTime = now;
+        } else {
+            this._wedgeBuffer += key;
+        }
+        this._wedgeLastKeyTime = now;
+
+        if (this.isWedgeScanInProgress()) {
+            event.preventDefault();
+            return true;
+        }
+
+        return false;
+    }
+
+    tryFlushWedgeScan(event) {
+        if (!this.isWedgeScanInProgress()) {
+            this.resetWedgeBuffer();
+            return false;
+        }
+
+        event.preventDefault();
+        this.applyWedgeBarcode(this._wedgeBuffer);
+        this.resetWedgeBuffer();
+        return true;
+    }
+
+    applyWedgeBarcode(raw) {
+        const digits = this.getSanitizedDigitsFromValue(raw);
+        if (!digits) {
+            return;
+        }
+
+        this.lancementInput.value = `${this.LANCEMENT_PREFIX}${digits}`;
+        const code = this.enforceNumericLancementInput();
+        this.handleLancementInput();
+
+        if (this.isCompleteLancementCode(code)) {
+            this.notificationManager.success(`Code scanné: ${code}`);
+            this.validateAndSelectLancement();
+        } else {
+            this.notificationManager.success(`Code scanné: ${code}`);
+        }
+
+        this.focusLancementInputForScan();
+    }
+
+    focusLancementInputForScan() {
+        if (!this.lancementInput || this.lancementInput.disabled) {
+            return;
+        }
+        requestAnimationFrame(() => {
+            this.lancementInput.focus();
+            this.setLancementCaretAfterPrefix();
+        });
+    }
+
     handleLancementKeydown(event) {
         if (!this.lancementInput) {
             return;
         }
-        
-        if (event.key === 'Enter') {
-            event.preventDefault();
-            this.validateAndSelectLancement();
-            return;
+
+        if (event.key === 'Enter' || event.key === 'Tab') {
+            if (this.tryFlushWedgeScan(event)) {
+                return;
+            }
+            if (event.key === 'Enter') {
+                event.preventDefault();
+                this.validateAndSelectLancement();
+                return;
+            }
+            if (event.key === 'Tab') {
+                const code = this.enforceNumericLancementInput(false);
+                if (this.isCompleteLancementCode(code)) {
+                    event.preventDefault();
+                    this.validateAndSelectLancement();
+                }
+                return;
+            }
         }
-        
+
         // Autoriser les raccourcis clavier (copier/coller, etc.)
         if (event.ctrlKey || event.metaKey || event.altKey) {
             return;
         }
-        
-        const navigationKeys = ['Tab', 'Backspace', 'Delete', 'ArrowLeft', 'ArrowRight', 'Home', 'End'];
+
+        const navigationKeys = ['Backspace', 'Delete', 'ArrowLeft', 'ArrowRight', 'Home', 'End'];
         if (navigationKeys.includes(event.key)) {
+            this.resetWedgeBuffer();
             if ((event.key === 'Backspace' || event.key === 'ArrowLeft' || event.key === 'Home') &&
                 this.lancementInput.selectionStart <= this.LANCEMENT_PREFIX.length) {
                 event.preventDefault();
@@ -1501,13 +1746,17 @@ class OperateurInterface {
             }
             return;
         }
-        
-        // Bloquer tout caractère non numérique
+
+        if (event.key.length === 1 && this.trackWedgeKey(event.key, event)) {
+            return;
+        }
+
+        // Bloquer tout caractère non numérique (saisie manuelle)
         if (!/^\d$/.test(event.key)) {
             event.preventDefault();
             return;
         }
-        
+
         const digitsLength = this.getSanitizedDigitsFromValue(this.lancementInput.value).length;
         if (digitsLength >= this.MAX_LANCEMENT_DIGITS) {
             event.preventDefault();
@@ -1651,7 +1900,7 @@ class OperateurInterface {
             // Gérer les différents types d'erreurs
             console.error('Erreur validation lancement:', error);
             this.currentLancement = null;
-            this.hideOperationSteps();
+            this.hideOperationSteps(true);
             
             if (error.status === 409) {
                 // Conflit : lancement déjà en cours par un autre opérateur
@@ -1719,6 +1968,7 @@ class OperateurInterface {
                     if (stepId && this.operationStepSelect) {
                         this.operationStepSelect.value = stepId;
                     }
+                    this.updateTempsRestantDisplay();
                 } catch (e) {
                     // Non bloquant
                 }
@@ -1742,7 +1992,7 @@ class OperateurInterface {
                     this.lancementInput.disabled = false;
                     this.lancementInput.value = '';
                 }
-                if (this.selectedLancement) this.selectedLancement.textContent = '';
+                if (this.selectedLancement) this.selectedLancement.textContent = '\u00A0';
                 if (this.controlsSection) this.controlsSection.style.display = 'none';
             }
         } catch (error) {
@@ -1759,7 +2009,7 @@ class OperateurInterface {
                 this.lancementInput.disabled = false;
                 this.lancementInput.value = '';
             }
-            if (this.selectedLancement) this.selectedLancement.textContent = '';
+            if (this.selectedLancement) this.selectedLancement.textContent = '\u00A0';
             if (this.controlsSection) this.controlsSection.style.display = 'none';
         }
     }
@@ -1778,7 +2028,7 @@ class OperateurInterface {
             const mo = Number(m[2]) - 1;
             const d = Number(m[3]);
             const out = new Date(y, mo, d, 0, 0, 0, 0);
-            return isNaN(out.getTime()) ? null : out;
+            return Number.isNaN(out.getTime()) ? null : out;
         };
         const isTimeLike = (t) => typeof t === 'string' && /^\d{2}:\d{2}(:\d{2})?$/.test(t);
         // Utiliser un timestamp complet si dispo (sinon la date seule donne des heures fantômes comme 01:00)
@@ -1808,6 +2058,7 @@ class OperateurInterface {
         }
         
         this.startBtn.disabled = true;
+        if (this.pauseBtn) this.pauseBtn.disabled = false;
         this.stopBtn.disabled = false;
         this.statusDisplay.textContent = 'En cours';
         
@@ -1822,7 +2073,6 @@ class OperateurInterface {
         this.lancementInput.disabled = true;
         // Mettre à jour l’affichage du temps immédiatement (sinon il reste à 00:00:00 jusqu’au premier tick)
         this.updateTimer();
-        this.updateEndTime();
     }
 
     resumePausedOperation(operation) {
@@ -1833,6 +2083,7 @@ class OperateurInterface {
         
         this.startBtn.disabled = false;
         this.startBtn.innerHTML = '<i class="fas fa-play"></i> Reprendre';
+        if (this.pauseBtn) this.pauseBtn.disabled = true;
         this.stopBtn.disabled = false;
         this.statusDisplay.textContent = 'En pause';
 
@@ -1842,7 +2093,7 @@ class OperateurInterface {
             const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(s);
             if (!m) return null;
             const out = new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]), 0, 0, 0, 0);
-            return isNaN(out.getTime()) ? null : out;
+            return Number.isNaN(out.getTime()) ? null : out;
         };
         const pausedAt = operation?.startedAt || operation?.dateCreation || operation?.DateCreation || null;
         const pauseSince = pausedAt
@@ -1979,8 +2230,6 @@ class OperateurInterface {
         if (!this.canPerformAction()) return;
 
         try {
-            this.setFinalEndTime();
-
             const operatorCode = this.operator.code || this.operator.id;
             const selectedStep = this.operationStepSelect ? String(this.operationStepSelect.value || '').trim() : '';
             const result = await this.apiService.stopOperation(
@@ -2020,7 +2269,7 @@ class OperateurInterface {
             this.lancementInput.placeholder = 'Saisir un nouveau code de lancement...';
         }
         if (this.controlsSection) this.controlsSection.style.display = 'none';
-        this.hideOperationSteps();
+        this.hideOperationSteps(true);
         this.enforceNumericLancementInput(false);
     }
 
@@ -2060,6 +2309,7 @@ class OperateurInterface {
         this.totalPausedTime = 0;
         this.pauseStartTime = null;
         if (this.timerDisplay) this.timerDisplay.textContent = '00:00:00';
+        this.updateShiftCountdownDisplay();
     }
 
     resetControls() {
@@ -2075,7 +2325,10 @@ class OperateurInterface {
         if (this.pauseBtn) this.pauseBtn.disabled = true;
         if (this.stopBtn) this.stopBtn.disabled = true;
         if (this.statusDisplay) this.statusDisplay.textContent = 'En attente';
-        if (this.endTimeDisplay) this.endTimeDisplay.textContent = '--:--';
+        if (this.endTimeDisplay) {
+            this.endTimeDisplay.textContent = '—';
+            this.endTimeDisplay.classList.remove('temps-restant-overrun');
+        }
     }
 
     updateTimer() {
@@ -2084,46 +2337,64 @@ class OperateurInterface {
         const now = new Date();
         const elapsed = Math.floor((now - this.startTime - this.totalPausedTime) / 1000);
         this.timerDisplay.textContent = TimeUtils.formatDuration(Math.max(0, elapsed));
-        
-        // Mettre à jour l'heure de fin estimée
-        this.updateEndTime();
+        this.updateShiftCountdownDisplay();
     }
 
-    updateEndTime() {
-        if (!this.endTimeDisplay) {
-            console.warn('⚠️ endTimeDisplay non trouvé, impossible de mettre à jour l\'heure de fin');
-            return;
+    parseOperationDurationToSeconds(operation = {}) {
+        const rawDuration = operation?.duration;
+        if (typeof rawDuration === 'number' && Number.isFinite(rawDuration) && rawDuration >= 0) {
+            return Math.floor(rawDuration);
         }
-        
-        if (!this.isRunning || !this.startTime) {
-            this.endTimeDisplay.textContent = '--:--';
-            return;
+
+        if (typeof rawDuration === 'string') {
+            const normalized = rawDuration.trim();
+            // Format attendu côté backend: HH:mm ou HH:mm:ss
+            const secondsFromDuration = TimeUtils.parseDuration(normalized);
+            if (secondsFromDuration > 0) {
+                return secondsFromDuration;
+            }
         }
-        
-        // Afficher l'heure actuelle comme heure de fin en cours
-        const now = new Date();
-        
-        // Formater l'heure de fin
-        this.endTimeDisplay.textContent = now.toLocaleTimeString('fr-FR', {
-            timeZone: 'Europe/Paris',
-            hour: '2-digit',
-            minute: '2-digit'
-        });
+
+        // Fallback: si l'opération est terminée et qu'on a juste HH:mm, calculer une durée simple.
+        const start = String(operation?.startTime || '').trim();
+        const end = String(operation?.endTime || '').trim();
+        const isTime = (value) => /^\d{2}:\d{2}(:\d{2})?$/.test(value);
+        if (!isTime(start) || !isTime(end)) return 0;
+
+        const parseTime = (value) => {
+            const [h, m, s = '0'] = value.split(':');
+            return (Number(h) * 3600) + (Number(m) * 60) + Number(s);
+        };
+
+        const startSeconds = parseTime(start);
+        const endSeconds = parseTime(end);
+        if (!Number.isFinite(startSeconds) || !Number.isFinite(endSeconds) || endSeconds <= startSeconds) {
+            return 0;
+        }
+
+        return endSeconds - startSeconds;
     }
 
-    setFinalEndTime() {
-        if (!this.endTimeDisplay) {
-            console.warn('⚠️ endTimeDisplay non trouvé, impossible de définir l\'heure de fin');
-            return;
-        }
-        
-        // Afficher l'heure de fin définitive quand l'opération se termine
+    getCurrentActiveOperationSeconds() {
+        if (!this.isRunning || !this.startTime) return 0;
         const now = new Date();
-        this.endTimeDisplay.textContent = now.toLocaleTimeString('fr-FR', {
-            timeZone: 'Europe/Paris',
-            hour: '2-digit',
-            minute: '2-digit'
-        });
+        const elapsed = Math.floor((now - this.startTime - this.totalPausedTime) / 1000);
+        return Math.max(0, elapsed);
+    }
+
+    updateShiftCountdownDisplay() {
+        const workedSeconds = this.dailyWorkedSecondsFromHistory + this.getCurrentActiveOperationSeconds();
+        const remainingSeconds = Math.max(0, this.shiftTargetSeconds - workedSeconds);
+        const targetReached = remainingSeconds <= 0;
+
+        if (this.shiftWorkedDisplay) {
+            this.shiftWorkedDisplay.textContent = TimeUtils.formatDuration(Math.max(0, workedSeconds));
+        }
+        if (this.shiftRemainingDisplay) {
+            this.shiftRemainingDisplay.textContent = TimeUtils.formatDuration(remainingSeconds);
+            this.shiftRemainingDisplay.classList.toggle('shift-target-reached', targetReached);
+            this.shiftRemainingDisplay.classList.toggle('shift-target-pending', !targetReached);
+        }
     }
 
     // Méthodes de compatibilité
@@ -2254,6 +2525,8 @@ class OperateurInterface {
         }
         
         if (!operations || operations.length === 0) {
+            this.dailyWorkedSecondsFromHistory = 0;
+            this.updateShiftCountdownDisplay();
             console.log('⚠️ Aucune opération à afficher');
             const emptyRow = document.createElement('tr');
             emptyRow.className = 'empty-state-row';
@@ -2274,6 +2547,11 @@ class OperateurInterface {
             this.operatorHistoryTableBody.appendChild(emptyRow);
             return;
         }
+
+        this.dailyWorkedSecondsFromHistory = operations.reduce((total, operation) => {
+            return total + this.parseOperationDurationToSeconds(operation);
+        }, 0);
+        this.updateShiftCountdownDisplay();
 
         console.log('🔄 Vidage du tableau et ajout des lignes...');
         this.operatorHistoryTableBody.innerHTML = '';
@@ -2464,7 +2742,7 @@ class OperateurInterface {
         // Ajouter les event listeners pour les boutons de suppression
         this.commentsList.querySelectorAll('.btn-delete-comment').forEach(button => {
             button.addEventListener('click', (e) => {
-                const commentId = parseInt(e.target.closest('.btn-delete-comment').dataset.commentId);
+                const commentId = Number.parseInt(e.target.closest('.btn-delete-comment').dataset.commentId);
                 this.deleteComment(commentId);
             });
         });
@@ -2527,6 +2805,13 @@ class OperateurInterface {
     async openScanner() {
         if (!this.scannerModal || !this.scannerVideo || !this.scannerCanvas) {
             this.notificationManager.error('Éléments du scanner non trouvés');
+            return;
+        }
+
+        if (!window.isSecureContext) {
+            this.notificationManager.error(
+                'Le scan caméra nécessite https://. Ouvrez le site en HTTPS et installez le certificat SEDI si demandé (page install-cert.html).'
+            );
             return;
         }
 
@@ -2623,6 +2908,8 @@ class OperateurInterface {
             
             // Notification de succès
             this.notificationManager.success(`Code scanné: ${normalizedCode}`);
+            
+            this.closeScanner();
             
             // Valider automatiquement le lancement après un court délai
             setTimeout(() => {

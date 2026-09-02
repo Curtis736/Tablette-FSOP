@@ -1,4 +1,6 @@
 // Service pour gérer le stockage local
+import { getLocalDevApiBase } from '../utils/DevBackendUrl.js';
+
 class StorageService {
     constructor() {
         this.keys = {
@@ -111,9 +113,9 @@ class StorageService {
         const currentPort = window.location.port || (window.location.protocol === 'https:' ? '443' : '80');
         const currentHost = window.location.hostname;
         const isLocalDev = (currentHost === 'localhost' || currentHost === '127.0.0.1') && currentPort === '8080';
-        
+
         return {
-            apiUrl: isLocalDev ? 'http://localhost:3033/api' : `${window.location.protocol}//${window.location.host}/api`,
+            apiUrl: isLocalDev ? getLocalDevApiBase() : `${window.location.protocol}//${window.location.host}/api`,
             timeout: 30000,
             retryAttempts: 3,
             cacheEnabled: true,

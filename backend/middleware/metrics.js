@@ -113,7 +113,7 @@ const metricsMiddleware = (req, res, next) => {
   if (contentLength) {
     metrics.httpRequestSize.observe(
       { method, route },
-      parseInt(contentLength)
+      Number.parseInt(contentLength)
     );
   }
 

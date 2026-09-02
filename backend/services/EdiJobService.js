@@ -77,7 +77,7 @@ class EdiJobService {
 
     static _psSingleQuote(value) {
         // Escape single quotes for PowerShell single-quoted strings: ' => ''
-        return String(value ?? '').replace(/'/g, "''");
+        return String(value ?? '').replaceAll("'", "''");
     }
 
     static _maskCommandForLogs(text) {
@@ -301,7 +301,7 @@ class EdiJobService {
                     ...(sshKey ? ['-i', `"${sshKey}"`] : []),
                     ...(sshExtra ? [sshExtra] : []),
                     `${sshUser}@${sshHost}`,
-                    `"${remotePs.replace(/"/g, '\\"')}"`
+                    `"${remotePs.replaceAll('"', '\\"')}"`
                 ];
                 const sshCommand = parts.join(' ');
                 this._log('INFO', 'Exécution via SSH vers hôte Windows', {
@@ -419,18 +419,21 @@ class EdiJobService {
      * @param {string} codeTache - Code de la tâche (optionnel, généré automatiquement si non fourni)
      * @returns {Promise<Object>} Résultat de l'exécution
      */
-    static async executeEdiJobForTransmittedRecords(tempsIds, codeTache = null) {
+    static async executeEdiJobForTransmittedRecords(tempsIds, codeTache = null, options = {}) {
         try {
             const resolved = this._buildConfig(codeTache, {});
             codeTache = resolved.codeTache;
+            // Transfert admin : toujours forcer (sinon SILOG_MAX_RUNS_PER_DAY=1 bloque le 2e clic du jour)
+            const runOptions = { force: true, ...options };
             
             this._log('INFO', 'Déclenchement EDI_JOB pour lot transmis', {
                 codeTache,
                 nbRecords: tempsIds.length,
-                sampleIds: tempsIds.slice(0, 5)
+                sampleIds: tempsIds.slice(0, 5),
+                force: !!runOptions.force
             });
             
-            const result = await this.executeEdiJob(codeTache);
+            const result = await this.executeEdiJob(codeTache, runOptions);
             
             if (result.success && !result.skipped) {
                 this._log('INFO', 'Lot transmis traité avec succès', {

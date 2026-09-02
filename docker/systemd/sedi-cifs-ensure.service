@@ -1,0 +1,11 @@
+[Unit]
+Description=Ensure CIFS mounts for SEDI Tablette (remount via fstab)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/home/Tablette-FSOP/docker/scripts/ensure-cifs-mounts.sh
+Restart=on-failure
+RestartSec=20
+

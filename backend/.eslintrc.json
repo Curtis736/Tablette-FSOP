@@ -62,8 +62,22 @@
     "require": "readonly",
     "exports": "readonly",
     "global": "readonly",
-    "console": "readonly"
-  }
+    "console": "readonly",
+    "fetch": "readonly",
+    "setTimeout": "readonly",
+    "setInterval": "readonly",
+    "clearTimeout": "readonly",
+    "clearInterval": "readonly"
+  },
+  "ignorePatterns": [
+    "node_modules/",
+    "coverage/",
+    "logs/",
+    "scripts/",
+    "sql/",
+    "eslint-report.json",
+    "test-email-*.js"
+  ]
 }
 
 

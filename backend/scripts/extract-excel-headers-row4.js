@@ -57,7 +57,7 @@ async function getEntryText(zipPath, name) {
 
 function colToNum(col) {
   let n = 0;
-  for (const ch of col.toUpperCase()) n = n * 26 + (ch.charCodeAt(0) - 64);
+  for (const ch of col.toUpperCase()) n = n * 26 + (ch.codePointAt(0) - 64);
   return n;
 }
 
@@ -66,7 +66,7 @@ function numToCol(num) {
   let n = num;
   while (n > 0) {
     const r = (n - 1) % 26;
-    s = String.fromCharCode(65 + r) + s;
+    s = String.fromCodePoint(65 + r) + s;
     n = Math.floor((n - 1) / 26);
   }
   return s;

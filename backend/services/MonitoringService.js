@@ -10,7 +10,7 @@ class MonitoringService {
         if (!value) return null;
         // SQL DATE often comes back as JS Date via mssql
         if (value instanceof Date) {
-            if (isNaN(value.getTime())) return null;
+            if (Number.isNaN(value.getTime())) return null;
             return value.toISOString().slice(0, 10); // YYYY-MM-DD
         }
         const s = String(value).trim();
@@ -34,9 +34,9 @@ class MonitoringService {
         if (!s) return null;
         const m = s.match(/^(\d{1,2}):(\d{1,2})(?::(\d{2}))?$/);
         if (!m) return null;
-        const hh = parseInt(m[1], 10);
-        const mm = parseInt(m[2], 10);
-        const ss = m[3] ? parseInt(m[3], 10) : 0;
+        const hh = Number.parseInt(m[1], 10);
+        const mm = Number.parseInt(m[2], 10);
+        const ss = m[3] ? Number.parseInt(m[3], 10) : 0;
         if (!Number.isFinite(hh) || !Number.isFinite(mm) || !Number.isFinite(ss)) return null;
         if (hh < 0 || hh > 23 || mm < 0 || mm > 59 || ss < 0 || ss > 59) return null;
         return { hh, mm, ss };
@@ -113,11 +113,11 @@ class MonitoringService {
                 if (!timeValue) return null;
                 if (typeof timeValue === 'string') {
                     const m = timeValue.trim().match(/^(\d{1,2}):(\d{2})(?::(\d{2}))?$/);
-                    if (m) return { hour: parseInt(m[1], 10), minute: parseInt(m[2], 10) };
+                    if (m) return { hour: Number.parseInt(m[1], 10), minute: Number.parseInt(m[2], 10) };
                 }
                 if (timeValue instanceof Date) return { hour: timeValue.getHours(), minute: timeValue.getMinutes() };
                 if (typeof timeValue === 'object' && timeValue.hour !== undefined && timeValue.minute !== undefined) {
-                    return { hour: parseInt(timeValue.hour, 10), minute: parseInt(timeValue.minute, 10) };
+                    return { hour: Number.parseInt(timeValue.hour, 10), minute: Number.parseInt(timeValue.minute, 10) };
                 }
                 return null;
             };
@@ -126,10 +126,10 @@ class MonitoringService {
                 const createdAt = event.CreatedAt;
                 if (createdAt) {
                     const d = new Date(createdAt);
-                    if (!isNaN(d.getTime())) return d;
+                    if (!Number.isNaN(d.getTime())) return d;
                 }
                 const base = new Date(event.DateCreation);
-                if (!isNaN(base.getTime())) {
+                if (!Number.isNaN(base.getTime())) {
                     const t = extractTime(kind === 'start' ? event.HeureDebut : event.HeureFin);
                     if (t) base.setHours(t.hour, t.minute, 0, 0);
                     return base;
@@ -194,7 +194,10 @@ class MonitoringService {
      */
     static async getTempsRecords(filters = {}) {
         try {
-            const { statutTraitement, operatorCode, lancementCode, date, dateStart, dateEnd } = filters;
+            const { statutTraitement, operatorCode, lancementCode, date, dateStart, dateEnd, includeAllStatuses } = filters;
+            const includeAll = includeAllStatuses === true
+                || String(includeAllStatuses || '').toLowerCase() === 'true'
+                || String(includeAllStatuses || '') === '1';
             
             let whereConditions = [];
             const params = {};
@@ -204,7 +207,7 @@ class MonitoringService {
             // If the caller explicitly requests statutTraitement, we respect it.
             const remoteMode = String(process.env.SILOG_REMOTE_MODE || '').trim().toLowerCase();
             const isScheduledMode = ['scheduled', 'disable', 'disabled', 'none'].includes(remoteMode);
-            if (isScheduledMode && statutTraitement === undefined) {
+            if (isScheduledMode && statutTraitement === undefined && !includeAll) {
                 // Default view: show only actionable records (NULL or 'A' = on hold)
                 whereConditions.push("(t.StatutTraitement IS NULL OR t.StatutTraitement = 'A')");
             }
@@ -375,28 +378,28 @@ class MonitoringService {
             
             if (corrections.TotalDuration !== undefined) {
                 updateFields.push('TotalDuration = @totalDuration');
-                updateParams.totalDuration = parseInt(corrections.TotalDuration);
+                updateParams.totalDuration = Number.parseInt(corrections.TotalDuration);
                 shouldRecalculateProductive = true;
             }
             
             if (corrections.PauseDuration !== undefined) {
                 updateFields.push('PauseDuration = @pauseDuration');
-                updateParams.pauseDuration = parseInt(corrections.PauseDuration);
+                updateParams.pauseDuration = Number.parseInt(corrections.PauseDuration);
                 shouldRecalculateProductive = true;
             }
             
             if (corrections.ProductiveDuration !== undefined && !shouldRecalculateProductive) {
                 // Si ProductiveDuration est modifié directement (sans modifier TotalDuration/PauseDuration)
                 updateFields.push('ProductiveDuration = @productiveDuration');
-                updateParams.productiveDuration = parseInt(corrections.ProductiveDuration);
+                updateParams.productiveDuration = Number.parseInt(corrections.ProductiveDuration);
             } else if (shouldRecalculateProductive) {
                 // Recalculer ProductiveDuration = TotalDuration - PauseDuration
                 // Utiliser les nouvelles valeurs si fournies, sinon récupérer depuis la base
                 const newTotalDuration = corrections.TotalDuration !== undefined 
-                    ? parseInt(corrections.TotalDuration) 
+                    ? Number.parseInt(corrections.TotalDuration) 
                     : null;
                 const newPauseDuration = corrections.PauseDuration !== undefined 
-                    ? parseInt(corrections.PauseDuration) 
+                    ? Number.parseInt(corrections.PauseDuration) 
                     : null;
                 
                 if (newTotalDuration !== null && newPauseDuration !== null) {
@@ -624,10 +627,20 @@ class MonitoringService {
      */
     static async validateRecord(tempsId) {
         try {
+            const OperationValidationService = require('./OperationValidationService');
+            const validation = await OperationValidationService.validateForSilogValidation(tempsId);
+            if (!validation.valid) {
+                return {
+                    success: false,
+                    error: validation.errors.join('; ')
+                };
+            }
+
             const updateQuery = `
                 UPDATE [SEDI_APP_INDEPENDANTE].[dbo].[ABTEMPS_OPERATEURS]
                 SET StatutTraitement = 'O'
                 WHERE TempsId = @tempsId
+                  AND (StatutTraitement IS NULL OR StatutTraitement = 'O')
             `;
             
             const result = await executeNonQuery(updateQuery, { tempsId });
@@ -869,7 +882,7 @@ class MonitoringService {
                 try {
                     const st = new Date(record.StartTime);
                     const et = new Date(record.EndTime);
-                    const isMidnight = (d) => !isNaN(d.getTime()) && d.getHours() === 0 && d.getMinutes() === 0 && d.getSeconds() === 0;
+                    const isMidnight = (d) => !Number.isNaN(d.getTime()) && d.getHours() === 0 && d.getMinutes() === 0 && d.getSeconds() === 0;
                     if (isMidnight(st) && isMidnight(et)) {
                         console.log(`🛠️ Repair heures (00:00) pour TempsId=${tempsId}...`);
                         await this.repairRecordTimes(tempsId);
@@ -901,41 +914,33 @@ class MonitoringService {
                 // NOTE: On accepte aussi les enregistrements déjà validés ('O') pour permettre une ré-exécution
                 // (idempotence côté SILOG via ETEMPS.VarNumUtil2 / tempsId).
                 
-                // Validation optionnelle (vérifier cohérence des durées, etc.)
-                const validation = await OperationValidationService.validateTransferData(tempsId);
-                
+                // Validation avant passage en 'O' (cohérence LCTC + champs obligatoires)
+                const validation = await OperationValidationService.validateForSilogValidation(tempsId);
+
                 if (!validation.valid) {
-                    // Auto-correction si activée
                     if (autoFix) {
                         console.log(`🔧 Tentative d'auto-correction pour TempsId=${tempsId}...`);
                         const fixed = await OperationValidationService.autoFixTransferData(tempsId);
-                        
+
                         if (fixed.fixed) {
                             console.log(`✅ Auto-corrections appliquées pour TempsId=${tempsId}:`, fixed.fixes);
                             fixedIds.push(tempsId);
-                            
-                            // Re-valider après correction
-                            const revalidation = await OperationValidationService.validateTransferData(tempsId);
+                            const revalidation = await OperationValidationService.validateForSilogValidation(tempsId);
                             if (revalidation.valid) {
                                 validIds.push(tempsId);
                             } else {
-                                // Même si la validation échoue après correction, on peut quand même valider si les champs obligatoires sont présents
-                                console.warn(`⚠️ Validation échouée après correction pour TempsId=${tempsId}, mais champs obligatoires présents - inclusion quand même`);
-                                validIds.push(tempsId);
+                                invalidIds.push({ tempsId, errors: revalidation.errors });
                             }
                         } else {
-                            // Même si l'auto-correction échoue, on peut valider si les champs obligatoires sont présents
-                            console.warn(`⚠️ Auto-correction impossible pour TempsId=${tempsId}, mais champs obligatoires présents - inclusion quand même`);
-                            validIds.push(tempsId);
+                            invalidIds.push({ tempsId, errors: validation.errors });
                         }
                     } else {
-                        // Même sans auto-correction, on peut valider si les champs obligatoires sont présents
-                        console.warn(`⚠️ Validation échouée pour TempsId=${tempsId}, mais champs obligatoires présents - inclusion quand même`);
-                        validIds.push(tempsId);
+                        invalidIds.push({ tempsId, errors: validation.errors });
                     }
-                } else {
-                    validIds.push(tempsId);
+                    continue;
                 }
+
+                validIds.push(tempsId);
             }
             
             if (validIds.length === 0) {
@@ -1008,6 +1013,264 @@ class MonitoringService {
             return { success: true, count: r.rowsAffected };
         } catch (error) {
             console.error('❌ Erreur markBatchAsTransmitted:', error);
+            return { success: false, error: error.message };
+        }
+    }
+
+    /**
+     * Validation immédiate à la fin d'opération (NULL → 'O') pour alimenter V_REMONTE_TEMPS
+     * avant le prochain passage SEDI_ETDIFF (exécution en continu sur SVC_SILOG).
+     */
+    static isAutoValidateOnFinEnabled() {
+        return String(process.env.AUTO_VALIDATE_ON_FIN ?? 'false').toLowerCase() === 'true';
+    }
+
+    /**
+     * Passe un TempsId terminé en 'O' s'il est encore NULL (idempotent).
+     * @param {number} tempsId
+     * @returns {Promise<{ validated: boolean, tempsId?: number, reason?: string }>}
+     */
+    static async validateTempsIdForSilog(tempsId) {
+        if (!tempsId) {
+            return { validated: false, reason: 'missing_temps_id' };
+        }
+        if (!this.isAutoValidateOnFinEnabled()) {
+            return { validated: false, reason: 'disabled', tempsId };
+        }
+
+        const { executeNonQuery, executeQuery } = require('../config/database');
+        const rows = await executeQuery(
+            `
+            SELECT TempsId, StatutTraitement, EndTime, ProductiveDuration
+            FROM [SEDI_APP_INDEPENDANTE].[dbo].[ABTEMPS_OPERATEURS]
+            WHERE TempsId = @tempsId
+            `,
+            { tempsId }
+        );
+        if (!rows?.length) {
+            return { validated: false, reason: 'not_found', tempsId };
+        }
+
+        const row = rows[0];
+        const status = row.StatutTraitement == null ? null : String(row.StatutTraitement).trim().toUpperCase();
+        if (status === 'T') {
+            return { validated: false, reason: 'already_transmitted', tempsId };
+        }
+        if (status === 'O') {
+            return { validated: false, reason: 'already_validated', tempsId };
+        }
+        if (!row.EndTime || Number(row.ProductiveDuration) <= 0) {
+            return { validated: false, reason: 'not_eligible', tempsId };
+        }
+
+        const OperationValidationService = require('./OperationValidationService');
+        const validation = await OperationValidationService.validateForSilogValidation(tempsId);
+        if (!validation.valid) {
+            return {
+                validated: false,
+                reason: 'validation_failed',
+                tempsId,
+                errors: validation.errors
+            };
+        }
+
+        const result = await executeNonQuery(
+            `
+            UPDATE [SEDI_APP_INDEPENDANTE].[dbo].[ABTEMPS_OPERATEURS]
+            SET StatutTraitement = 'O'
+            WHERE TempsId = @tempsId
+              AND StatutTraitement IS NULL
+            `,
+            { tempsId }
+        );
+        const validated = (result?.rowsAffected || 0) > 0;
+        if (validated) {
+            console.log(`✅ TempsId ${tempsId} validé (O) — visible V_REMONTE_TEMPS / SEDI_ETDIFF`);
+        }
+        return { validated, tempsId };
+    }
+
+    /**
+     * Valide des TempsIds (ou lot « all ») avec contrôle LCTC avant StatutTraitement = 'O'.
+     */
+    static async validateEligibleTempsIds({ tempsIds, all = false, beforeDate } = {}) {
+        const OperationValidationService = require('./OperationValidationService');
+        const { executeNonQuery, executeQuery } = require('../config/database');
+        const lctcClause = OperationValidationService.getLctcExistsClause('t');
+
+        if (all) {
+            let dateCond = 'CAST(t.DateCreation AS DATE) < CAST(GETDATE() AS DATE)';
+            const params = {};
+            if (beforeDate) {
+                dateCond = 'CAST(t.DateCreation AS DATE) <= @beforeDate';
+                params.beforeDate = beforeDate;
+            }
+
+            const incoherentRows = await executeQuery(
+                `
+                SELECT COUNT(*) AS cnt
+                FROM [SEDI_APP_INDEPENDANTE].[dbo].[ABTEMPS_OPERATEURS] t
+                WHERE t.StatutTraitement IS NULL
+                  AND t.ProductiveDuration > 0
+                  AND t.EndTime IS NOT NULL
+                  AND ${dateCond}
+                  AND NOT (${lctcClause})
+                `,
+                params
+            );
+
+            const result = await executeNonQuery(
+                `
+                UPDATE t
+                SET StatutTraitement = 'O'
+                FROM [SEDI_APP_INDEPENDANTE].[dbo].[ABTEMPS_OPERATEURS] t
+                WHERE t.StatutTraitement IS NULL
+                  AND t.ProductiveDuration > 0
+                  AND t.EndTime IS NOT NULL
+                  AND t.Phase IS NOT NULL
+                  AND t.CodeRubrique IS NOT NULL
+                  AND ${dateCond}
+                  AND ${lctcClause}
+                `,
+                params
+            );
+
+            return {
+                success: true,
+                validated: result?.rowsAffected || 0,
+                incoherentSkipped: incoherentRows?.[0]?.cnt || 0,
+                message: `${result?.rowsAffected || 0} enregistrement(s) validé(s) (cohérents LCTC).`
+            };
+        }
+
+        const ids = (tempsIds || []).map(Number).filter((n) => !Number.isNaN(n));
+        if (ids.length === 0) {
+            return { success: false, error: 'Aucun TempsId valide', validated: 0 };
+        }
+
+        const validIds = [];
+        const invalidIds = [];
+        for (const tempsId of ids) {
+            const validation = await OperationValidationService.validateForSilogValidation(tempsId);
+            if (validation.valid) {
+                validIds.push(tempsId);
+            } else {
+                invalidIds.push({ tempsId, errors: validation.errors });
+            }
+        }
+
+        if (validIds.length === 0) {
+            return {
+                success: false,
+                validated: 0,
+                invalidIds,
+                error: 'Aucun enregistrement éligible (cohérence LCTC ou champs obligatoires)'
+            };
+        }
+
+        const placeholders = validIds.map((_, i) => `@id${i}`).join(', ');
+        const params = {};
+        validIds.forEach((id, i) => {
+            params[`id${i}`] = id;
+        });
+
+        const result = await executeNonQuery(
+            `
+            UPDATE [SEDI_APP_INDEPENDANTE].[dbo].[ABTEMPS_OPERATEURS]
+            SET StatutTraitement = 'O'
+            WHERE TempsId IN (${placeholders})
+              AND StatutTraitement IS NULL
+              AND ProductiveDuration > 0
+              AND EndTime IS NOT NULL
+            `,
+            params
+        );
+
+        return {
+            success: true,
+            validated: result?.rowsAffected || 0,
+            validatedIds: validIds,
+            invalidIds: invalidIds.length > 0 ? invalidIds : undefined,
+            message: `${result?.rowsAffected || 0} enregistrement(s) validé(s).`
+        };
+    }
+
+    /**
+     * Valide les temps terminés (NULL → 'O') pour exposition dans V_REMONTE_TEMPS.
+     * @param {Object} options
+     * @param {boolean} options.includeToday - inclure le jour courant (requis avant job SILOG ~17h15)
+     */
+    static async autoValidateEligibleTemps({ includeToday = false } = {}) {
+        const { executeNonQuery } = require('../config/database');
+        const OperationValidationService = require('./OperationValidationService');
+        const dateCond = includeToday
+            ? '1=1'
+            : 'CAST(DateCreation AS DATE) < CAST(GETDATE() AS DATE)';
+        const lctcClause = OperationValidationService.getLctcExistsClause('ABTEMPS_OPERATEURS');
+        const result = await executeNonQuery(
+            `
+            UPDATE [SEDI_APP_INDEPENDANTE].[dbo].[ABTEMPS_OPERATEURS]
+            SET StatutTraitement = 'O'
+            WHERE StatutTraitement IS NULL
+              AND ProductiveDuration > 0
+              AND EndTime IS NOT NULL
+              AND Phase IS NOT NULL
+              AND CodeRubrique IS NOT NULL
+              AND ${dateCond}
+              AND ${lctcClause}
+            `
+        );
+        return { count: result?.rowsAffected || 0 };
+    }
+
+    /**
+     * Clôture « dashboard » : pour les journées **strictement avant aujourd'hui**, valider les temps terminés
+     * encore en NULL / A. En mode SILOG planifié, ne pas marquer 'T' ici (SEDI_ETDIFF ~17h15 le fait).
+     */
+    static async runMidnightDashboardTransmit() {
+        const { executeNonQuery } = require('../config/database');
+        const remoteMode = String(process.env.SILOG_REMOTE_MODE || '').trim().toLowerCase();
+        const isScheduledMode = ['scheduled', 'disable', 'disabled', 'none'].includes(remoteMode);
+        const OperationValidationService = require('./OperationValidationService');
+        const lctcClause = OperationValidationService.getLctcExistsClause('t');
+        try {
+            const validatePending = `
+                UPDATE t
+                SET StatutTraitement = 'O'
+                FROM [SEDI_APP_INDEPENDANTE].[dbo].[ABTEMPS_OPERATEURS] t
+                WHERE CAST(t.DateCreation AS DATE) < CAST(GETDATE() AS DATE)
+                  AND t.EndTime IS NOT NULL
+                  AND t.ProductiveDuration > 0
+                  AND t.Phase IS NOT NULL
+                  AND t.CodeRubrique IS NOT NULL
+                  AND ${lctcClause}
+                  AND (
+                      t.StatutTraitement IS NULL
+                      OR t.StatutTraitement = 'A'
+                      OR (t.StatutTraitement IS NOT NULL AND t.StatutTraitement <> 'O' AND t.StatutTraitement <> 'T')
+                  )
+            `;
+            const r1 = await executeNonQuery(validatePending);
+
+            let n2 = 0;
+            if (!isScheduledMode) {
+                const markT = `
+                    UPDATE [SEDI_APP_INDEPENDANTE].[dbo].[ABTEMPS_OPERATEURS]
+                    SET StatutTraitement = 'T'
+                    WHERE CAST(DateCreation AS DATE) < CAST(GETDATE() AS DATE)
+                      AND EndTime IS NOT NULL
+                      AND ProductiveDuration > 0
+                      AND StatutTraitement = 'O'
+                `;
+                const r2 = await executeNonQuery(markT);
+                n2 = r2?.rowsAffected || 0;
+            }
+
+            const n1 = r1?.rowsAffected || 0;
+            console.log(`🌙 Midnight transmit: validés (→O)=${n1}, passés en T=${n2}${isScheduledMode ? ' (T laissé à SILOG)' : ''}`);
+            return { success: true, validatedRows: n1, transmittedRows: n2, silogScheduledMode: isScheduledMode };
+        } catch (error) {
+            console.error('❌ Erreur runMidnightDashboardTransmit:', error);
             return { success: false, error: error.message };
         }
     }

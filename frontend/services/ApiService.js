@@ -1,4 +1,7 @@
 // Service pour gérer les appels API - v20251014-fixed-v3
+import { getLocalDevApiBase, resolveLocalDevBackendPort } from '../utils/DevBackendUrl.js';
+import { buildOfflineCacheKey, readOfflineCache, writeOfflineCache } from '../utils/OfflineApiCache.js';
+
 class ApiService {
     constructor() {
         // Détection automatique de l'environnement
@@ -19,10 +22,10 @@ class ApiService {
         const isLocalDev = forceLocalBackend || (isLocalHost && (isClassicDevPort || currentPort === '8080'));
         
         if (isLocalDev) {
-            // Environnement de développement local - connexion directe au backend
-            // Essayer d'abord le port de dev (3033), sinon le port standard (3001)
-            this.baseUrl = `http://localhost:3033/api`;
-            console.log('🔧 Mode développement local détecté - connexion directe au backend sur port 3033');
+            // Environnement de développement local - connexion directe au backend (défaut 3001, cf. server.js)
+            const devPort = resolveLocalDevBackendPort();
+            this.baseUrl = getLocalDevApiBase();
+            console.log(`🔧 Mode développement local détecté - connexion directe au backend sur port ${devPort}`);
             if (forceLocalBackend && !isClassicDevPort) {
                 console.log('⚠️ Force local backend activé via paramètre/stockage');
             }
@@ -53,8 +56,35 @@ class ApiService {
             || window.localStorage?.getItem('sedi_admin_token')
             || '';
         
+        this._backendAvailable = true;
+
         console.log(`🔗 ApiService configuré pour: ${this.baseUrl}`);
         console.log(`🔍 Host détecté: ${currentHost}:${currentPort}`);
+    }
+
+    isBackendAvailable() {
+        return this._backendAvailable !== false;
+    }
+
+    _setBackendAvailable(available) {
+        const next = available !== false;
+        if (this._backendAvailable === next) return;
+        this._backendAvailable = next;
+        try {
+            const name = next ? 'sedi:backend-available' : 'sedi:backend-unavailable';
+            window.dispatchEvent(new CustomEvent(name));
+        } catch (_) {
+            // ignore
+        }
+    }
+
+    _tryOfflineFallback(endpoint, options) {
+        const method = String(options?.method || 'GET').toUpperCase();
+        if (method !== 'GET' && method !== 'HEAD') return null;
+        const key = buildOfflineCacheKey(endpoint, options);
+        const cached = readOfflineCache(key);
+        if (cached == null) return null;
+        return { ...cached, _fromOfflineCache: true, _offlineMode: true };
     }
 
     getOrCreateDeviceId() {
@@ -100,6 +130,30 @@ class ApiService {
             return;
         }
         this.currentOperatorContext = { code, sessionId: sid };
+    }
+
+    /**
+     * Aligne le contexte mémoire sur localStorage (clé currentOperator).
+     * Indispensable avec plusieurs onglets : localStorage est partagé, currentOperatorContext ne l'est pas.
+     */
+    syncOperatorContextWithLocalStorage() {
+        if (typeof window === 'undefined') return;
+        try {
+            const raw = window.localStorage?.getItem('currentOperator');
+            if (!raw) return;
+            const saved = JSON.parse(raw);
+            const code = String(saved?.code || saved?.id || '').trim();
+            const sid = String(saved?.sessionId || saved?.SessionId || '').trim();
+            if (!code || !sid) return;
+            const mem = this.currentOperatorContext;
+            const memSid = mem?.code === code ? String(mem?.sessionId || '').trim() : '';
+            if (!mem || mem.code !== code || memSid !== sid) {
+                this.setCurrentOperatorContext(code, sid);
+                this.setOperatorSessionActive(code, true);
+            }
+        } catch (_) {
+            // ignore parse/storage errors
+        }
     }
 
     setAdminToken(token) {
@@ -194,7 +248,7 @@ class ApiService {
     async executeRequest(endpoint, options = {}) {
         // One-shot retry guard (prevents infinite loops)
         const hasRetried = options && options.__retried === true;
-        const { __retried, ...fetchOptions } = options || {};
+        const { __retried, headers: optionHeaders, cache: cacheOverride, ...restFetchOptions } = options || {};
         const url = `${this.baseUrl}${endpoint}`;
 
         // Admin auth token (si présent) - envoyé uniquement sur /auth et /admin
@@ -214,22 +268,8 @@ class ApiService {
             ep.startsWith('/fsop/');
 
         if (needsOperatorContext) {
-            let ctx = this.currentOperatorContext;
-            // Fallback de robustesse après refresh/cache: réhydrater le contexte depuis localStorage.
-            if ((!ctx?.code || !ctx?.sessionId) && typeof window !== 'undefined') {
-                try {
-                    const savedRaw = window.localStorage?.getItem('currentOperator');
-                    const saved = savedRaw ? JSON.parse(savedRaw) : null;
-                    const code = String(saved?.code || saved?.id || '').trim();
-                    const sid = String(saved?.sessionId || '').trim();
-                    if (code && sid) {
-                        this.setCurrentOperatorContext(code, sid);
-                        ctx = this.currentOperatorContext;
-                    }
-                } catch (_) {
-                    // ignore parsing/localStorage errors
-                }
-            }
+            this.syncOperatorContextWithLocalStorage();
+            const ctx = this.currentOperatorContext;
             if (ctx?.code && ctx?.sessionId) {
                 operatorHeaders['x-operator-code'] = ctx.code;
                 operatorHeaders['x-operator-session-id'] = ctx.sessionId;
@@ -237,21 +277,31 @@ class ApiService {
         }
 
         const config = {
-            // Avoid browser/proxy caching for API calls (prevents stale "steps started"/state glitches).
-            // Allow caller override (rare).
-            cache: fetchOptions.cache || 'no-store',
+            ...restFetchOptions,
             headers: {
                 ...this.defaultHeaders,
                 ...authHeaders,
                 'x-device-id': this.deviceId,
                 ...operatorHeaders,
-                ...fetchOptions.headers
+                ...(optionHeaders || {})
             },
-            ...fetchOptions
+            cache: cacheOverride ?? 'no-store'
         };
+
+        const method = String(options?.method || 'GET').toUpperCase();
+        const isSafeRead = method === 'GET' || method === 'HEAD';
 
         try {
             const response = await fetch(url, config);
+
+            if ([502, 503, 504].includes(response.status)) {
+                this._setBackendAvailable(false);
+                const offline = isSafeRead ? this._tryOfflineFallback(endpoint, options) : null;
+                if (offline) return offline;
+                const err = new Error('Service API temporairement indisponible (backend arrêté ou en redémarrage).');
+                err.errorCode = 'BACKEND_UNAVAILABLE';
+                throw err;
+            }
             
             if (!response.ok) {
                 // Gestion spéciale pour l'erreur 429
@@ -340,7 +390,7 @@ class ApiService {
                                 // Recreate a fresh server session (closes previous ones) and refresh context.
                                 // IMPORTANT: use direct fetch (out of queue) to avoid requestQueue deadlock.
                                 const relog = await this.directOperatorLogin(code);
-                                const newSessionId = relog?.operator?.sessionId || null;
+                                const newSessionId = relog?.operator?.sessionId || relog?.operator?.SessionId || null;
                                 this.setOperatorSessionActive(code, true);
                                 if (newSessionId) this.setCurrentOperatorContext(code, newSessionId);
                                 // Update localStorage with refreshed sessionId
@@ -412,12 +462,27 @@ class ApiService {
             }
 
             const data = await response.json();
+            this._setBackendAvailable(true);
+            if (isSafeRead) {
+                writeOfflineCache(buildOfflineCacheKey(endpoint, options), data);
+            }
             // Invalider les caches mémoire qui deviennent faux après mutation
-            if ((options.method || 'GET').toUpperCase() !== 'GET') {
+            if (method !== 'GET' && method !== 'HEAD') {
                 this.invalidateAfterMutation(endpoint);
             }
             return data;
         } catch (error) {
+            const isNetworkError =
+                error?.name === 'TypeError' ||
+                String(error?.message || '').includes('Failed to fetch') ||
+                String(error?.message || '').includes('NetworkError');
+
+            if (isNetworkError) {
+                this._setBackendAvailable(false);
+                const offline = isSafeRead ? this._tryOfflineFallback(endpoint, options) : null;
+                if (offline) return offline;
+            }
+
             // Ne pas logger les erreurs de réseau pour les health checks (évite le spam)
             if (endpoint === '/health' && (error.name === 'TypeError' || error.message.includes('Failed to fetch'))) {
                 // Erreur silencieuse pour le health check - c'est normal si le serveur n'est pas accessible
@@ -520,7 +585,7 @@ class ApiService {
     async operatorLogin(code) {
         const result = await this.post('/operators/login', { code });
         const operatorCode = result?.operator?.code || result?.operator?.id || code;
-        const sessionId = result?.operator?.sessionId || null;
+        const sessionId = result?.operator?.sessionId || result?.operator?.SessionId || null;
         this.setOperatorSessionActive(operatorCode, true);
         this.setCurrentOperatorContext(operatorCode, sessionId);
         return result;
@@ -597,17 +662,13 @@ class ApiService {
             if (response.status === 401 || response.status === 403) return false;
             // Toute réponse 2xx signifie que le contexte est accepté par le backend.
             if (response.ok) return true;
-            // Pour les autres codes (5xx, etc.), ne pas masquer l'erreur infra.
-            const data = await response.json().catch(() => ({}));
-            const msg = data?.error || `HTTP ${response.status}: ${response.statusText}`;
-            throw new Error(msg);
+            // Pour les autres codes (5xx, etc.), ne pas bloquer l'opérateur:
+            // on considère la validation "inconnue" et on laisse la route métier trancher.
+            return null;
         } catch (error) {
-            // Erreur réseau réelle -> laisser remonter.
-            if (error?.name === 'TypeError' || String(error?.message || '').includes('Failed to fetch')) {
-                throw error;
-            }
-            // Erreur applicative non-auth (déjà construite ci-dessus) -> remonter.
-            throw error;
+            // Erreur réseau/infra sur endpoint de check -> ne pas bloquer l'action opérateur.
+            console.warn('⚠️ Context check indisponible, fallback sur action métier:', error?.message || error);
+            return null;
         }
     }
 
@@ -618,6 +679,8 @@ class ApiService {
             err.errorCode = 'OPERATOR_REQUIRED';
             throw err;
         }
+
+        this.syncOperatorContextWithLocalStorage();
 
         // Candidate #1: context in memory
         let candidateSessionId = '';
@@ -645,7 +708,8 @@ class ApiService {
             this.setCurrentOperatorContext(code, candidateSessionId);
             this.setOperatorSessionActive(code, true);
             const isValid = await this.directCheckOperatorContext(code, candidateSessionId);
-            if (isValid) return;
+            if (isValid === true) return;
+            if (isValid === null) return;
             // contexte rejeté, on retente via relogin silencieux
         }
 
@@ -811,8 +875,13 @@ class ApiService {
         return this.post('/admin/monitoring/consolidate-batch', { operations });
     }
 
-    async validateAndTransmitMonitoringBatch(tempsIds, { triggerEdiJob = true, codeTache = null } = {}) {
-        return this.post('/admin/monitoring/validate-and-transmit-batch', { tempsIds, triggerEdiJob, codeTache });
+    async validateAndTransmitMonitoringBatch(tempsIds, { triggerEdiJob = true, codeTache = null, adminMarkTransmitted = false } = {}) {
+        return this.post('/admin/monitoring/validate-and-transmit-batch', {
+            tempsIds,
+            triggerEdiJob,
+            codeTache,
+            adminMarkTransmitted
+        });
     }
 
     // ===== FSOP =====
@@ -868,9 +937,10 @@ class ApiService {
             
             const response = await fetch(`${this.baseUrl}/admin/validate-lancement/${encodeURIComponent(code)}`, {
                 method: 'GET',
+                cache: 'no-store',
                 headers: {
-                    'Content-Type': 'application/json',
-                    ...this.defaultHeaders
+                    ...this.defaultHeaders,
+                    ...(this.adminToken ? { Authorization: `Bearer ${this.adminToken}` } : {})
                 }
             });
             

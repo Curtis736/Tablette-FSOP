@@ -3,6 +3,7 @@
  * Utilise la configuration de connexion existante
  */
 
+const { splitSqlBatches, isMeaningfulBatch } = require('../utils/sqlBatchUtils');
 const fs = require('fs');
 const path = require('path');
 const sql = require('mssql');
@@ -13,12 +14,15 @@ try {
     productionConfig = require('../config-production');
     console.log('✅ Configuration de production chargée');
 } catch (error) {
+    if (error.code !== 'MODULE_NOT_FOUND') {
+        throw error;
+    }
     console.log('📝 Utilisation des variables d\'environnement');
 }
 
 // Configuration de la base de données
 const config = {
-    server: productionConfig?.DB_SERVER || process.env.DB_SERVER || '192.168.1.14',
+    server: productionConfig?.DB_SERVER || process.env.DB_SERVER,
     database: productionConfig?.DB_DATABASE || process.env.DB_DATABASE || 'SEDI_APP_INDEPENDANTE',
     user: productionConfig?.DB_USER || process.env.DB_USER || 'QUALITE',
     password: productionConfig?.DB_PASSWORD || process.env.DB_PASSWORD || 'QUALITE',
@@ -46,21 +50,6 @@ const scripts = [
     { name: '11. Migration: Nettoyage colonnes mapping Factorial', file: 'migration_cleanup_factorial_mapping_columns.sql' },
     { name: '12. Migration: Tables Factorial IN/OUT', file: 'migration_create_factorial_clock_tables.sql' }
 ];
-
-function splitSqlBatches(sqlContent) {
-    // SQL Server: GO est un séparateur de batch quand il est SEUL sur une ligne (espaces autorisés)
-    return sqlContent
-        .replace(/^\uFEFF/, '') // BOM
-        .split(/^\s*GO\s*$/gim)
-        .map(b => b.trim());
-}
-
-function isMeaningfulBatch(batch) {
-    // Considérer un batch "vide" s'il ne contient que des commentaires/espaces
-    const withoutLineComments = batch.replace(/--.*$/gm, '');
-    const withoutBlockComments = withoutLineComments.replace(/\/\*[\s\S]*?\*\//g, '');
-    return withoutBlockComments.trim().length > 0;
-}
 
 async function executeScript(pool, scriptPath, scriptName) {
     console.log(`\n${'='.repeat(50)}`);

@@ -12,6 +12,162 @@ const FactorialOperatorMappingService = require('../services/FactorialOperatorMa
 // IMPORTANT: toutes les routes /api/admin doivent être protégées
 router.use(authenticateAdmin);
 
+const TIME_HM_RE = /^(\d{1,2}):(\d{2})$/;
+const TIME_HMS_RE = /^(\d{1,2}):(\d{2}):(\d{2})$/;
+
+function resolveCycleStatus(lastEvent, lastDebutEvent, finEvent) {
+    let currentStatus = 'EN_COURS';
+    let statusLabel = 'En cours';
+    if (lastEvent?.Ident === 'FIN') {
+        currentStatus = 'TERMINE';
+        statusLabel = 'Terminé';
+    } else if (lastEvent?.Ident === 'PAUSE') {
+        currentStatus = 'EN_PAUSE';
+        statusLabel = 'En pause';
+    } else if (lastEvent?.Ident === 'REPRISE') {
+        currentStatus = 'EN_COURS';
+        statusLabel = 'En cours';
+    } else if (lastDebutEvent?.Statut?.trim()) {
+        const dbStatus = lastDebutEvent.Statut.toUpperCase().trim();
+        const statusMap = {
+            'EN_COURS': 'En cours',
+            'EN_PAUSE': 'En pause',
+            'PAUSE': 'En pause',
+            'TERMINE': 'Terminé',
+            'TERMINÉ': 'Terminé',
+            'PAUSE_TERMINEE': 'Pause terminée',
+            'PAUSE_TERMINÉE': 'Pause terminée',
+            'FORCE_STOP': 'Arrêt forcé'
+        };
+        if (statusMap[dbStatus] || dbStatus === 'TERMINE' || dbStatus === 'TERMINÉ') {
+            currentStatus = dbStatus;
+            statusLabel = statusMap[dbStatus] || 'Terminé';
+        }
+    }
+    const statusUpper = String(currentStatus || '').toUpperCase();
+    if ((statusUpper === 'TERMINE' || statusUpper === 'TERMINÉ') && !finEvent) {
+        currentStatus = 'EN_COURS';
+        statusLabel = 'En cours';
+    }
+    return { currentStatus, statusLabel };
+}
+
+function resolveLastUpdate(finEvent, pauseEvent, startEvent) {
+    if (finEvent) return finEvent.CreatedAt || finEvent.DateCreation;
+    if (pauseEvent) return pauseEvent.CreatedAt || pauseEvent.DateCreation;
+    return startEvent.CreatedAt || startEvent.DateCreation;
+}
+
+function formatStartClock(startEvent) {
+    let heureDebut = Array.isArray(startEvent.HeureDebut) ? startEvent.HeureDebut[0] : startEvent.HeureDebut;
+    if (!heureDebut) {
+        return formatDateTime(startEvent.CreatedAt || startEvent.DateCreation);
+    }
+    if (typeof heureDebut === 'string' && /^\d{2}:\d{2}(:\d{2})?$/.test(heureDebut)) {
+        return heureDebut.substring(0, 5);
+    }
+    if (heureDebut instanceof Date) {
+        return heureDebut.toLocaleTimeString('fr-FR', {
+            timeZone: 'Europe/Paris',
+            hour: '2-digit',
+            minute: '2-digit',
+            hour12: false
+        });
+    }
+    return formatDateTime(heureDebut);
+}
+
+function collectOperationTimeUpdates(body) {
+    const updateFields = [];
+    const params = {};
+    let formattedEndTimeForFinEvent = null;
+    let error = null;
+    if (body.startTime !== undefined) {
+        const formattedStartTime = formatTimeForSQL(body.startTime);
+        if (!formattedStartTime) {
+            error = 'Format d\'heure de début invalide';
+            return { updateFields, params, formattedEndTimeForFinEvent, error };
+        }
+        updateFields.push('HeureDebut = @startTime');
+        params.startTime = formattedStartTime;
+    }
+    if (body.endTime !== undefined) {
+        const formattedEndTime = formatTimeForSQL(body.endTime);
+        if (!formattedEndTime) {
+            error = 'Format d\'heure de fin invalide';
+            return { updateFields, params, formattedEndTimeForFinEvent, error };
+        }
+        params.endTime = formattedEndTime;
+        formattedEndTimeForFinEvent = formattedEndTime;
+        updateFields.push('HeureFin = @endTime');
+    }
+    if (body.status !== undefined) {
+        const validStatuses = ['EN_COURS', 'EN_PAUSE', 'TERMINE', 'PAUSE_TERMINEE', 'FORCE_STOP'];
+        if (!validStatuses.includes(body.status)) {
+            error = `Statut invalide. Statuts autorisés: ${validStatuses.join(', ')}`;
+            return { updateFields, params, formattedEndTimeForFinEvent, error };
+        }
+        updateFields.push('Statut = @status');
+        params.status = body.status;
+    }
+    return { updateFields, params, formattedEndTimeForFinEvent, error };
+}
+
+async function getStepsForLaunch(lt) {
+    const rows = await executeQuery(`
+        SELECT DISTINCT
+            LTRIM(RTRIM(C.CodeOperation)) AS CodeOperation,
+            LTRIM(RTRIM(C.Phase)) AS Phase,
+            LTRIM(RTRIM(C.CodeRubrique)) AS CodeRubrique
+        FROM [SEDI_ERP].[dbo].[LCTC] C
+        INNER JOIN [SEDI_ERP].[dbo].[LCTE] E
+            ON E.CodeLancement = C.CodeLancement
+            AND E.LancementSolde = 'N'
+        WHERE C.CodeLancement = @lancementCode
+          AND C.TypeRubrique = 'O'
+          AND C.CodeOperation IS NOT NULL
+          AND LTRIM(RTRIM(C.CodeOperation)) <> ''
+          AND UPPER(LTRIM(RTRIM(C.CodeOperation))) COLLATE Latin1_General_CI_AI NOT IN ('SECHAGE', 'ETUVAGE')
+        ORDER BY LTRIM(RTRIM(C.Phase)), LTRIM(RTRIM(C.CodeOperation)), LTRIM(RTRIM(C.CodeRubrique))
+    `, { lancementCode: lt });
+    const steps = (rows || []).map(s => {
+        const phase = String(s?.Phase || '').trim();
+        const rubrique = String(s?.CodeRubrique || '').trim();
+        const fabrication = String(s?.CodeOperation || '').trim();
+        const rubriquePart = rubrique ? ` (${rubrique})` : '';
+        return {
+            ...s,
+            StepId: `${phase}|${rubrique}`,
+            Label: `${phase}${rubriquePart} — ${fabrication || 'Fabrication'}`
+        };
+    });
+    const uniqueOps = [...new Set(steps.map(s => String(s?.CodeOperation || '').trim()).filter(Boolean))];
+    const uniqueSteps = [...new Set(steps.map(s => String(s?.StepId || '').trim()).filter(Boolean))];
+    return { steps, uniqueOps, uniqueSteps };
+}
+
+async function resolveStep(lt, op) {
+    const { steps, uniqueOps, uniqueSteps } = await getStepsForLaunch(lt);
+    const raw = String(op || '').trim();
+    if (!raw) return { steps, uniqueOps, uniqueSteps, ctx: steps[0] || null };
+    if (raw.includes('|')) {
+        const [ph, rub] = raw.split('|').map(x => String(x || '').trim());
+        const matchByKey = steps.find(s =>
+            String(s?.Phase || '').trim() === ph &&
+            String(s?.CodeRubrique || '').trim() === rub
+        );
+        return { steps, uniqueOps, uniqueSteps, ctx: matchByKey || null };
+    }
+    const ctx = steps.find(s => String(s?.CodeOperation || '').trim() === raw) || null;
+    return { steps, uniqueOps, uniqueSteps, ctx };
+}
+
+// Bundle GET /api/admin : éviter la troncature historique (ex. 25 lignes) alors que le front fusionne avec le monitoring.
+const ADMIN_DASHBOARD_OPERATIONS_CAP = Math.min(
+    Math.max(Number.parseInt(process.env.ADMIN_DASHBOARD_OPERATIONS_LIMIT || '10000', 10) || 10000, 500),
+    20000
+);
+
 // ===== Mapping opérateurs Tablette <-> Factorial =====
 router.get('/factorial/mappings', async (req, res) => {
     try {
@@ -142,7 +298,7 @@ function formatTimeForSQL(timeInput) {
             const cleanTime = timeInput.trim();
             
             // Format HH:mm
-            const timeMatch = cleanTime.match(/^(\d{1,2}):(\d{2})$/);
+            const timeMatch = TIME_HM_RE.exec(cleanTime);
             if (timeMatch) {
                 const hours = timeMatch[1].padStart(2, '0');
                 const minutes = timeMatch[2];
@@ -152,7 +308,7 @@ function formatTimeForSQL(timeInput) {
             }
             
             // Format HH:mm:ss
-            const timeWithSecondsMatch = cleanTime.match(/^(\d{1,2}):(\d{2}):(\d{2})$/);
+            const timeWithSecondsMatch = TIME_HMS_RE.exec(cleanTime);
             if (timeWithSecondsMatch) {
                 const hours = timeWithSecondsMatch[1].padStart(2, '0');
                 const minutes = timeWithSecondsMatch[2];
@@ -191,8 +347,8 @@ function timeToMinutes(timeString) {
     const parts = timeString.split(':');
     if (parts.length < 2) return 0;
     
-    const hours = parseInt(parts[0]) || 0;
-    const minutes = parseInt(parts[1]) || 0;
+    const hours = Number.parseInt(parts[0]) || 0;
+    const minutes = Number.parseInt(parts[1]) || 0;
     
     return hours * 60 + minutes;
 }
@@ -202,8 +358,8 @@ function validateSuspiciousTime(timeString, context = '') {
     if (!timeString) return { isValid: true, warning: null };
     
     const time = timeString.split(':');
-    const hour = parseInt(time[0]);
-    const minute = parseInt(time[1]);
+    const hour = Number.parseInt(time[0]);
+    const minute = Number.parseInt(time[1]);
     
     // Détecter les heures suspectes
     if (hour === 2 && minute === 0) {
@@ -277,7 +433,7 @@ function formatDateTime(dateTime) {
         
         // Sinon, essayer de créer un objet Date
         const date = new Date(dateTime);
-        if (isNaN(date.getTime())) {
+        if (Number.isNaN(date.getTime())) {
             console.warn('🔍 formatDateTime: Date invalide:', dateTime);
             return null;
         }
@@ -312,7 +468,7 @@ function calculateDuration(startDate, endDate) {
         const start = new Date(startDate);
         const end = new Date(endDate);
         
-        if (isNaN(start.getTime()) || isNaN(end.getTime())) return null;
+        if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime())) return null;
         
         const diffMs = end.getTime() - start.getTime();
         const diffMinutes = Math.floor(diffMs / (1000 * 60));
@@ -426,20 +582,13 @@ function processLancementEventsSingleLine(events) {
                 // DÉMARRÉ → FIN = TERMINÉ
                 status = 'TERMINE';
                 statusLabel = 'Terminé';
-                // Utiliser HeureFin si disponible (déjà converti en VARCHAR(5) par SQL)
-                // Sinon utiliser CreatedAt (DATETIME2) plutôt que DateCreation (DATE) pour éviter les problèmes de timezone
                 endTime = finEvent.HeureFin ? formatDateTime(finEvent.HeureFin) : formatDateTime(finEvent.CreatedAt || finEvent.DateCreation);
             } else if (pauseEvents.length > 0 && pauseEvents.length > repriseEvents.length) {
-                // DÉMARRÉ → PAUSE = EN PAUSE
                 status = 'PAUSE';
                 statusLabel = 'En pause';
-                // Pas d'heure de fin pour une pause en cours
-                endTime = null;
             } else {
-                // DÉMARRÉ seul = EN COURS
                 status = 'EN_COURS';
                 statusLabel = 'En cours';
-                endTime = null;
             }
             
             console.log(`🔍 Ligne unique pour ${key}:`, status);
@@ -456,7 +605,162 @@ function processLancementEventsSingleLine(events) {
 }
 
 // Fonction pour regrouper les événements par lancement et calculer les temps (évite les doublons)
-function processLancementEventsWithPauses(events) {
+function extractEventTime(event) {
+    if (!event) return null;
+    const heure = Array.isArray(event.HeureDebut) ? event.HeureDebut[0] : event.HeureDebut;
+    if (heure && typeof heure === 'string' && /^\d{2}:\d{2}(:\d{2})?$/.test(heure)) {
+        return heure.substring(0, 5);
+    }
+    if (heure && heure instanceof Date) {
+        return heure.toLocaleTimeString('fr-FR', {
+            timeZone: 'Europe/Paris',
+            hour: '2-digit',
+            minute: '2-digit',
+            hour12: false
+        });
+    }
+    if (heure) return formatDateTime(heure);
+    return formatDateTime(event.CreatedAt || event.DateCreation);
+}
+
+function extractEventEndTime(event) {
+    if (!event) return null;
+    const heure = Array.isArray(event.HeureFin) ? event.HeureFin[0] : event.HeureFin;
+    if (heure && typeof heure === 'string' && /^\d{2}:\d{2}(:\d{2})?$/.test(heure)) {
+        return heure.substring(0, 5);
+    }
+    if (heure && heure instanceof Date) {
+        return heure.toLocaleTimeString('fr-FR', {
+            timeZone: 'Europe/Paris',
+            hour: '2-digit',
+            minute: '2-digit',
+            hour12: false
+        });
+    }
+    if (heure) return formatDateTime(heure);
+    return formatDateTime(event.CreatedAt || event.DateCreation);
+}
+
+function pairPauseRepriseEvents(pauseEvents, repriseEvents) {
+    const pairs = [];
+    const usedRepriseIds = new Set();
+    pauseEvents.forEach((pauseEvent) => {
+        const pauseTs = new Date(pauseEvent.CreatedAt || pauseEvent.DateCreation).getTime();
+        const repriseEvent = repriseEvents.find((reprise) => {
+            if (usedRepriseIds.has(reprise.NoEnreg)) return false;
+            const repriseTs = new Date(reprise.CreatedAt || reprise.DateCreation).getTime();
+            return repriseTs >= pauseTs;
+        });
+        if (repriseEvent) usedRepriseIds.add(repriseEvent.NoEnreg);
+        pairs.push({ pauseEvent, repriseEvent: repriseEvent || null });
+    });
+    return pairs;
+}
+
+function createWorkSegmentItem(startEvent, endTime, statusCode, statusLabel, referenceEvent, segmentIndex) {
+    return {
+        // Utiliser le vrai NoEnreg de l'événement de départ (DEBUT ou REPRISE) pour que
+        // l'édition/suppression retrouve l'enregistrement en base (ABHISTORIQUE_OPERATEURS).
+        id: startEvent.NoEnreg,
+        operatorId: referenceEvent.OperatorCode,
+        operatorName: referenceEvent.operatorName || 'Non assigné',
+        lancementCode: referenceEvent.CodeLanctImprod,
+        article: referenceEvent.Article || 'N/A',
+        phase: referenceEvent.Phase,
+        codeRubrique: referenceEvent.CodeRubrique || null,
+        startTime: extractEventTime(startEvent),
+        endTime: endTime || null,
+        pauseTime: null,
+        duration: null,
+        pauseDuration: null,
+        status: statusLabel,
+        statusCode,
+        generalStatus: statusCode,
+        events: 1,
+        lastUpdate: startEvent.CreatedAt || startEvent.DateCreation,
+        dateCreation: String(referenceEvent.DateCreation || startEvent.DateCreation || '').substring(0, 10) || null,
+        type: 'lancement',
+        _isWorkSegment: true,
+        _isPauseRow: false,
+        editable: true
+    };
+}
+
+function buildWorkSegmentItems(debutEvent, cycleEvents, pauseEvents, repriseEvents, finEvent) {
+    const segments = [];
+    const pairs = pairPauseRepriseEvents(pauseEvents, repriseEvents);
+    let workStartEvent = debutEvent;
+    let segIdx = 0;
+
+    if (pauseEvents.length === 0) {
+        if (finEvent) {
+            const finEnd = extractEventEndTime(finEvent);
+            segments.push(createWorkSegmentItem(workStartEvent, finEnd, 'TERMINE', 'Terminé', debutEvent, segIdx++));
+        } else {
+            segments.push(createWorkSegmentItem(workStartEvent, null, 'EN_COURS', 'En cours', debutEvent, segIdx++));
+        }
+        return segments;
+    }
+
+    pairs.forEach(({ pauseEvent, repriseEvent }, index) => {
+        const pauseStart = extractEventTime(pauseEvent);
+        const isLastPair = index === pairs.length - 1;
+        // Créneau intermédiaire (pause déjà reprise) => "Terminé".
+        // Dernier créneau alors que l'opérateur est TOUJOURS en pause (pas de reprise ni FIN)
+        // => on reflète l'état réel courant "En pause".
+        if (isLastPair && !repriseEvent && !finEvent) {
+            segments.push(createWorkSegmentItem(workStartEvent, pauseStart, 'EN_PAUSE', 'En pause', debutEvent, segIdx++));
+        } else {
+            segments.push(createWorkSegmentItem(workStartEvent, pauseStart, 'TERMINE', 'Terminé', debutEvent, segIdx++));
+        }
+        if (repriseEvent) {
+            workStartEvent = repriseEvent;
+        }
+    });
+
+    const lastIdent = cycleEvents[cycleEvents.length - 1]?.Ident;
+    if (finEvent) {
+        const finEnd = extractEventEndTime(finEvent);
+        segments.push(createWorkSegmentItem(workStartEvent, finEnd, 'TERMINE', 'Terminé', debutEvent, segIdx++));
+    } else if (lastIdent === 'REPRISE' || (lastIdent === 'DEBUT' && pauseEvents.length === 0)) {
+        segments.push(createWorkSegmentItem(workStartEvent, null, 'EN_COURS', 'En cours', debutEvent, segIdx++));
+    }
+
+    return segments;
+}
+
+function createPauseRowItem(pauseEvent, repriseEvent, referenceEvent) {
+    const startTime = extractEventTime(pauseEvent);
+    const endTime = repriseEvent ? extractEventTime(repriseEvent) : null;
+    const statusCode = repriseEvent ? 'PAUSE_TERMINEE' : 'EN_PAUSE';
+    const statusLabel = repriseEvent ? 'Pause terminée' : 'En pause';
+
+    return {
+        id: `PAUSE-${pauseEvent.NoEnreg}`,
+        operatorId: referenceEvent.OperatorCode,
+        operatorName: referenceEvent.operatorName || 'Non assigné',
+        lancementCode: referenceEvent.CodeLanctImprod,
+        article: referenceEvent.Article || 'N/A',
+        phase: referenceEvent.Phase,
+        codeRubrique: referenceEvent.CodeRubrique || null,
+        startTime,
+        endTime,
+        pauseTime: startTime,
+        duration: null,
+        pauseDuration: null,
+        status: statusLabel,
+        statusCode,
+        generalStatus: statusCode,
+        events: 2,
+        lastUpdate: pauseEvent.CreatedAt || pauseEvent.DateCreation,
+        dateCreation: String(pauseEvent.DateCreation || '').substring(0, 10) || null,
+        type: 'pause',
+        _isPauseRow: true,
+        editable: false
+    };
+}
+
+function processLancementEventsWithPauses(events, { includePauseRows = false, includeWorkSegments = false } = {}) {
     const lancementGroups = {};
     
     // 🔒 ISOLATION STRICTE : Regrouper par CodeLanctImprod + OperatorCode + Phase + CodeRubrique
@@ -534,60 +838,18 @@ function processLancementEventsWithPauses(events) {
             const pauseEvents = cycleEvents.filter(e => e.Ident === 'PAUSE');
             const repriseEvents = cycleEvents.filter(e => e.Ident === 'REPRISE');
 
-            // Déterminer le statut final pour CE cycle
-            let currentStatus = 'EN_COURS';
-            let statusLabel = 'En cours';
-
             const debutEvents = cycleEvents
                 .filter(e => e.Ident === 'DEBUT')
                 .sort((a, b) => new Date(b.DateCreation) - new Date(a.DateCreation));
             const lastDebutEvent = debutEvents[0];
 
             const lastEvent = cycleEvents[cycleEvents.length - 1];
+            const { currentStatus, statusLabel } = resolveCycleStatus(lastEvent, lastDebutEvent, finEvent);
 
-            if (lastEvent && lastEvent.Ident === 'FIN') {
-                currentStatus = 'TERMINE';
-                statusLabel = 'Terminé';
-            } else if (lastEvent && lastEvent.Ident === 'PAUSE') {
-                currentStatus = 'EN_PAUSE';
-                statusLabel = 'En pause';
+            if (lastEvent?.Ident === 'PAUSE') {
                 console.log(`✅ Statut déterminé depuis dernier événement PAUSE: ${currentStatus}`);
-            } else if (lastEvent && lastEvent.Ident === 'REPRISE') {
-                currentStatus = 'EN_COURS';
-                statusLabel = 'En cours';
+            } else if (lastEvent?.Ident === 'REPRISE') {
                 console.log(`✅ Statut déterminé depuis dernier événement REPRISE: ${currentStatus}`);
-            } else if (lastDebutEvent && lastDebutEvent.Statut && lastDebutEvent.Statut.trim() !== '') {
-                const dbStatus = lastDebutEvent.Statut.toUpperCase().trim();
-                const statusMap = {
-                    'EN_COURS': 'En cours',
-                    'EN_PAUSE': 'En pause',
-                    'PAUSE': 'En pause',
-                    'TERMINE': 'Terminé',
-                    'TERMINÉ': 'Terminé',
-                    'PAUSE_TERMINEE': 'Pause terminée',
-                    'PAUSE_TERMINÉE': 'Pause terminée',
-                    'FORCE_STOP': 'Arrêt forcé'
-                };
-
-                if (statusMap[dbStatus] || dbStatus === 'TERMINE' || dbStatus === 'TERMINÉ') {
-                    currentStatus = dbStatus;
-                    statusLabel = statusMap[dbStatus] || (dbStatus === 'TERMINE' || dbStatus === 'TERMINÉ' ? 'Terminé' : dbStatus);
-                    console.log(`✅ Utilisation du statut de la base de données depuis événement DEBUT: ${currentStatus} (${statusLabel})`);
-                } else {
-                    currentStatus = 'EN_COURS';
-                    statusLabel = 'En cours';
-                }
-            } else {
-                currentStatus = 'EN_COURS';
-                statusLabel = 'En cours';
-            }
-
-            // Règle: jamais "Terminé" sans FIN explicite
-            const statusUpper = String(currentStatus || '').toUpperCase();
-            if ((statusUpper === 'TERMINE' || statusUpper === 'TERMINÉ') && !finEvent) {
-                console.warn(`⚠️ Statut terminé détecté sans FIN pour ${key} (cycle ${idx}) → forcé à EN_COURS.`);
-                currentStatus = 'EN_COURS';
-                statusLabel = 'En cours';
             }
 
             if (debutEvent) {
@@ -602,6 +864,16 @@ function processLancementEventsWithPauses(events) {
                 console.log(`🔍 Ligne pour ${key}, cycle ${idx}:`, currentStatus);
                 console.log(`🔍 Pauses trouvées: ${pauseEvents.length}, Reprises trouvées: ${repriseEvents.length}`);
 
+                if (includeWorkSegments) {
+                    const segments = buildWorkSegmentItems(
+                        debutEvent,
+                        cycleEvents,
+                        pauseEvents,
+                        repriseEvents,
+                        finEvent
+                    );
+                    processedItems.push(...segments);
+                } else {
                 processedItems.push(
                     createLancementItem(
                         debutEvent,
@@ -613,14 +885,33 @@ function processLancementEventsWithPauses(events) {
                         repriseEvents
                     )
                 );
+
+                if (includePauseRows && pauseEvents.length > 0) {
+                    pairPauseRepriseEvents(pauseEvents, repriseEvents).forEach(({ pauseEvent, repriseEvent }) => {
+                        processedItems.push(
+                            createPauseRowItem(pauseEvent, repriseEvent, debutEvent)
+                        );
+                    });
+                }
+                }
             }
         });
     });
     
     console.log(`🔍 Total d'items créés: ${processedItems.length}`);
-    return processedItems.sort((a, b) => 
-        new Date(b.lastUpdate) - new Date(a.lastUpdate)
-    );
+    return processedItems.sort((a, b) => {
+        const opA = String(a.operatorId || '').trim();
+        const opB = String(b.operatorId || '').trim();
+        if (opA !== opB) return opA.localeCompare(opB, 'fr');
+        const dateA = String(a.dateCreation || '').substring(0, 10);
+        const dateB = String(b.dateCreation || '').substring(0, 10);
+        const timeA = String(a.startTime || '99:99');
+        const timeB = String(b.startTime || '99:99');
+        const tsA = dateA ? new Date(`${dateA}T${timeA}:00`).getTime() : 0;
+        const tsB = dateB ? new Date(`${dateB}T${timeB}:00`).getTime() : 0;
+        if (tsA !== tsB) return tsA - tsB;
+        return String(a.id || '').localeCompare(String(b.id || ''), 'fr');
+    });
 }
 
 // Fonction helper pour créer un item de lancement
@@ -637,31 +928,7 @@ function createLancementItem(startEvent, sequence, status, statusLabel, endTime 
         });
     }
     
-    // Traitement sécurisé de l'heure de début
-    let startTime;
-    // Gérer le cas où HeureDebut est un tableau
-    let heureDebut = Array.isArray(startEvent.HeureDebut) ? startEvent.HeureDebut[0] : startEvent.HeureDebut;
-    
-    if (heureDebut) {
-        if (typeof heureDebut === 'string' && /^\d{2}:\d{2}(:\d{2})?$/.test(heureDebut)) {
-            // Format HH:mm ou HH:mm:ss - retourner directement
-            startTime = heureDebut.substring(0, 5);
-        } else if (heureDebut instanceof Date) {
-            // Objet Date - extraire l'heure avec fuseau horaire français
-            startTime = heureDebut.toLocaleTimeString('fr-FR', {
-                timeZone: 'Europe/Paris',
-                hour: '2-digit',
-                minute: '2-digit',
-                hour12: false
-            });
-        } else {
-            // Autre format - utiliser formatDateTime
-            startTime = formatDateTime(heureDebut);
-        }
-    } else {
-        // Pas d'heure de début - utiliser CreatedAt (DATETIME2) plutôt que DateCreation (DATE) pour éviter les problèmes de timezone
-        startTime = formatDateTime(startEvent.CreatedAt || startEvent.DateCreation);
-    }
+    const startTime = formatStartClock(startEvent);
     
     // Debug uniquement si problème détecté
     if (startTime && startTime.includes(':')) {
@@ -756,7 +1023,8 @@ function createLancementItem(startEvent, sequence, status, statusLabel, endTime 
         generalStatus: status,
         events: sequence.length,
         // lastUpdate doit être une datetime fiable pour le tri
-        lastUpdate: finEvent ? (finEvent.CreatedAt || finEvent.DateCreation) : (pauseEvent ? (pauseEvent.CreatedAt || pauseEvent.DateCreation) : (startEvent.CreatedAt || startEvent.DateCreation)),
+        lastUpdate: resolveLastUpdate(finEvent, pauseEvent, startEvent),
+        dateCreation: String(startEvent.DateCreation || '').substring(0, 10) || null,
         type: (status === 'PAUSE' || status === 'PAUSE_TERMINEE') ? 'pause' : 'lancement'
     };
 }
@@ -791,18 +1059,8 @@ function processLancementEvents(events) {
         const repriseEvents = groupEvents.filter(e => e.Ident === 'REPRISE');
         
         // Déterminer le statut de la ligne principale (jamais "EN PAUSE")
-        let currentStatus = 'EN_COURS';
-        let statusLabel = 'En cours';
-        
-        if (finEvent) {
-            currentStatus = 'TERMINE';
-            statusLabel = 'Terminé';
-        } else {
-            // La ligne principale ne doit jamais être "EN PAUSE"
-            // Elle reste "EN COURS" même si il y a des pauses
-            currentStatus = 'EN_COURS';
-            statusLabel = 'En cours';
-        }
+        const currentStatus = finEvent ? 'TERMINE' : 'EN_COURS';
+        const statusLabel = finEvent ? 'Terminé' : 'En cours';
         
         // Calculer les temps
         // Utiliser CreatedAt (DATETIME2) plutôt que DateCreation (DATE) pour éviter les problèmes de timezone
@@ -818,7 +1076,7 @@ function processLancementEvents(events) {
         for (let i = 0; i < Math.min(pauseEvents.length, repriseEvents.length); i++) {
             const pauseStart = new Date(pauseEvents[i].CreatedAt || pauseEvents[i].DateCreation);
             const pauseEnd = new Date(repriseEvents[i].CreatedAt || repriseEvents[i].DateCreation);
-            if (!isNaN(pauseStart.getTime()) && !isNaN(pauseEnd.getTime())) {
+            if (!Number.isNaN(pauseStart.getTime()) && !Number.isNaN(pauseEnd.getTime())) {
                 totalPauseTime += pauseEnd.getTime() - pauseStart.getTime();
             }
         }
@@ -869,8 +1127,8 @@ router.get('/', async (req, res) => {
         // Récupérer les statistiques (toujours sur la date du jour pour les stats live)
         const stats = await getAdminStats(targetDate);
         
-        // Récupérer les opérations (première page seulement pour la vue d'ensemble)
-        const operationsResult = await getAdminOperations(targetDate, 1, 25, dateStart, dateEnd);
+        // Récupérer les opérations pour le tableau (cap élevé : le front pagine côté UI après fusion monitoring)
+        const operationsResult = await getAdminOperations(targetDate, 1, ADMIN_DASHBOARD_OPERATIONS_CAP, dateStart, dateEnd);
         
         res.json({
             stats,
@@ -898,7 +1156,7 @@ router.get('/operations', async (req, res) => {
         res.setHeader('Pragma', 'no-cache');
         res.setHeader('Expires', '0');
         
-        const result = await getAdminOperations(targetDate, parseInt(page), parseInt(limit), dateStart, dateEnd);
+        const result = await getAdminOperations(targetDate, Number.parseInt(page), Number.parseInt(limit), dateStart, dateEnd);
         console.log('🎯 Envoi des opérations admin:', result.operations?.length || 0, 'éléments');
         res.json(result);
         
@@ -963,8 +1221,9 @@ router.get('/export/:format', async (req, res) => {
             });
         }
         
-        const operations = await getAdminOperations(targetDate);
-        
+        const opsResult = await getAdminOperations(targetDate, 1, ADMIN_DASHBOARD_OPERATIONS_CAP);
+        const operations = Array.isArray(opsResult) ? opsResult : (opsResult?.operations || []);
+
         // Générer CSV
         const csvHeader = 'ID,Opérateur,Code Lancement,Article,Date,Statut\n';
         const csvData = operations.map(op => 
@@ -986,11 +1245,9 @@ router.get('/export/:format', async (req, res) => {
 // Fonction pour récupérer les statistiques avec les vraies tables
 async function getAdminStats(date) {
     try {
-        const activeTtlMinutes = Math.max(1, Math.min(parseInt(process.env.ACTIVE_SESSION_TTL_MINUTES || '120', 10) || 120, 24 * 60));
-        // Compter les opérateurs actifs (connectés OU avec lancement en cours)
-        // IMPORTANT:
-        // Ne pas compter "actif" si un ancien DEBUT (Statut=EN_COURS) existe mais qu'un FIN est arrivé après.
-        // On se base uniquement sur le DERNIER événement de la journée par opérateur.
+        const ttlHours = Math.max(1, Math.min(Number.parseInt(process.env.OPERATOR_SESSION_TTL_HOURS || '12', 10) || 12, 72));
+        // Opérateurs "en ligne" = dernier événement du jour = travail EN_COURS/EN_PAUSE
+        // OU session tablette encore ACTIVE (ABSESSIONS) même entre deux lancements / après veille.
         const operatorsQuery = `
             WITH last_per_operator AS (
                 SELECT
@@ -1002,19 +1259,34 @@ async function getAdminStats(date) {
                         ORDER BY h.DateCreation DESC, h.NoEnreg DESC
                     ) AS rn
                 FROM [SEDI_APP_INDEPENDANTE].[dbo].[ABHISTORIQUE_OPERATEURS] h WITH (NOLOCK)
-                -- ⚡ SARGABLE date filter (avoid CAST(DateCreation AS DATE) which can force scans)
                 WHERE h.DateCreation >= CONVERT(date, GETDATE())
                   AND h.DateCreation <  DATEADD(day, 1, CONVERT(date, GETDATE()))
                   AND h.OperatorCode IS NOT NULL
                   AND LTRIM(RTRIM(h.OperatorCode)) <> ''
                   AND h.OperatorCode <> '0'
+            ),
+            histo_online AS (
+                SELECT l.OperatorCode
+                FROM last_per_operator l
+                WHERE l.rn = 1
+                  AND UPPER(LTRIM(RTRIM(COALESCE(l.Ident, '')))) <> 'FIN'
+                  AND UPPER(LTRIM(RTRIM(COALESCE(l.Statut, '')))) IN ('EN_COURS', 'EN_PAUSE')
+            ),
+            session_active AS (
+                SELECT DISTINCT s.OperatorCode
+                FROM [SEDI_APP_INDEPENDANTE].[dbo].[ABSESSIONS_OPERATEURS] s WITH (NOLOCK)
+                WHERE s.SessionStatus = 'ACTIVE'
+                  AND COALESCE(s.LastActivityTime, s.LoginTime, s.DateCreation) >= DATEADD(HOUR, -@ttlHours, GETDATE())
+                  AND s.OperatorCode IS NOT NULL
+                  AND LTRIM(RTRIM(s.OperatorCode)) <> ''
+                  AND s.OperatorCode <> '0'
+            ),
+            merged AS (
+                SELECT OperatorCode FROM histo_online
+                UNION
+                SELECT OperatorCode FROM session_active
             )
-            -- ✅ Nouveau besoin: "en ligne" = uniquement sur un lancement (EN_COURS/EN_PAUSE)
-            SELECT COUNT(DISTINCT l.OperatorCode) AS totalOperators
-            FROM last_per_operator l
-            WHERE l.rn = 1
-              AND UPPER(LTRIM(RTRIM(COALESCE(l.Ident, '')))) <> 'FIN'
-              AND UPPER(LTRIM(RTRIM(COALESCE(l.Statut, '')))) IN ('EN_COURS', 'EN_PAUSE')
+            SELECT COUNT(*) AS totalOperators FROM merged
         `;
         
         // Récupérer les événements depuis ABHISTORIQUE_OPERATEURS pour la date spécifiée
@@ -1026,9 +1298,7 @@ async function getAdminStats(date) {
         const validationResult = await dataValidation.getAdminDataSecurely(targetDate);
         
         // Exécuter la requête des opérateurs en parallèle
-        const [operatorStats] = await Promise.all([
-            executeQuery(operatorsQuery, { activeTtlMinutes })
-        ]);
+        const operatorStats = await executeQuery(operatorsQuery, { ttlHours });
         
         if (!validationResult.valid) {
             console.error('❌ Erreur de validation des données pour les statistiques:', validationResult.error);
@@ -1085,20 +1355,20 @@ async function getAdminStats(date) {
         
         const activeLancements = processedLancements.filter(l => 
             l.statusCode === 'EN_COURS' || 
-            (l.status && (l.status.toLowerCase() === 'en cours' || l.status === 'En cours')) ||
-            (l.statusLabel && l.statusLabel.toLowerCase() === 'en cours')
+            (l.status?.toLowerCase() === 'en cours' || l.status === 'En cours') ||
+            (l.statusLabel?.toLowerCase() === 'en cours')
         ).length;
         
         const pausedLancements = processedLancements.filter(l => 
             l.statusCode === 'EN_PAUSE' || l.statusCode === 'PAUSE' ||
-            (l.status && (l.status.toLowerCase().includes('pause') || l.status === 'En pause')) ||
-            (l.statusLabel && l.statusLabel.toLowerCase().includes('pause'))
+            (l.status?.toLowerCase().includes('pause') || l.status === 'En pause') ||
+            (l.statusLabel?.toLowerCase().includes('pause'))
         ).length;
         
         const completedLancements = processedLancements.filter(l => 
             l.statusCode === 'TERMINE' ||
-            (l.status && (l.status.toLowerCase().includes('terminé') || l.status.toLowerCase().includes('termine'))) ||
-            (l.statusLabel && (l.statusLabel.toLowerCase().includes('terminé') || l.statusLabel.toLowerCase().includes('termine')))
+            (l.status?.toLowerCase().includes('terminé') || l.status?.toLowerCase().includes('termine')) ||
+            (l.statusLabel?.toLowerCase().includes('terminé') || l.statusLabel?.toLowerCase().includes('termine'))
         ).length;
         
         console.log(`📊 Statistiques calculées:`, {
@@ -1137,10 +1407,11 @@ function buildInParams(values, prefix) {
     return { params, placeholders: placeholders.join(', ') };
 }
 
-async function getFabricationMapForLaunches(lancements) {
-    // Map: `${CodeLancement}_${Phase}_${CodeRubrique}` -> "CodeOperation" (or joined list)
+async function getLctcStepsByLaunch(lancements) {
+    // Map: CodeLancement -> [{ Phase, CodeRubrique, CodeOperation }]
     const unique = [...new Set((lancements || []).map(x => String(x || '').trim()).filter(Boolean))];
-    if (unique.length === 0) return new Map();
+    const byLaunch = new Map();
+    if (unique.length === 0) return byLaunch;
 
     const { params, placeholders } = buildInParams(unique, 'lc');
     const rows = await executeQuery(`
@@ -1153,25 +1424,104 @@ async function getFabricationMapForLaunches(lancements) {
         WHERE C.TypeRubrique = 'O'
           AND C.CodeOperation IS NOT NULL
           AND LTRIM(RTRIM(C.CodeOperation)) <> ''
-          AND UPPER(LTRIM(RTRIM(C.CodeOperation))) COLLATE Latin1_General_CI_AI <> 'SECHAGE'
+          AND UPPER(LTRIM(RTRIM(C.CodeOperation))) COLLATE Latin1_General_CI_AI NOT IN ('SECHAGE', 'ETUVAGE')
           AND C.CodeLancement IN (${placeholders})
+        ORDER BY C.CodeLancement, LTRIM(RTRIM(C.Phase)), LTRIM(RTRIM(C.CodeRubrique))
     `, params);
 
-    const acc = new Map(); // key -> Set(CodeOperation)
     (rows || []).forEach(r => {
         const lc = String(r?.CodeLancement || '').trim();
         const ph = String(r?.Phase || '').trim();
         const rub = String(r?.CodeRubrique || '').trim();
         const op = String(r?.CodeOperation || '').trim();
-        if (!lc || !op) return;
-        const key = `${lc}_${ph}_${rub}`;
-        if (!acc.has(key)) acc.set(key, new Set());
-        acc.get(key).add(op);
+        if (!lc || !ph || !op) return;
+        if (!byLaunch.has(lc)) byLaunch.set(lc, []);
+        byLaunch.get(lc).push({ Phase: ph, CodeRubrique: rub, CodeOperation: op });
     });
+    return byLaunch;
+}
 
+async function getFabricationMapForLaunches(lancements) {
+    // Map: `${CodeLancement}_${Phase}_${CodeRubrique}` -> "CodeOperation" (or joined list)
+    const byLaunch = await getLctcStepsByLaunch(lancements);
     const out = new Map();
-    acc.forEach((set, key) => out.set(key, Array.from(set).join(' / ')));
+    byLaunch.forEach((steps, lc) => {
+        const acc = new Map(); // key -> Set
+        steps.forEach(s => {
+            const key = `${lc}_${s.Phase}_${s.CodeRubrique}`;
+            if (!acc.has(key)) acc.set(key, new Set());
+            acc.get(key).add(s.CodeOperation);
+        });
+        acc.forEach((set, key) => out.set(key, Array.from(set).join(' / ')));
+    });
     return out;
+}
+
+const EVENT_MARKER_PHASES = new Set(['PRODUCTION', 'PAUSE', 'REPRISE', 'TERMINE', 'TERMINÉE', 'ADMIN']);
+
+function isStoredPhaseInvalidForDisplay(phase, operatorCode) {
+    const p = String(phase || '').trim();
+    if (!p) return true;
+    if (EVENT_MARKER_PHASES.has(p.toUpperCase())) return true;
+    const op = String(operatorCode || '').trim();
+    // Ne jamais afficher le code opérateur à la place de la phase ERP
+    if (op && p === op) return true;
+    return false;
+}
+
+/**
+ * Pose Phase + Fabrication depuis LCTC (phase du lancement), pas depuis le code opérateur.
+ */
+function applyLctcPhaseFabrication(record, byLaunch) {
+    const lc = String(record?.LancementCode || record?.lancementCode || '').trim();
+    const steps = byLaunch.get(lc) || [];
+    const operatorCode = String(
+        record?.OperatorCode || record?.operatorId || record?.operatorCode || ''
+    ).trim();
+    let phase = String(record?.Phase || record?.phase || '').trim();
+    let rubrique = String(record?.CodeRubrique || record?.codeRubrique || '').trim();
+
+    if (isStoredPhaseInvalidForDisplay(phase, operatorCode)) {
+        // 1) match par CodeRubrique ERP (si ce n'est pas le code opérateur)
+        let match = null;
+        if (rubrique && rubrique !== operatorCode) {
+            match = steps.find(s => s.CodeRubrique === rubrique) || null;
+        }
+        // 2) une seule étape sur le lancement
+        if (!match && steps.length === 1) {
+            match = steps[0];
+        }
+        // 3) sinon première phase ERP du lancement (affichage)
+        if (!match && steps.length > 0) {
+            match = steps[0];
+        }
+        if (match) {
+            phase = match.Phase;
+            rubrique = match.CodeRubrique;
+            record.Phase = phase;
+            record.phase = phase;
+            record.CodeRubrique = rubrique;
+            record.codeRubrique = rubrique;
+        } else {
+            // Pas de phase ERP connue : ne pas afficher un code opérateur
+            record.Phase = null;
+            record.phase = null;
+            phase = '';
+        }
+    }
+
+    const fabPhase = String(record?.CodeRubrique || record?.codeRubrique || '').trim();
+    let fabrication = '-';
+    if (phase) {
+        const exact = steps.filter(s => s.Phase === phase && s.CodeRubrique === fabPhase);
+        const byPhase = exact.length ? exact : steps.filter(s => s.Phase === phase);
+        if (byPhase.length) {
+            fabrication = [...new Set(byPhase.map(s => s.CodeOperation))].join(' / ');
+        }
+    }
+    record.Fabrication = fabrication;
+    record.fabrication = fabrication;
+    return record;
 }
 
 async function getAdminOperations(date, page = 1, limit = 25, dateStart = null, dateEnd = null) {
@@ -1265,7 +1615,7 @@ async function getAdminOperations(date, page = 1, limit = 25, dateStart = null, 
         }
         
         // Utiliser la fonction de regroupement avec pauses séparées
-        const processedLancements = processLancementEventsWithPauses(filteredEvents);
+        const processedLancements = processLancementEventsWithPauses(filteredEvents, { includeWorkSegments: true });
         console.log('🔍 Événements après regroupement:', processedLancements.length);
         console.log('🔍 Détail des événements regroupés:', processedLancements.map(p => ({
             lancement: p.lancementCode,
@@ -1282,12 +1632,10 @@ async function getAdminOperations(date, page = 1, limit = 25, dateStart = null, 
         
         const formattedOperations = limitedLancements.map(lancement => {
             // Trouver les informations détaillées depuis les événements
-            const relatedEvents = filteredEvents.filter(e => 
-                e.CodeLanctImprod === lancement.lancementCode && 
+            const firstEvent = filteredEvents.find(e =>
+                e.CodeLanctImprod === lancement.lancementCode &&
                 e.OperatorCode === lancement.operatorId
             );
-            
-            const firstEvent = relatedEvents[0];
             // Utiliser le nom depuis lancement si disponible, sinon depuis les événements
             const operatorName = lancement.operatorName || firstEvent?.operatorName || `Opérateur ${lancement.operatorId}` || 'Non assigné';
             
@@ -1312,22 +1660,21 @@ async function getAdminOperations(date, page = 1, limit = 25, dateStart = null, 
                 statusCode: lancement.statusCode,
                 generalStatus: lancement.generalStatus,
                 events: lancement.events,
-                editable: true
+                type: lancement.type || 'lancement',
+                _isPauseRow: lancement._isPauseRow === true,
+                _isWorkSegment: lancement._isWorkSegment === true,
+                editable: lancement.editable !== false,
+                dateCreation: lancement.dateCreation || null
             };
         });
 
-        // Ajouter le libellé de fabrication (CodeOperation) depuis l'ERP via (LT + Phase + CodeRubrique)
+        // Phase + libellé depuis LCTC (phase du lancement), jamais le code opérateur
         try {
             const lts = [...new Set(formattedOperations.map(o => String(o?.lancementCode || '').trim()).filter(Boolean))];
-            const fabMap = await getFabricationMapForLaunches(lts);
-            formattedOperations.forEach(o => {
-                const key = `${String(o.lancementCode || '').trim()}_${String(o.Phase || o.phase || '').trim()}_${String(o.CodeRubrique || o.codeRubrique || '').trim()}`;
-                const fabrication = fabMap.get(key) || '-';
-                o.fabrication = fabrication;
-                o.Fabrication = fabrication;
-            });
+            const byLaunch = await getLctcStepsByLaunch(lts);
+            formattedOperations.forEach(o => applyLctcPhaseFabrication(o, byLaunch));
         } catch (e) {
-            console.warn('⚠️ Impossible d\'enrichir les opérations admin avec la fabrication (CodeOperation):', e.message);
+            console.warn('⚠️ Impossible d\'enrichir les opérations admin avec la phase LCTC:', e.message);
         }
 
         console.log(`🎯 Envoi de ${formattedOperations.length} lancements regroupés (page ${page}/${Math.ceil(processedLancements.length / limit)})`);
@@ -1345,7 +1692,7 @@ async function getAdminOperations(date, page = 1, limit = 25, dateStart = null, 
 
     } catch (error) {
         console.error('❌ Erreur lors de la récupération des opérations:', error);
-        return [];
+        return { operations: [], pagination: null };
     }
 }
 
@@ -1353,58 +1700,30 @@ async function getAdminOperations(date, page = 1, limit = 25, dateStart = null, 
 router.put('/operations/:id', async (req, res) => {
     try {
         const { id } = req.params;
-        const { operatorName, lancementCode, article, startTime, endTime } = req.body;
+        const { lancementCode } = req.body;
         
         console.log(`🔧 Modification opération ${id}:`, req.body);
         
-        // Construire la requête de mise à jour dynamiquement
-        const updateFields = [];
-        const params = { id: parseInt(id) };
-        let formattedEndTimeForFinEvent = null;
+        const timeUpdates = collectOperationTimeUpdates(req.body);
+        if (timeUpdates.error) {
+            return res.status(400).json({
+                success: false,
+                error: timeUpdates.error
+            });
+        }
+        const updateFields = timeUpdates.updateFields;
+        const params = { id: Number.parseInt(id), ...timeUpdates.params };
+        let formattedEndTimeForFinEvent = timeUpdates.formattedEndTimeForFinEvent;
         let requestedLancementCode = lancementCode;
         
-        // Heures et statut sont modifiables
-        if (startTime !== undefined) {
-            const formattedStartTime = formatTimeForSQL(startTime);
-            if (!formattedStartTime) {
-                return res.status(400).json({
-                    success: false,
-                    error: 'Format d\'heure de début invalide'
-                });
-            }
-            updateFields.push('HeureDebut = @startTime');
-            params.startTime = formattedStartTime;
-            console.log(`🔧 startTime: ${startTime} -> ${params.startTime}`);
+        if (params.startTime) {
+            console.log(`🔧 startTime -> ${params.startTime}`);
         }
-        
-        if (endTime !== undefined) {
-            const formattedEndTime = formatTimeForSQL(endTime);
-            if (!formattedEndTime) {
-                return res.status(400).json({
-                    success: false,
-                    error: 'Format d\'heure de fin invalide'
-                });
-            }
-            params.endTime = formattedEndTime;
-            formattedEndTimeForFinEvent = formattedEndTime;
-            // Update the current record too (harmless if not FIN),
-            // and we'll also propagate to the FIN event after we load the base record.
-            updateFields.push('HeureFin = @endTime');
-            console.log(`🔧 endTime: ${endTime} -> ${params.endTime}`);
+        if (params.endTime) {
+            console.log(`🔧 endTime -> ${params.endTime}`);
         }
-        
-        // Modification du statut
-        if (req.body.status !== undefined) {
-            const validStatuses = ['EN_COURS', 'EN_PAUSE', 'TERMINE', 'PAUSE_TERMINEE', 'FORCE_STOP'];
-            if (!validStatuses.includes(req.body.status)) {
-                return res.status(400).json({
-                    success: false,
-                    error: `Statut invalide. Statuts autorisés: ${validStatuses.join(', ')}`
-                });
-            }
-            updateFields.push('Statut = @status');
-            params.status = req.body.status;
-            console.log(`🔧 status: ${req.body.status}`);
+        if (params.status) {
+            console.log(`🔧 status: ${params.status}`);
         }
         
         // Validation de cohérence des heures
@@ -1451,7 +1770,7 @@ router.put('/operations/:id', async (req, res) => {
             FROM [SEDI_APP_INDEPENDANTE].[dbo].[ABHISTORIQUE_OPERATEURS]
             WHERE NoEnreg = @id
         `;
-        const existing = await executeQuery(checkQuery, { id: parseInt(id) });
+        const existing = await executeQuery(checkQuery, { id: Number.parseInt(id) });
         
         if (existing.length === 0) {
             return res.status(404).json({
@@ -1700,9 +2019,9 @@ router.put('/operations/:id', async (req, res) => {
                     UPDATE [SEDI_APP_INDEPENDANTE].[dbo].[ABHISTORIQUE_OPERATEURS]
                     SET Statut = 'TERMINE'
                     WHERE NoEnreg = @id
-                `, { id: parseInt(id) });
+                `, { id: Number.parseInt(id) });
             } catch (e) {
-                // non bloquant
+                console.warn('Alignement statut TERMINE non bloquant:', e.message);
             }
 
         }
@@ -1710,7 +2029,10 @@ router.put('/operations/:id', async (req, res) => {
         if (formattedEndTimeForFinEvent) {
             try {
                 const ConsolidationService = require('../services/ConsolidationService');
-                const baseDateStr = base.DateCreation ? (typeof base.DateCreation === 'string' ? base.DateCreation.split('T')[0] : null) : null;
+                let baseDateStr = null;
+                if (typeof base.DateCreation === 'string') {
+                    baseDateStr = base.DateCreation.split('T')[0];
+                }
                 await ConsolidationService.consolidateOperation(baseOperatorCode, baseLancementCode, {
                     autoFix: true,
                     phase: base.Phase || 'ADMIN',
@@ -1743,65 +2065,11 @@ router.put('/operations/:id', async (req, res) => {
 // POST /api/admin/operations - Ajouter une nouvelle opération
 router.post('/operations', async (req, res) => {
     try {
-        const { operatorId, lancementCode, startTime, status = 'DEBUT', phase = '', codeOperation } = req.body;
+        const { operatorId, lancementCode, status = 'DEBUT', phase = '', codeOperation } = req.body;
         
         console.log('=== AJOUT NOUVELLE OPERATION ===');
         console.log('Données reçues:', req.body);
 
-        // Helper: récupérer les étapes ERP pour décider si on doit demander un choix
-        // IMPORTANT: une "étape" = (Phase + CodeRubrique). CodeOperation est le libellé / nom de fabrication.
-        const getStepsForLaunch = async (lt) => {
-            const rows = await executeQuery(`
-                SELECT DISTINCT
-                    LTRIM(RTRIM(C.CodeOperation)) AS CodeOperation,
-                    LTRIM(RTRIM(C.Phase)) AS Phase,
-                    LTRIM(RTRIM(C.CodeRubrique)) AS CodeRubrique
-                FROM [SEDI_ERP].[dbo].[LCTC] C
-                INNER JOIN [SEDI_ERP].[dbo].[LCTE] E
-                    ON E.CodeLancement = C.CodeLancement
-                    AND E.LancementSolde = 'N'
-                WHERE C.CodeLancement = @lancementCode
-                  AND C.TypeRubrique = 'O'
-                  AND C.CodeOperation IS NOT NULL
-                  AND LTRIM(RTRIM(C.CodeOperation)) <> ''
-                  -- Ne jamais proposer "Séchage" / "ÉtuVage" (accents/casse ignorés)
-                  AND UPPER(LTRIM(RTRIM(C.CodeOperation))) COLLATE Latin1_General_CI_AI NOT IN ('SECHAGE', 'ETUVAGE')
-                ORDER BY LTRIM(RTRIM(C.Phase)), LTRIM(RTRIM(C.CodeOperation)), LTRIM(RTRIM(C.CodeRubrique))
-            `, { lancementCode: lt });
-            const steps = (rows || []).map(s => {
-                const phase = String(s?.Phase || '').trim();
-                const rubrique = String(s?.CodeRubrique || '').trim();
-                const fabrication = String(s?.CodeOperation || '').trim();
-                return {
-                    ...s,
-                    StepId: `${phase}|${rubrique}`,
-                    Label: `${phase}${rubrique ? ` (${rubrique})` : ''} — ${fabrication || 'Fabrication'}`
-                };
-            });
-            const uniqueOps = [...new Set(steps.map(s => String(s?.CodeOperation || '').trim()).filter(Boolean))];
-            const uniqueSteps = [...new Set(steps.map(s => String(s?.StepId || '').trim()).filter(Boolean))];
-            return { steps, uniqueOps, uniqueSteps };
-        };
-
-        const resolveStep = async (lt, op) => {
-            const { steps, uniqueOps, uniqueSteps } = await getStepsForLaunch(lt);
-            const raw = String(op || '').trim();
-            if (!raw) return { steps, uniqueOps, uniqueSteps, ctx: steps[0] || null };
-
-            // Support "StepId" = "PHASE|CODERUBRIQUE" (permet de choisir une étape même si CodeOperation est identique)
-            if (raw.includes('|')) {
-                const [ph, rub] = raw.split('|').map(x => String(x || '').trim());
-                const matchByKey = steps.find(s =>
-                    String(s?.Phase || '').trim() === ph &&
-                    String(s?.CodeRubrique || '').trim() === rub
-                );
-                return { steps, uniqueOps, uniqueSteps, ctx: matchByKey || null };
-            }
-
-            const ctx = steps.find(s => String(s?.CodeOperation || '').trim() === raw) || null;
-            return { steps, uniqueOps, uniqueSteps, ctx };
-        };
-        
         // Valider le numéro de lancement dans LCTE (optionnel pour l'admin)
         const validation = await validateLancement(lancementCode);
         let lancementInfo = null;
@@ -1873,7 +2141,12 @@ router.post('/operations', async (req, res) => {
         // Insérer dans ABHISTORIQUE_OPERATEURS
         // Clés ERP: Phase + CodeRubrique (si disponibles via CodeOperation), sinon fallback admin.
         const codeRubrique = erpRubrique || phase || operatorId;
-        const finalStatus = status === 'DEBUT' ? 'EN_COURS' : status === 'FIN' ? 'TERMINE' : status;
+        let finalStatus = status;
+        if (status === 'DEBUT') {
+            finalStatus = 'EN_COURS';
+        } else if (status === 'FIN') {
+            finalStatus = 'TERMINE';
+        }
         const finalPhase = erpPhase || phase || 'ADMIN';
 
         // Corrélation requête/session (peut être NULL côté admin si pas de session active)
@@ -1915,7 +2188,7 @@ router.post('/operations', async (req, res) => {
         console.log('Paramètres:', params);
         
         const insertResult = await executeQuery(insertQuery, params);
-        const insertedId = insertResult && insertResult[0] ? insertResult[0].NoEnreg : null;
+        const insertedId = insertResult?.[0]?.NoEnreg ?? null;
         
         console.log('✅ Opération ajoutée avec succès dans ABHISTORIQUE_OPERATEURS, ID:', insertedId);
         
@@ -1964,7 +2237,7 @@ router.delete('/operations/:id', async (req, res) => {
             WHERE NoEnreg = @id
         `;
         
-        const lancementInfo = await executeQuery(getLancementQuery, { id: parseInt(id) });
+        const lancementInfo = await executeQuery(getLancementQuery, { id: Number.parseInt(id) });
         
         console.log(`🔍 Résultat de la requête pour ID ${id}:`, lancementInfo);
         
@@ -2020,8 +2293,8 @@ router.delete('/operations/:id', async (req, res) => {
                         OperatorCode = @operatorCode
                         OR (OperatorCode IS NULL AND CodeRubrique = @operatorCode) -- compatibilité si des lignes ont encore OperatorCode NULL
                       )
-                  AND ( (Phase = @phase) OR (@phase IS NULL AND Phase IS NULL) )
-                  AND ( (CodeRubrique = @codeRubrique) OR (@codeRubrique IS NULL AND CodeRubrique IS NULL) )
+                  AND ISNULL(LTRIM(RTRIM(Phase)), '') = ISNULL(LTRIM(RTRIM(@phase)), '')
+                  AND ISNULL(LTRIM(RTRIM(CodeRubrique)), '') = ISNULL(LTRIM(RTRIM(@codeRubrique)), '')
             `;
 
             await executeQuery(deleteStepQuery, {
@@ -2049,8 +2322,8 @@ router.delete('/operations/:id', async (req, res) => {
                         OperatorCode = @operatorCode
                         OR (OperatorCode IS NULL AND CodeRubrique = @operatorCode)
                       )
-                  AND ( (Phase = @phase) OR (@phase IS NULL AND Phase IS NULL) )
-                  AND ( (CodeRubrique = @codeRubrique) OR (@codeRubrique IS NULL AND CodeRubrique IS NULL) )
+                  AND ISNULL(LTRIM(RTRIM(Phase)), '') = ISNULL(LTRIM(RTRIM(@phase)), '')
+                  AND ISNULL(LTRIM(RTRIM(CodeRubrique)), '') = ISNULL(LTRIM(RTRIM(@codeRubrique)), '')
               `;
 
         const remaining = await executeQuery(remainingQuery, {
@@ -2078,20 +2351,19 @@ router.delete('/operations/:id', async (req, res) => {
     }
 });
 
-// Route pour récupérer les opérateurs connectés depuis ABSESSIONS_OPERATEURS
+// Route pour récupérer les opérateurs en ligne (historique du jour + sessions ABSESSIONS actives)
 router.get('/operators', async (req, res) => {
     try {
-        const activeTtlMinutes = Math.max(1, Math.min(parseInt(process.env.ACTIVE_SESSION_TTL_MINUTES || '120', 10) || 120, 24 * 60));
+        const ttlHours = Math.max(1, Math.min(Number.parseInt(process.env.OPERATOR_SESSION_TTL_HOURS || '12', 10) || 12, 72));
         // Éviter le cache (sinon le navigateur peut recevoir 304 sans body JSON)
         res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
         res.setHeader('Pragma', 'no-cache');
         res.setHeader('Expires', '0');
 
-        console.log('🔍 Récupération des opérateurs connectés depuis ABSESSIONS_OPERATEURS...');
+        console.log('🔍 Récupération des opérateurs en ligne (historique + sessions actives)...');
 
-        // IMPORTANT (nouveau besoin):
-        // On considère "en ligne" UNIQUEMENT si l'opérateur est sur un lancement:
-        // dernier événement du jour = EN_COURS / EN_PAUSE et Ident != FIN.
+        // "En ligne" = dernier événement du jour = travail EN_COURS/EN_PAUSE
+        // OU session ABSESSIONS encore ACTIVE (tablette déverrouillée, entre deux LT, etc.).
         const operatorsQuery = `
             ;WITH last_per_operator AS (
                 SELECT
@@ -2115,26 +2387,50 @@ router.get('/operators', async (req, res) => {
                 SELECT OperatorCode, Ident, Statut, DateCreation, NoEnreg
                 FROM last_per_operator
                 WHERE rn = 1
+            ),
+            histo_online AS (
+                SELECT le.OperatorCode, le.DateCreation AS LastActivityTime, CAST(1 AS BIT) AS enProduction
+                FROM last_event le
+                WHERE UPPER(LTRIM(RTRIM(COALESCE(le.Ident, '')))) <> 'FIN'
+                  AND UPPER(LTRIM(RTRIM(COALESCE(le.Statut, '')))) IN ('EN_COURS', 'EN_PAUSE')
+            ),
+            session_active AS (
+                SELECT
+                    s.OperatorCode,
+                    COALESCE(s.LastActivityTime, s.LoginTime, s.DateCreation) AS LastActivityTime,
+                    CAST(0 AS BIT) AS enProduction
+                FROM [SEDI_APP_INDEPENDANTE].[dbo].[ABSESSIONS_OPERATEURS] s WITH (NOLOCK)
+                WHERE s.SessionStatus = 'ACTIVE'
+                  AND COALESCE(s.LastActivityTime, s.LoginTime, s.DateCreation) >= DATEADD(HOUR, -@ttlHours, GETDATE())
+                  AND s.OperatorCode IS NOT NULL
+                  AND LTRIM(RTRIM(s.OperatorCode)) <> ''
+                  AND s.OperatorCode <> '0'
+            ),
+            merged AS (
+                SELECT ho.OperatorCode, ho.LastActivityTime, ho.enProduction
+                FROM histo_online ho
+                UNION ALL
+                SELECT sa.OperatorCode, sa.LastActivityTime, sa.enProduction
+                FROM session_active sa
+                WHERE NOT EXISTS (SELECT 1 FROM histo_online ho2 WHERE ho2.OperatorCode = sa.OperatorCode)
             )
             SELECT
-                le.OperatorCode AS OperatorCode,
-                COALESCE(r.Designation1, 'Opérateur ' + CAST(le.OperatorCode AS VARCHAR)) AS NomOperateur,
+                m.OperatorCode AS OperatorCode,
+                COALESCE(r.Designation1, 'Opérateur ' + CAST(m.OperatorCode AS VARCHAR)) AS NomOperateur,
                 CAST(NULL AS DATETIME2) AS LoginTime,
                 CAST('ACTIVE' AS VARCHAR(20)) AS SessionStatus,
-                CAST('EN_OPERATION' AS VARCHAR(20)) AS ActivityStatus,
-                le.DateCreation AS LastActivityTime,
+                CAST(CASE WHEN m.enProduction = 1 THEN 'EN_OPERATION' ELSE 'CONNECTE' END AS VARCHAR(30)) AS ActivityStatus,
+                m.LastActivityTime AS LastActivityTime,
                 r.Coderessource AS RessourceCode,
                 CAST(NULL AS VARCHAR(255)) AS DeviceInfo,
-                CAST('EN_OPERATION' AS VARCHAR(20)) AS CurrentStatus
-            FROM last_event le
+                CAST(CASE WHEN m.enProduction = 1 THEN 'EN_OPERATION' ELSE 'CONNECTE' END AS VARCHAR(30)) AS CurrentStatus
+            FROM merged m
             LEFT JOIN [SEDI_ERP].[dbo].[RESSOURC] r WITH (NOLOCK)
-              ON le.OperatorCode = r.Coderessource
-            WHERE UPPER(LTRIM(RTRIM(COALESCE(le.Ident, '')))) <> 'FIN'
-              AND UPPER(LTRIM(RTRIM(COALESCE(le.Statut, '')))) IN ('EN_COURS', 'EN_PAUSE')
-            ORDER BY le.OperatorCode
+              ON m.OperatorCode = r.Coderessource
+            ORDER BY m.OperatorCode
         `;
 
-        const operators = await executeQuery(operatorsQuery, { activeTtlMinutes });
+        const operators = await executeQuery(operatorsQuery, { ttlHours });
         
         console.log(`✅ ${operators.length} opérateurs connectés récupérés`);
 
@@ -2152,7 +2448,7 @@ router.get('/operators', async (req, res) => {
                 deviceInfo: op.DeviceInfo,
                 // Validation de l'association
                 isProperlyLinked: op.RessourceCode === op.OperatorCode,
-                isActive: op.CurrentStatus === 'EN_OPERATION'
+                isActive: op.CurrentStatus === 'EN_OPERATION' || op.CurrentStatus === 'CONNECTE'
             }))
         });
 
@@ -2176,6 +2472,8 @@ router.get('/operators/all', async (req, res) => {
 
         console.log('🔍 Récupération de tous les opérateurs depuis RESSOURC...');
 
+        const ttlHours = Math.max(1, Math.min(Number.parseInt(process.env.OPERATOR_SESSION_TTL_HOURS || '12', 10) || 12, 72));
+
         const allOperatorsQuery = `
             WITH last_per_operator AS (
                 SELECT
@@ -2197,6 +2495,15 @@ router.get('/operators/all', async (req, res) => {
                 SELECT OperatorCode, Ident, Statut
                 FROM last_per_operator
                 WHERE rn = 1
+            ),
+            session_active AS (
+                SELECT DISTINCT s.OperatorCode
+                FROM [SEDI_APP_INDEPENDANTE].[dbo].[ABSESSIONS_OPERATEURS] s WITH (NOLOCK)
+                WHERE s.SessionStatus = 'ACTIVE'
+                  AND COALESCE(s.LastActivityTime, s.LoginTime, s.DateCreation) >= DATEADD(HOUR, -@ttlHours, GETDATE())
+                  AND s.OperatorCode IS NOT NULL
+                  AND LTRIM(RTRIM(s.OperatorCode)) <> ''
+                  AND s.OperatorCode <> '0'
             )
             SELECT TOP 500
                 r.Coderessource as OperatorCode,
@@ -2207,6 +2514,7 @@ router.get('/operators/all', async (req, res) => {
                      AND UPPER(LTRIM(RTRIM(COALESCE(le.Ident, '')))) <> 'FIN'
                      AND UPPER(LTRIM(RTRIM(COALESCE(le.Statut, '')))) IN ('EN_COURS', 'EN_PAUSE')
                     THEN 'CONNECTE'
+                    WHEN sess.OperatorCode IS NOT NULL THEN 'CONNECTE'
                     ELSE 'INACTIVE'
                 END as ConnectionStatus,
                 CAST(NULL AS DATETIME2) AS LoginTime,
@@ -2214,11 +2522,13 @@ router.get('/operators/all', async (req, res) => {
             FROM [SEDI_ERP].[dbo].[RESSOURC] r
             LEFT JOIN last_event le
               ON r.Coderessource = le.OperatorCode
+            LEFT JOIN session_active sess
+              ON r.Coderessource = sess.OperatorCode
             WHERE r.Typeressource IN ('OP', 'OPERATEUR', 'O')
             ORDER BY r.Coderessource
         `;
 
-        const allOperators = await executeQuery(allOperatorsQuery);
+        const allOperators = await executeQuery(allOperatorsQuery, { ttlHours });
         
         console.log(`✅ ${allOperators.length} opérateurs globaux récupérés`);
 
@@ -2344,7 +2654,7 @@ router.post('/cleanup-sessions', async (req, res) => {
             WHERE DateCreation < DATEADD(hour, -24, GETDATE())
         `;
         
-        const result = await executeQuery(cleanupQuery);
+        await executeQuery(cleanupQuery);
         console.log('✅ Sessions expirées supprimées');
         
         // Compter les sessions restantes
@@ -2584,7 +2894,7 @@ router.post('/testing/purge', requireDangerousRoute('ALLOW_TEST_PURGE'), async (
             return res.status(400).json({
                 success: false,
                 error: 'CONFIRM_REQUIRED',
-                message: 'Pour éviter une suppression accidentelle, envoyez { confirm: \"PURGE\" }.'
+                message: 'Pour éviter une suppression accidentelle, envoyez { confirm: "PURGE" }.'
             });
         }
 
@@ -2834,8 +3144,9 @@ router.get('/operators/:operatorCode/operations', async (req, res) => {
             LEFT JOIN [SEDI_APP_INDEPENDANTE].[dbo].[ABTEMPS_OPERATEURS] t 
                 ON t.OperatorCode = h.OperatorCode 
                 AND t.LancementCode = h.CodeLanctImprod
-                AND ISNULL(t.Phase, '') = ISNULL(h.Phase, '')
-                AND ISNULL(t.CodeRubrique, '') = ISNULL(h.CodeRubrique, '')
+                -- t.Phase/t.CodeRubrique NULL = clés ERP non résolues : rattachement lancement + date
+                AND (t.Phase IS NULL OR ISNULL(t.Phase, '') = ISNULL(h.Phase, ''))
+                AND (t.CodeRubrique IS NULL OR ISNULL(t.CodeRubrique, '') = ISNULL(h.CodeRubrique, ''))
                 AND CAST(t.DateCreation AS DATE) = CAST(h.DateCreation AS DATE)
             -- ⚡ OPTIMISATION : Utiliser h.Phase directement (plus simple et fiable)
             WHERE h.OperatorCode = @operatorCode
@@ -2961,71 +3272,6 @@ router.post('/transfer', async (req, res) => {
             success: true,
             message: 'Fonction de transfert temporairement désactivée - Fonctionnalités principales opérationnelles',
             note: 'Cette fonction sera réactivée après résolution du problème de colonnes'
-        });
-        return;
-
-        // Récupérer toutes les opérations terminées (statut FIN) de la table abetemps
-        const getCompletedOperationsQuery = `
-            SELECT 
-                a.NoEnreg,
-                a.CodeOperateur,
-                a.CodeLanctImprod,
-                a.Phase,
-                a.CodePoste,
-                a.Ident,
-                'TERMINE' as Statut,
-                a.DateTravail
-            FROM [SEDI_ERP].[GPSQL].[abetemps] a
-            WHERE a.Ident = 'FIN'
-            AND CAST(a.DateTravail AS DATE) = CAST(GETDATE() AS DATE)
-        `;
-
-        const completedOperations = await executeQuery(getCompletedOperationsQuery);
-        console.log(` ${completedOperations.length} opérations terminées trouvées`);
-
-        let transferredCount = 0;
-
-        // Transférer chaque opération vers SEDI_APP_INDEPENDANTE
-        for (const operation of completedOperations) {
-            try {
-                const requestId = req.audit?.requestId || generateRequestId();
-                const insertQuery = `
-                    INSERT INTO [SEDI_APP_INDEPENDANTE].[dbo].[ABHISTORIQUE_OPERATEURS]
-                    (OperatorCode, CodeLanctImprod, CodeRubrique, Ident, Phase, Statut, HeureDebut, HeureFin, DateCreation, SessionId, RequestId, CreatedAt)
-                    VALUES (
-                        '${operation.CodeOperateur}',
-                        '${operation.CodeLanctImprod}',
-                        '${operation.CodePoste || '929'}',
-                        '${operation.Ident}',
-                        '${operation.Phase || 'PRODUCTION'}',
-                        '${operation.Statut}',
-                        GETDATE(),
-                        GETDATE(),
-                        GETDATE(),
-                        NULL,
-                        '${requestId}',
-                        GETDATE()
-                    )
-                `;
-
-                await executeQuery(insertQuery);
-                transferredCount++;
-                console.log(` Opération ${operation.CodeLanctImprod} transférée`);
-
-            } catch (insertError) {
-                console.error(` Erreur lors du transfert de l'opération ${operation.CodeLanctImprod}:`, insertError);
-            }
-        }
-
-        console.log(` Transfert terminé: ${transferredCount}/${completedOperations.length} opérations transférées`);
-
-        res.json({
-            success: true,
-            message: 'Transfert terminé avec succès',
-            totalFound: completedOperations.length,
-            transferredCount: transferredCount,
-            errors: completedOperations.length - transferredCount,
-            testColumns: Object.keys(testResult[0] || {})
         });
 
     } catch (error) {
@@ -3199,7 +3445,7 @@ router.post('/delete-all-sedi-tables', async (req, res) => {
                 await executeNonQuery(query);
                 console.log(`✅ Données supprimées: ${query.split('.')[3]}`);
             } catch (error) {
-                console.log(`⚠️ Table peut-être inexistante: ${query.split('.')[3]}`);
+                console.log(`⚠️ Table peut-être inexistante: ${query.split('.')[3]}`, error.message);
             }
         }
         
@@ -3322,8 +3568,8 @@ router.post('/recreate-tables', requireDangerousRoute('ALLOW_RECREATE_TABLES'), 
         try {
             await executeQuery(dropHistoriqueTable);
             console.log('🗑️ Table ABHISTORIQUE_OPERATEURS supprimée (si elle existait)');
-    } catch (error) {
-            console.log('⚠️ Table ABHISTORIQUE_OPERATEURS n\'existait pas');
+        } catch (error) {
+            console.log('⚠️ Table ABHISTORIQUE_OPERATEURS n\'existait pas', error.message);
         }
         
         await executeQuery(createHistoriqueTable);
@@ -3572,7 +3818,7 @@ router.get('/lcte', async (req, res) => {
         
         console.log(`🔍 Récupération de ${limit} lancements depuis LCTE...`);
         
-        const limitNum = Math.max(1, Math.min(parseInt(limit, 10) || 10, 500));
+        const limitNum = Math.max(1, Math.min(Number.parseInt(limit, 10) || 10, 500));
         const query = `
             SELECT TOP (@limitNum) 
                 [CodeLancement],
@@ -3619,7 +3865,7 @@ router.get('/lancements/search', async (req, res) => {
         console.log(`🔍 Recherche de lancements avec le terme: ${term}`);
         
         const searchTerm = `%${term}%`;
-        const limitNum = Math.max(1, Math.min(parseInt(limit, 10) || 10, 500));
+        const limitNum = Math.max(1, Math.min(Number.parseInt(limit, 10) || 10, 500));
         const query = `
             SELECT TOP (@limitNum) 
                 [CodeLancement],
@@ -3737,24 +3983,21 @@ router.get('/debug/all-lancements-status', async (req, res) => {
         const analysis = [];
         
         Object.keys(lancementGroups).forEach(key => {
-            const groupEvents = lancementGroups[key].sort((a, b) => 
-                new Date(a.DateCreation) - new Date(b.DateCreation)
-            );
+            const groupEvents = lancementGroups[key].slice();
+            groupEvents.sort((a, b) => new Date(a.DateCreation) - new Date(b.DateCreation));
             
             const [lancementCode, operatorCode] = key.split('_');
             const lastEvent = groupEvents[groupEvents.length - 1];
-            const finEvent = groupEvents.find(e => e.Ident === 'FIN');
+            const hasFin = groupEvents.some(e => e.Ident === 'FIN');
             const pauseEvents = groupEvents.filter(e => e.Ident === 'PAUSE');
             const repriseEvents = groupEvents.filter(e => e.Ident === 'REPRISE');
             
             // Déterminer le statut selon la nouvelle logique
             let currentStatus = 'EN_COURS';
-            if (finEvent) {
+            if (hasFin) {
                 currentStatus = 'TERMINE';
             } else if (lastEvent.Ident === 'PAUSE') {
                 currentStatus = 'PAUSE';
-            } else if (lastEvent.Ident === 'REPRISE') {
-                currentStatus = 'EN_COURS';
             }
             
             analysis.push({
@@ -3784,7 +4027,7 @@ router.get('/debug/all-lancements-status', async (req, res) => {
         res.json({
             success: true,
             totalLancements: analysis.length,
-            analysis: analysis.sort((a, b) => a.lancementCode.localeCompare(b.lancementCode))
+            analysis: [...analysis].sort((a, b) => a.lancementCode.localeCompare(b.lancementCode))
         });
         
     } catch (error) {
@@ -3905,9 +4148,8 @@ router.get('/debug/all-pauses', async (req, res) => {
         const analysis = [];
         
         Object.keys(lancementGroups).forEach(key => {
-            const groupEvents = lancementGroups[key].sort((a, b) => 
-                new Date(a.DateCreation) - new Date(b.DateCreation)
-            );
+            const groupEvents = lancementGroups[key].slice();
+            groupEvents.sort((a, b) => new Date(a.DateCreation) - new Date(b.DateCreation));
             
             const [lancementCode, operatorCode] = key.split('_');
             const pauseEvents = groupEvents.filter(e => e.Ident === 'PAUSE');
@@ -3947,7 +4189,7 @@ router.get('/debug/all-pauses', async (req, res) => {
         res.json({
             success: true,
             totalLancements: analysis.length,
-            analysis: analysis.sort((a, b) => a.lancementCode.localeCompare(b.lancementCode))
+            analysis: [...analysis].sort((a, b) => a.lancementCode.localeCompare(b.lancementCode))
         });
         
     } catch (error) {
@@ -4108,8 +4350,8 @@ router.get('/monitoring', async (req, res) => {
         res.setHeader('Pragma', 'no-cache');
         res.setHeader('Expires', '0');
 
-        const { statutTraitement, operatorCode, lancementCode, date, dateStart, dateEnd } = req.query;
-        
+        const { statutTraitement, operatorCode, lancementCode, date, dateStart, dateEnd, includeAllStatuses } = req.query;
+
         const filters = {};
         if (statutTraitement !== undefined) filters.statutTraitement = statutTraitement;
         if (operatorCode) filters.operatorCode = operatorCode;
@@ -4117,22 +4359,20 @@ router.get('/monitoring', async (req, res) => {
         if (date) filters.date = date;
         if (dateStart) filters.dateStart = dateStart;
         if (dateEnd) filters.dateEnd = dateEnd;
+        if (includeAllStatuses === '1' || String(includeAllStatuses || '').toLowerCase() === 'true') {
+            filters.includeAllStatuses = true;
+        }
         
         const result = await MonitoringService.getTempsRecords(filters);
         
         if (result.success) {
-            // Enrichir les lignes consolidées (ABTEMPS) avec la fabrication (CodeOperation) depuis l'ERP
+            // Enrichir Phase + libellé depuis LCTC (phase du lancement)
             try {
                 const lts = [...new Set((result.data || []).map(r => String(r?.LancementCode || '').trim()).filter(Boolean))];
-                const fabMap = await getFabricationMapForLaunches(lts);
-                (result.data || []).forEach(r => {
-                    const key = `${String(r.LancementCode || '').trim()}_${String(r.Phase || '').trim()}_${String(r.CodeRubrique || '').trim()}`;
-                    const fabrication = fabMap.get(key) || '-';
-                    r.Fabrication = fabrication;
-                    r.fabrication = fabrication;
-                });
+                const byLaunch = await getLctcStepsByLaunch(lts);
+                (result.data || []).forEach(r => applyLctcPhaseFabrication(r, byLaunch));
             } catch (e) {
-                console.warn('⚠️ Impossible d\'enrichir /admin/monitoring avec la fabrication:', e.message);
+                console.warn('⚠️ Impossible d\'enrichir /admin/monitoring avec la phase LCTC:', e.message);
             }
 
             res.json({
@@ -4163,8 +4403,8 @@ router.put('/monitoring/:tempsId', async (req, res) => {
         const corrections = req.body;
         
         // Convertir tempsId en nombre
-        const tempsIdNum = parseInt(tempsId, 10);
-        if (isNaN(tempsIdNum)) {
+        const tempsIdNum = Number.parseInt(tempsId, 10);
+        if (Number.isNaN(tempsIdNum)) {
             console.error(`❌ TempsId invalide reçu: ${tempsId}`);
             return res.status(400).json({
                 success: false,
@@ -4211,7 +4451,7 @@ router.put('/monitoring/:tempsId', async (req, res) => {
                     });
                 }
             } catch (e) {
-                // best-effort uniquement
+                console.warn('Vérification historique best-effort:', e.message);
             }
 
             // Vérifier si l'enregistrement existe avec un autre type de données
@@ -4239,7 +4479,7 @@ router.put('/monitoring/:tempsId', async (req, res) => {
             });
         }
         
-        const result = await MonitoringService.correctRecord(parseInt(tempsId), corrections);
+        const result = await MonitoringService.correctRecord(Number.parseInt(tempsId), corrections);
         
         if (result.success) {
             res.json({
@@ -4267,7 +4507,7 @@ router.put('/monitoring/:tempsId', async (req, res) => {
 router.delete('/monitoring/:tempsId', async (req, res) => {
     try {
         const { tempsId } = req.params;
-        const tempsIdNum = parseInt(tempsId, 10);
+        const tempsIdNum = Number.parseInt(tempsId, 10);
 
         if (!Number.isFinite(tempsIdNum)) {
             return res.status(400).json({
@@ -4330,7 +4570,7 @@ router.post('/monitoring/:tempsId/validate', async (req, res) => {
     try {
         const { tempsId } = req.params;
         
-        const result = await MonitoringService.validateRecord(parseInt(tempsId));
+        const result = await MonitoringService.validateRecord(Number.parseInt(tempsId));
         
         if (result.success) {
             res.json({
@@ -4359,7 +4599,7 @@ router.post('/monitoring/:tempsId/on-hold', async (req, res) => {
     try {
         const { tempsId } = req.params;
         
-        const result = await MonitoringService.setOnHold(parseInt(tempsId));
+        const result = await MonitoringService.setOnHold(Number.parseInt(tempsId));
         
         if (result.success) {
             res.json({
@@ -4396,7 +4636,7 @@ router.post('/monitoring/:tempsId/transmit', async (req, res) => {
         // 1) Valider en 'O' (si nécessaire)
         // 2) Exécuter EDI_JOB (si demandé)
         // 3) Marquer en 'T' uniquement si EDI_JOB OK (sinon laisser en 'O' pour retry)
-        const idNum = parseInt(tempsId, 10);
+        const idNum = Number.parseInt(tempsId, 10);
         const validate = await MonitoringService.validateRecord(idNum);
         if (!validate.success) {
             return res.status(400).json({ success: false, error: validate.error });
@@ -4483,7 +4723,8 @@ router.post('/monitoring/consolidate-batch', async (req, res) => {
 // POST /api/admin/monitoring/validate-and-transmit-batch - Valider et transmettre un lot
 router.post('/monitoring/validate-and-transmit-batch', async (req, res) => {
     try {
-        const { tempsIds, triggerEdiJob = true, codeTache = null } = req.body;
+        const { tempsIds, triggerEdiJob = true, codeTache = null, adminMarkTransmitted = false } = req.body;
+        const adminMarkT = adminMarkTransmitted === true || String(adminMarkTransmitted).toLowerCase() === 'true';
         
         if (!Array.isArray(tempsIds) || tempsIds.length === 0) {
             return res.status(400).json({
@@ -4534,22 +4775,39 @@ router.post('/monitoring/validate-and-transmit-batch', async (req, res) => {
             };
         }
 
-        // Marquer comme transmis uniquement si l'EDI_JOB est OK
+        // Marquer comme transmis (T) pour retirer les lignes du dashboard admin :
+        // - mode direct : comme avant, seulement si EDI OK ou si EDI non demandé
+        // - mode planifié (SILOG tâche Windows) : sans marquage T par défaut, sauf action admin explicite (adminMarkTransmitted)
         let markResult = null;
-        // ⚠️ En mode scheduled/disabled, ne PAS marquer en 'T' (SILOG doit consommer les lignes 'O').
-        if (!isScheduledMode && (!triggerEdiJob || (ediJobResult && ediJobResult.success && !ediJobResult.skipped))) {
-            const idsToMark = result.validatedIds || tempsIds;
+        const idsToMark = result.validatedIds || tempsIds;
+        const shouldMarkFromAdmin = adminMarkT && isScheduledMode && Array.isArray(idsToMark) && idsToMark.length > 0;
+        const shouldMarkFromDirect = !isScheduledMode && (!triggerEdiJob || (ediJobResult?.success && !ediJobResult?.skipped));
+
+        if (shouldMarkFromAdmin || shouldMarkFromDirect) {
             markResult = await MonitoringService.markBatchAsTransmitted(idsToMark);
+            if (shouldMarkFromAdmin && markResult?.success === false) {
+                return res.status(500).json({
+                    success: false,
+                    error: markResult.error || 'Impossible de marquer les enregistrements comme transmis (T)',
+                    validated: result.count
+                });
+            }
         }
 
+        const successCore = !triggerEdiJob || ediJobResult?.success;
+        const success = shouldMarkFromAdmin
+            ? !!(result.success && markResult?.success !== false)
+            : (isScheduledMode || successCore);
+
         return res.json({
-            success: isScheduledMode || !triggerEdiJob || (ediJobResult && ediJobResult.success),
-            message: isScheduledMode
+            success,
+            message: isScheduledMode && !adminMarkT
                 ? `${result.message} (planifié: tâche SILOG sur SVC_SILOG/runner Windows)`
                 : result.message,
             count: result.count,
             ediJob: ediJobResult,
-            marked: markResult
+            marked: markResult,
+            adminMarkedTransmitted: shouldMarkFromAdmin
         });
         
     } catch (error) {
@@ -4574,7 +4832,7 @@ router.post('/monitoring/repair-times-batch', async (req, res) => {
 
         const results = { success: [], errors: [] };
         for (const id of tempsIds) {
-            const tempsId = parseInt(id, 10);
+            const tempsId = Number.parseInt(id, 10);
             if (!Number.isFinite(tempsId)) {
                 results.errors.push({ tempsId: id, error: 'TempsId invalide' });
                 continue;
@@ -4740,52 +4998,7 @@ router.post('/reconsolidate', async (req, res) => {
     }
 });
 
-// POST /api/admin/validate-temps
-// Passe StatutTraitement = 'O' pour les enregistrements sélectionnés ou tous ceux éligibles.
-router.post('/validate-temps', async (req, res) => {
-    try {
-        const { tempsIds, all = false, beforeDate } = req.body || {};
-
-        if (!all && (!tempsIds || !Array.isArray(tempsIds) || tempsIds.length === 0)) {
-            return res.status(400).json({ success: false, error: 'Fournir tempsIds (tableau) ou all=true.' });
-        }
-
-        let result;
-        if (all) {
-            let dateCond = `CAST(DateCreation AS DATE) < CAST(GETDATE() AS DATE)`;
-            const params = {};
-            if (beforeDate) {
-                dateCond = `CAST(DateCreation AS DATE) <= @beforeDate`;
-                params.beforeDate = beforeDate;
-            }
-            result = await executeNonQuery(
-                `UPDATE [SEDI_APP_INDEPENDANTE].[dbo].[ABTEMPS_OPERATEURS]
-                 SET StatutTraitement = 'O'
-                 WHERE StatutTraitement IS NULL
-                   AND ProductiveDuration > 0
-                   AND ${dateCond}`,
-                params
-            );
-        } else {
-            const ids = tempsIds.map(Number).filter(n => !isNaN(n));
-            if (ids.length === 0) return res.status(400).json({ success: false, error: 'Aucun TempsId valide.' });
-            const idList = ids.join(',');
-            result = await executeNonQuery(
-                `UPDATE [SEDI_APP_INDEPENDANTE].[dbo].[ABTEMPS_OPERATEURS]
-                 SET StatutTraitement = 'O'
-                 WHERE TempsId IN (${idList})
-                   AND StatutTraitement IS NULL
-                   AND ProductiveDuration > 0`
-            );
-        }
-
-        const count = result?.rowsAffected || 0;
-        res.json({ success: true, validated: count, message: `${count} enregistrement(s) passé(s) en StatutTraitement='O'.` });
-    } catch (error) {
-        console.error('❌ Erreur validate-temps:', error);
-        res.status(500).json({ success: false, error: error.message });
-    }
-});
+// POST /api/admin/validate-temps — remplacé par la version avec contrôle LCTC (plus bas)
 
 // GET /api/admin/diagnostic-temps
 // Compare ABTEMPS_OPERATEURS avec ABHISTORIQUE_OPERATEURS pour identifier les incohérences.
@@ -4918,12 +5131,17 @@ router.get('/silog-pipeline-status', async (req, res) => {
             GROUP BY StatutTraitement
         `;
 
+        const erpDb = process.env.DB_ERP_DATABASE || 'SEDI_ERP';
         const staleQuery = `
-            SELECT COUNT(*) AS NbStale,
-                   MIN(DateCreation) AS PlusAncienStale
-            FROM [SEDI_APP_INDEPENDANTE].[dbo].[ABTEMPS_OPERATEURS]
-            WHERE StatutTraitement = 'O'
-              AND DATEDIFF(HOUR, DateCreation, GETDATE()) > @staleHours
+            SELECT
+                COUNT(*) AS NbStale,
+                SUM(CASE WHEN ISNULL(E.LancementSolde, 'O') = 'N' THEN 1 ELSE 0 END) AS NbStaleActionable,
+                SUM(CASE WHEN ISNULL(E.LancementSolde, 'O') <> 'N' THEN 1 ELSE 0 END) AS NbStaleSoldes,
+                MIN(t.DateCreation) AS PlusAncienStale
+            FROM [SEDI_APP_INDEPENDANTE].[dbo].[ABTEMPS_OPERATEURS] t
+            LEFT JOIN [${erpDb}].[dbo].[LCTE] E ON E.CodeLancement = t.LancementCode
+            WHERE t.StatutTraitement = 'O'
+              AND DATEDIFF(HOUR, t.DateCreation, GETDATE()) > @staleHours
         `;
 
         const viewCountQuery = `
@@ -4944,17 +5162,24 @@ router.get('/silog-pipeline-status', async (req, res) => {
         }
 
         const nbStale = stale?.[0]?.NbStale || 0;
+        const nbStaleActionable = stale?.[0]?.NbStaleActionable || 0;
+        const nbStaleSoldes = stale?.[0]?.NbStaleSoldes || 0;
         const oldestStale = stale?.[0]?.PlusAncienStale || null;
         const nbInView = viewCount?.[0]?.NbVue ?? -1;
 
         let health = 'OK';
         const warnings = [];
 
-        if (nbStale > 0) {
+        if (nbStaleActionable > 0) {
             health = 'WARNING';
             warnings.push(
-                `${nbStale} enregistrement(s) en StatutTraitement='O' depuis plus de ${staleHours}h (plus ancien : ${oldestStale}). ` +
-                `SEDI_ETDIFF est peut-être bloquée ou arrêtée sur SVC_SILOG.`
+                `${nbStaleActionable} enregistrement(s) en 'O' depuis >${staleHours}h sur lancements NON soldés ` +
+                `(plus ancien : ${oldestStale}). SEDI_ETDIFF est peut-être bloquée ou arrêtée sur SVC_SILOG.`
+            );
+        }
+        if (nbStaleSoldes > 0) {
+            warnings.push(
+                `${nbStaleSoldes} enregistrement(s) en 'O' stale sur lancements soldés (EDI ne peut pas intégrer — hors alerte critique).`
             );
         }
 
@@ -4996,12 +5221,63 @@ router.get('/silog-pipeline-status', async (req, res) => {
                 total: nbNull + nbO + nbT,
                 vueRemonteTemps: nbInView,
                 staleO: nbStale,
+                staleOActionable: nbStaleActionable,
+                staleOSoldes: nbStaleSoldes,
                 oldestStale
             },
             detail: statusMap
         });
     } catch (error) {
         console.error('❌ Erreur silog-pipeline-status:', error);
+        res.status(500).json({ success: false, error: error.message });
+    }
+});
+
+// ============================================
+// Validation temps SILOG — cohérence LCTC
+// ============================================
+const OperationValidationService = require('../services/OperationValidationService');
+
+// POST /api/admin/validate-temps — passe StatutTraitement = 'O' si cohérent LCTC
+router.post('/validate-temps', authenticateAdmin, async (req, res) => {
+    try {
+        const { tempsIds, all = false, beforeDate } = req.body || {};
+        const result = await MonitoringService.validateEligibleTempsIds({
+            tempsIds,
+            all,
+            beforeDate
+        });
+
+        if (!result.success) {
+            return res.status(400).json(result);
+        }
+
+        res.json(result);
+    } catch (error) {
+        console.error('❌ Erreur validate-temps:', error);
+        res.status(500).json({ success: false, error: error.message });
+    }
+});
+
+// GET /api/admin/diagnostic-lctc — temps non intégrables (pas de ligne LCTC correspondante)
+router.get('/diagnostic-lctc', authenticateAdmin, async (req, res) => {
+    try {
+        const { dateStart, dateEnd, operatorCode, statutTraitement } = req.query;
+        const rows = await OperationValidationService.listLctcIncoherentRecords({
+            dateStart,
+            dateEnd,
+            operatorCode,
+            statutTraitement
+        });
+
+        res.json({
+            success: true,
+            count: rows.length,
+            data: rows,
+            hint: 'Ces lignes ne peuvent pas être validées pour SILOG tant que CodeLancement/Phase/CodeRubrique ne correspondent pas à LCTC.'
+        });
+    } catch (error) {
+        console.error('❌ Erreur diagnostic-lctc:', error);
         res.status(500).json({ success: false, error: error.message });
     }
 });

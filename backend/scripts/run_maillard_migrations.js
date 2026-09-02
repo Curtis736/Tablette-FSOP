@@ -27,7 +27,7 @@ async function runSQLFile(filePath) {
     const sqlContent = fs.readFileSync(filePath, 'utf8');
     
     // Séparer les commandes par GO
-    const commands = sqlContent.split(/\n\s*GO\s*\n/i).filter(cmd => cmd.trim().length > 0);
+    const commands = sqlContent.split(/\n[ \t]*GO[ \t]*\n/i).filter(cmd => cmd.trim().length > 0);
     
     console.log(`\n📄 Exécution de ${path.basename(filePath)}...`);
     console.log(`   ${commands.length} commande(s) à exécuter\n`);

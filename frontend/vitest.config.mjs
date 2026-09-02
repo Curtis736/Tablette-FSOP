@@ -1,9 +1,8 @@
 import { defineConfig } from 'vitest/config';
-import { dirname, resolve, join } from 'node:path';
+import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = dirname(__filename);
+const __dirname = dirname(fileURLToPath(import.meta.url));
 
 export default defineConfig({
   test: {
@@ -13,7 +12,7 @@ export default defineConfig({
     exclude: ['node_modules', 'dist', '.git', '.cache', 'coverage'],
     testTimeout: 10000,
     hookTimeout: 10000,
-    setupFiles: ['./tests/setup.js'],
+    setupFiles: [resolve(__dirname, 'tests/setup.js')],
     coverage: {
       provider: 'v8',
       reporter: ['text', 'json', 'html', 'lcov'],
@@ -44,4 +43,3 @@ export default defineConfig({
     }
   }
 });
-

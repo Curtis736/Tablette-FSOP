@@ -1,0 +1,424 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>FSOP — doc technique</title>
+  <link rel="stylesheet" href="css/docs.css">
+</head>
+<body>
+  <button type="button" class="menu-toggle" id="menuToggle">Menu</button>
+
+  <div class="layout">
+    <aside class="sidebar">
+      <div class="sidebar-brand">
+        <h1>Tablette FSOP</h1>
+        <p>Doc technique</p>
+      </div>
+      <nav>
+        <div class="nav-label">Vue d'ensemble</div>
+        <a href="#stack">Stack &amp; repo</a>
+        <a href="#archi">Architecture runtime</a>
+        <a href="#env">Environnements</a>
+
+        <div class="nav-label">Backend</div>
+        <a href="#api">API principales</a>
+        <a href="#temps-restant">Temps restant LT</a>
+        <a href="#silog">Pipeline SILOG</a>
+        <a href="#cron">Tâches planifiées</a>
+        <a href="#sql">Bases SQL</a>
+
+        <div class="nav-label">Ops</div>
+        <a href="#docker">Docker &amp; déploiement</a>
+        <a href="#ci">Jenkins &amp; Sonar</a>
+        <a href="#terraform">Terraform / Ansible</a>
+        <a href="#devlocal">Dev local</a>
+      </nav>
+    </aside>
+
+    <main class="main">
+
+      <p class="doc-switch">
+        <strong>Version technique.</strong>
+        Tu cherches l'explication simple pour l'atelier ?
+        → <a href="index.html">guide utilisateur</a>
+      </p>
+
+      <article id="stack">
+        <h2>Stack &amp; repo</h2>
+        <table>
+          <tr><th>Couche</th><th>Emplacement</th><th>Notes</th></tr>
+          <tr><td>Frontend</td><td><code>frontend/</code></td><td>SPA vanilla JS, servie par Nginx</td></tr>
+          <tr><td>Backend</td><td><code>backend/</code></td><td>Express 5, Node, port <code>3001</code></td></tr>
+          <tr><td>Conteneurs</td><td><code>docker/</code></td><td>Compose prod / test / monitoring</td></tr>
+          <tr><td>CI</td><td><code>Jenkinsfile</code></td><td>Tests → Sonar → deploy test uniquement</td></tr>
+          <tr><td>Inventaire</td><td><code>terraform/</code></td><td>Phase 1 : génère inventaire Ansible</td></tr>
+          <tr><td>Doc web</td><td><code>docs/web/</code></td><td>Copiée dans l'image front sous <code>/docs/</code></td></tr>
+        </table>
+        <p>
+          Point d'entrée API : <code>backend/server.js</code>.
+          Routes montées sous <code>/api/*</code>, proxy Nginx depuis le front.
+        </p>
+      </article>
+
+      <article id="archi">
+        <h2>Architecture runtime</h2>
+        <pre><code>Tablette / navigateur
+    │
+    ▼
+Nginx (sedi-tablette-frontend)  :80 / :443 / :8080
+    │  /          → SPA frontend/
+    │  /docs/     → docs/web/ (statique)
+    │  /api/*     → proxy → backend:3001
+    ▼
+Express (sedi-tablette-backend)  :3001 (interne Docker)
+    │
+    ├── SQL Server SERVEURERP
+    │     SEDI_APP_INDEPENDANTE  (app)
+    │     SEDI_ERP               (ERP, vues SILOG)
+    ├── CIFS /srv/services       (FSOP Excel, traçabilité)
+    └── Redis (optionnel, cache)</code></pre>
+        <p>
+          Prod : <code>docker/docker-compose.production.yml</code>, projet
+          <code>sedi-tablette</code>, réseau externe <code>sedi-tablette-network</code>.
+          Le backend n'est pas exposé sur l'hôte — uniquement via Nginx.
+        </p>
+        <p>
+          Health : <code>GET /api/health</code> (backend),
+          <code>GET /health</code> (Nginx).
+          Métriques Prometheus : <code>GET /metrics</code> sur le backend.
+        </p>
+      </article>
+
+      <article id="env">
+        <h2>Environnements</h2>
+        <table>
+          <tr><th></th><th>Production</th><th>Test (CI)</th></tr>
+          <tr><td>URL</td><td>https://fsop.sedi-ati.com</td><td>http://192.168.1.26:8088</td></tr>
+          <tr><td>Compose</td><td><code>docker-compose.production.yml</code></td><td><code>docker-compose.test.yml</code></td></tr>
+          <tr><td>Projet Docker</td><td><code>sedi-tablette</code></td><td><code>sedi-tablette-test</code></td></tr>
+          <tr><td>Images</td><td><code>docker-sedi-*:latest</code></td><td><code>docker-sedi-*:test</code></td></tr>
+          <tr><td>Deploy</td><td><code>docker/deploy.sh</code> (manuel)</td><td><code>docker/scripts/deploy-test.sh</code> (Jenkins)</td></tr>
+          <tr><td>Base ERP</td><td><code>SEDI_ERP</code></td><td><code>SEDI_TESTS</code> (typique)</td></tr>
+        </table>
+        <p class="note">
+          Jenkins ne touche jamais la prod. Un pipeline vert = test à jour, pas l'atelier.
+        </p>
+        <p>
+          Variables sensibles dans <code>docker/.env</code> (non versionné) :
+          mots de passe SQL, <code>JWT_SECRET</code>, <code>ADMIN_PASSWORD</code>,
+          <code>DB_SERVER_IP</code>, montages CIFS, Factorial, webhooks alertes.
+        </p>
+      </article>
+
+      <article id="api">
+        <h2>API principales</h2>
+        <p>Toutes les routes admin passent par <code>/api/admin</code> avec auth JWT (sauf login).</p>
+
+        <h3>Opérateur (atelier)</h3>
+        <table>
+          <tr><th>Méthode</th><th>Route</th><th>Rôle</th></tr>
+          <tr><td>POST</td><td><code>/api/operators/login</code></td><td>Session opérateur</td></tr>
+          <tr><td>POST</td><td><code>/api/operators/start</code></td><td>Démarrer une opération</td></tr>
+          <tr><td>POST</td><td><code>/api/operators/pause</code></td><td>Pause</td></tr>
+          <tr><td>POST</td><td><code>/api/operators/resume</code></td><td>Reprise</td></tr>
+          <tr><td>POST</td><td><code>/api/operators/stop</code></td><td>Terminer</td></tr>
+          <tr><td>GET</td><td><code>/api/operators/steps/:lancementCode</code></td><td>Étapes + <code>tempsRestant</code> (LCTC / ETEMPS / ABTEMPS)</td></tr>
+          <tr><td>POST</td><td><code>/api/heartbeat</code></td><td>Keep-alive session</td></tr>
+        </table>
+
+        <h3>FSOP (formulaires Excel)</h3>
+        <table>
+          <tr><th>Méthode</th><th>Route</th><th>Rôle</th></tr>
+          <tr><td>GET</td><td><code>/api/fsop/templates</code></td><td>Liste modèles</td></tr>
+          <tr><td>POST</td><td><code>/api/fsop/open</code></td><td>Ouvrir fichier sur partage</td></tr>
+          <tr><td>POST</td><td><code>/api/fsop/save</code></td><td>Sauvegarder remplissage</td></tr>
+        </table>
+        <p>
+          Chemins conteneur : <code>TRACEABILITY_DIR</code>, <code>FSOP_TEMPLATES_DIR</code>
+          (voir <code>docker-compose.production.yml</code>).
+        </p>
+
+        <h3>Admin</h3>
+        <table>
+          <tr><th>Méthode</th><th>Route</th><th>Rôle</th></tr>
+          <tr><td>POST</td><td><code>/api/auth/login</code></td><td>Login admin → JWT</td></tr>
+          <tr><td>GET</td><td><code>/api/admin/monitoring</code></td><td>Dashboard temps (filtres)</td></tr>
+          <tr><td>PUT</td><td><code>/api/admin/monitoring/:tempsId</code></td><td>Corriger une ligne</td></tr>
+          <tr><td>POST</td><td><code>/api/admin/monitoring/validate-and-transmit-batch</code></td><td><strong>Transfert UI</strong></td></tr>
+          <tr><td>GET</td><td><code>/api/admin/silog-pipeline-status</code></td><td>État pipeline SILOG</td></tr>
+          <tr><td>POST</td><td><code>/api/admin/edi-job/execute</code></td><td>Lancer EDI_JOB manuellement</td></tr>
+        </table>
+        <p class="note">
+          <code>POST /api/admin/transfer</code> est <strong>désactivée</strong> (stub informatif dans
+          <code>backend/routes/admin.js</code>). Le front appelle
+          <code>validate-and-transmit-batch</code> via <code>frontend/services/ApiService.js</code>.
+        </p>
+      </article>
+
+      <article id="temps-restant">
+        <h2>Temps restant LT (ERP + SILOG)</h2>
+        <p>
+          Service : <code>backend/services/LancementTempsRestantService.js</code>.
+          Exposé dans la réponse de
+          <code>GET /api/operators/steps/:lancementCode</code> (champ <code>tempsRestant</code>).
+          UI opérateur : bloc <strong>Total LT</strong> + encadré <strong>Temps restant étape</strong>
+          (voir doc atelier, capture <code>operateur-10-temps-restant.png</code>).
+        </p>
+
+        <h3>Formule (par étape Phase + CodeRubrique)</h3>
+        <pre><code>TheoH     = TempsReglage + TempsPoste × QuantiteLancee   (LCTC + LCTE, en heures)
+ConsommeH = SUM(ETEMPS.DureeExecution + DureeReglage + DureeCalage)   /* SILOG, déjà intégré */
+          + SUM(ABTEMPS.ProductiveDuration / 60)   /* tablette, StatutTraitement NOT IN ('T','D') */
+RestantH  = TheoH - ConsommeH</code></pre>
+
+        <h3>Tables SQL</h3>
+        <table>
+          <tr><th>Base</th><th>Table / vue</th><th>Rôle</th></tr>
+          <tr>
+            <td><code>SEDI_ERP</code></td>
+            <td><code>LCTC</code></td>
+            <td>Gamme : <code>TempsPoste</code>, <code>TempsReglage</code>, Phase, CodeRubrique (<code>TypeRubrique='O'</code>)</td>
+          </tr>
+          <tr>
+            <td><code>SEDI_ERP</code></td>
+            <td><code>LCTE</code></td>
+            <td><code>QuantiteLancee</code> du LT</td>
+          </tr>
+          <tr>
+            <td><code>SEDI_ERP</code></td>
+            <td><code>ETEMPS</code></td>
+            <td>Temps déjà scannés / intégrés SILOG (jointure Phase + CodePoste = CodeRubrique)</td>
+          </tr>
+          <tr>
+            <td><code>SEDI_APP_INDEPENDANTE</code></td>
+            <td><code>ABTEMPS_OPERATEURS</code></td>
+            <td>Pointages tablette en attente de validation / transfert (minutes → heures)</td>
+          </tr>
+        </table>
+
+        <h3>Exemple de réponse API</h3>
+        <pre><code>GET /api/operators/steps/LT2600888
+{
+  "success": true,
+  "steps": [ ... ],
+  "tempsRestant": {
+    "lancementCode": "LT2600888",
+    "quantiteLancee": 120,
+    "total": {
+      "theoH": 8.5,
+      "consommeH": 4.18,
+      "restantH": 4.32,
+      "restantMinutes": 259,
+      "avancementPct": 49.2
+    },
+    "byStepId": {
+      "010|Connect": { "theoH": 4.32, "restantH": 4.32, ... }
+    },
+    "etapes": [ ... ]
+  }
+}</code></pre>
+        <p class="note">
+          <code>UniteTxAffectation</code> sur LCTC : si unité en minutes (<code>M</code>, <code>MIN</code>),
+          conversion automatique en heures côté service.
+        </p>
+      </article>
+
+      <article id="silog">
+        <h2>Pipeline SILOG</h2>
+        <ol>
+          <li>Opérateur <strong>stop</strong> → ligne dans <code>ABHISTORIQUE_OPERATEURS</code>, consolidation vers table temps ERP.</li>
+          <li>Admin valide → <code>StatutTraitement</code> passe à <code>O</code> (visible via <code>V_REMONTE_TEMPS</code>).</li>
+          <li>Job SILOG / EDI sur Windows (<code>SVC_SILOG</code>) : tâche planifiée <strong>toutes les 2 h</strong>.</li>
+          <li>Marquage <code>T</code> (transmis) retire la ligne du dashboard admin.</li>
+        </ol>
+
+        <h3>Mode distant (<code>SILOG_REMOTE_MODE</code>)</h3>
+        <table>
+          <tr><th>Valeur</th><th>Comportement</th></tr>
+          <tr>
+            <td><code>scheduled</code> (défaut prod)</td>
+            <td>Pas de déclenchement SSH depuis le backend. Tâche planifiée Windows sur <code>SVC_SILOG</code> (toutes les 2 h).</td>
+          </tr>
+          <tr>
+            <td>autre (ex. direct)</td>
+            <td>Backend peut appeler <code>EdiJobService</code> après validation batch.</td>
+          </tr>
+        </table>
+        <p>
+          Corps typique du transfert admin :
+        </p>
+        <pre><code>POST /api/admin/monitoring/validate-and-transmit-batch
+{
+  "tempsIds": [376, 377],
+  "triggerEdiJob": true,
+  "adminMarkTransmitted": false
+}</code></pre>
+        <p>
+          En mode <code>scheduled</code>, <code>adminMarkTransmitted: true</code> force le marquage
+          <code>T</code> côté admin sans attendre l'EDI.
+        </p>
+      </article>
+
+      <article id="cron">
+        <h2>Tâches planifiées (server.js)</h2>
+        <p>Timers Node au démarrage du backend — pas de crontab Linux séparée pour ces jobs.</p>
+        <table>
+          <tr><th>Job</th><th>Variable</th><th>Défaut</th></tr>
+          <tr><td>Clôture opérations ouvertes</td><td><code>ENABLE_AUTO_CLOSE_OPS</code></td><td>19h</td></tr>
+          <tr><td>Validation auto temps (NULL → O)</td><td><code>ENABLE_AUTO_VALIDATE_TEMPS</code></td><td>20h</td></tr>
+          <tr><td>Clôture dashboard (jours passés)</td><td><code>ENABLE_MIDNIGHT_TRANSMIT_DASHBOARD</code></td><td>00:05</td></tr>
+          <tr><td>Sync Factorial + auto-close</td><td><code>ENABLE_FACTORIAL_AUTOCLOSE</code></td><td>≥17h, /30 min</td></tr>
+          <tr><td>Fermeture sessions minuit</td><td>(interne)</td><td>00:00</td></tr>
+          <tr><td>Nettoyage au boot</td><td><code>DISABLE_STARTUP_CLEANUP</code></td><td>désactivé en prod compose</td></tr>
+        </table>
+        <p>
+          Watchdog externe : <code>backend/scripts/proactive-watchdog.js</code>,
+          systemd <code>docker/systemd/sedi-watchdog.service</code>.
+        </p>
+      </article>
+
+      <article id="sql">
+        <h2>Bases SQL</h2>
+        <table>
+          <tr><th>Base</th><th>Usage</th></tr>
+          <tr><td><code>SEDI_APP_INDEPENDANTE</code></td><td>Sessions, historique opérateurs, commentaires</td></tr>
+          <tr><td><code>SEDI_ERP</code></td><td>Vues lancements, <code>abetemps</code>, pipeline SILOG</td></tr>
+          <tr><td><code>SEDI_TESTS</code></td><td>Environnement test (Jenkins)</td></tr>
+        </table>
+        <p>
+          Config : <code>backend/config/database.js</code>.
+          Migrations : <code>backend/sql/</code>, scripts <code>executeAllMigrations.js</code>.
+        </p>
+        <p>
+          Résolution hôte SQL dans Docker :
+          <code>extra_hosts: SERVEURERP:${DB_SERVER_IP}</code> dans le compose prod.
+        </p>
+      </article>
+
+      <article id="docker">
+        <h2>Docker &amp; déploiement</h2>
+
+        <h3>Prod (serveurproduction)</h3>
+        <pre><code>cd /home/Tablette-FSOP/docker
+cp .env.example .env   # si première fois, puis éditer
+./deploy.sh</code></pre>
+        <p>
+          <code>deploy.sh</code> : down compose, rebuild images, up prod + monitoring,
+          vérifie le réseau <code>sedi-tablette-network</code>.
+        </p>
+
+        <h3>Rebuild manuel</h3>
+        <pre><code>docker build -t docker-sedi-backend:latest -f docker/Dockerfile.backend .
+docker build -t docker-sedi-frontend:latest -f docker/Dockerfile.frontend .
+docker compose -p sedi-tablette -f docker/docker-compose.production.yml up -d</code></pre>
+
+        <h3>Doc statique</h3>
+        <p>
+          <code>Dockerfile.frontend</code> copie <code>docs/web/</code> →
+          <code>/usr/share/nginx/html/docs/</code>.
+          Routes Nginx : <code>/docs</code> → redirect, <code>/docs/</code> → fichiers statiques
+          (<code>docker/nginx.conf</code>).
+        </p>
+        <p>URLs après rebuild front : <code>/docs/</code>, <code>/docs/dev.html</code>.</p>
+
+        <h3>Services systemd (hôte)</h3>
+        <ul>
+          <li><code>sedi-tablette.service</code> — stack principale</li>
+          <li><code>sedi-backend-health.timer</code> — sonde API</li>
+          <li><code>sedi-cifs-ensure.timer</code> — montages partages FSOP</li>
+          <li><code>sedi-backup.timer</code> — sauvegardes</li>
+        </ul>
+      </article>
+
+      <article id="ci">
+        <h2>Jenkins &amp; Sonar</h2>
+        <p>Serveur : <a href="http://192.168.1.26:8085" target="_blank" rel="noopener">http://192.168.1.26:8085</a></p>
+
+        <h3>Pipeline (<code>Jenkinsfile</code>)</h3>
+        <ol>
+          <li>Checkout</li>
+          <li>Backend : <code>npm ci</code> + tests Vitest coverage</li>
+          <li>Backend lint (non bloquant → unstable)</li>
+          <li>Frontend : <code>npm ci</code> + tests + coverage Sonar</li>
+          <li>SonarQube (<code>sedi-sonar</code>, projet <code>tablette-fsop</code>)</li>
+          <li>Quality Gate (bloquant)</li>
+          <li>Build images <code>:test</code></li>
+          <li>Deploy test (<code>deploy-test.sh</code>, branches main/master/feature/*)</li>
+          <li>Smoke <code>http://127.0.0.1:8088/api/health</code></li>
+        </ol>
+        <p>
+          Params : <code>SKIP_SONAR</code>, <code>SKIP_DEPLOY</code>.
+          Sonar : <a href="http://192.168.1.26:9000" target="_blank" rel="noopener">http://192.168.1.26:9000</a>
+        </p>
+
+        <h3>Tests locaux (même commandes que CI)</h3>
+        <pre><code>cd backend && npm ci && npm run test:vitest:run -- --coverage
+cd frontend && npm ci && npm run test:run && npm run test:coverage:sonar</code></pre>
+      </article>
+
+      <article id="terraform">
+        <h2>Terraform / Ansible</h2>
+        <p>
+          Phase 1 : inventaire uniquement (<code>terraform/</code>).
+          Pas de création VM. Génère
+          <code>ansible/inventories/generated/fsop.yml</code>.
+        </p>
+        <pre><code>cd terraform
+cp terraform.tfvars.example terraform.tfvars
+terraform init -backend-config=backend.local.hcl
+terraform apply
+
+cd ../ansible
+ansible-playbook -i inventories/generated/fsop.yml playbooks/silog-runner-prereqs.yml</code></pre>
+        <table>
+          <tr><th>Hôte</th><th>Rôle</th></tr>
+          <tr><td><code>prod</code></td><td>FSOP prod (192.168.1.26)</td></tr>
+          <tr><td><code>test</code></td><td>Compose test :8088</td></tr>
+          <tr><td><code>ci</code></td><td>Jenkins :8085, Sonar :9000</td></tr>
+          <tr><td><code>silog</code></td><td>Runner Windows EDI (<code>SVC_SILOG</code>)</td></tr>
+        </table>
+        <p class="note">
+          Secrets Ansible (WinRM) : variables d'environnement, jamais dans Terraform.
+        </p>
+      </article>
+
+      <article id="devlocal">
+        <h2>Dev local</h2>
+
+        <h3>Backend</h3>
+        <pre><code>cd backend
+cp .env.example .env   # ajuster DB_*
+npm install
+npm run dev            # nodemon, port 3033 si NODE_ENV=development</code></pre>
+
+        <h3>Frontend</h3>
+        <pre><code>cd frontend
+npm install
+npm run dev            # http-server :8080</code></pre>
+        <p>
+          Le front appelle l'API en relatif <code>/api/...</code> — en local, configurer un proxy
+          ou pointer <code>ApiService</code> vers <code>http://localhost:3001</code> / 3033.
+        </p>
+
+        <h3>Docker dev</h3>
+        <pre><code>docker compose -f docker/docker-compose.dev.yml up</code></pre>
+
+        <h3>Debug utile</h3>
+        <ul>
+          <li><code>GET /api/admin/silog-pipeline-status</code> — état remontée</li>
+          <li><code>GET /api/admin/diagnostic-temps</code> — anomalies temps</li>
+          <li>Routes <code>/api/admin/debug/*</code> — bloquées sauf <code>ALLOW_DEBUG_ROUTES=true</code></li>
+          <li>Logs backend : <code>backend/logs/</code> ou volume Docker</li>
+        </ul>
+      </article>
+
+      <footer class="page-foot">
+        Doc technique FSOP — <a href="index.html">version utilisateur</a> · sources dans <code>docs/web/</code>
+      </footer>
+    </main>
+  </div>
+
+  <script src="js/docs.js"></script>
+</body>
+</html>

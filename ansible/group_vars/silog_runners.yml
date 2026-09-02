@@ -1,0 +1,35 @@
+---
+# Variables runner SILOG — prérequis FSOP (hors déclenchement runtime)
+# Le runtime au clic reste: backend Docker SILOG_REMOTE_MODE=ssh
+
+silog_exe_path: 'C:\SILOG8\SILOG.exe'
+silog_workdir: 'C:\SILOG8'
+# Variante UNC Franck (si installée en partage) :
+# silog_exe_path: '\\SERVEURERP\SILOG8\SILOG.exe'
+# silog_workdir: '\\SERVEURERP\SILOG8'
+
+silog_db: SEDI_ERP
+silog_user: Production8
+silog_lang: fr_fr
+silog_entrypoint: EDI_JOB
+silog_task_code: SEDI_ETDIFF
+silog_mode: COMPACT
+
+# Compte Windows qui reçoit la clé publique FSOP (SSH)
+silog_ssh_windows_user: maintenance
+
+# Clé publique du serveur tablette (à coller ou via fichier)
+# Exemple: contenu de /home/maintenance/.ssh/id_ed25519.pub
+silog_ssh_public_key: "{{ lookup('env', 'SILOG_SSH_PUBLIC_KEY') | default('', true) }}"
+silog_ssh_public_key_file: "{{ lookup('env', 'SILOG_SSH_PUBLIC_KEY_FILE') | default('', true) }}"
+
+# Installer / démarrer OpenSSH Server
+silog_ensure_openssh: true
+
+# Créer la tâche planifiée filet (toutes les 2h) — ne remplace pas le clic Transfert
+silog_ensure_scheduled_task: true
+silog_scheduled_task_name: FSOP_SEDI_ETDIFF
+silog_scheduled_task_hours: 2
+
+# Mot de passe SILOG (-p) : laisser vide si Franck utilise -p sans valeur
+silog_password: "{{ lookup('env', 'SILOG_PASSWORD') | default('', true) }}"

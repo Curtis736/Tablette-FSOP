@@ -298,6 +298,11 @@ body {
     padding-right: 140px;
 }
 
+/* Sans bouton caméra (HTTP) : espace uniquement pour FSOP */
+.input-group.with-scanner.with-fsop.no-camera-btn input {
+    padding-right: 72px;
+}
+
 /* Bouton FSOP dans l'input (à gauche du bouton scanner) */
 .btn-fsop {
     position: absolute;
@@ -473,6 +478,16 @@ body {
     color: #667eea;
 }
 
+.session-presence {
+    font-size: 0.95rem;
+    font-weight: 600;
+    color: #4a4a4a;
+    background: #f3f5ff;
+    border: 1px solid #dfe5ff;
+    border-radius: 999px;
+    padding: 0.2rem 0.7rem;
+}
+
 /* Contenu principal */
 .main-content {
     flex: 1;
@@ -568,6 +583,37 @@ body {
     font-size: 0.95rem;
 }
 
+.temps-restant-block {
+    margin-top: 0.85rem;
+    padding-top: 0.85rem;
+    border-top: 1px solid #e2e5e9;
+    display: flex;
+    flex-direction: column;
+    gap: 0.35rem;
+}
+
+.temps-restant-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    gap: 1rem;
+}
+
+.temps-restant-label {
+    color: #666;
+    font-size: 0.9rem;
+}
+
+.temps-restant-value {
+    font-variant-numeric: tabular-nums;
+    font-weight: 600;
+    color: #1f2937;
+}
+
+.temps-restant-value.temps-restant-overrun {
+    color: #b45309;
+}
+
 /* Contrôles */
 .controls-row {
     display: flex;
@@ -607,6 +653,11 @@ body {
     font-weight: 700;
     color: #667eea;
     font-family: 'Courier New', monospace;
+    font-variant-numeric: tabular-nums;
+}
+
+.end-time-value.temps-restant-overrun {
+    color: #b45309;
 }
 
 /* Timer */
@@ -630,6 +681,53 @@ body {
     color: #666;
     font-weight: 500;
 }
+
+.shift-progress {
+    margin-top: 1rem;
+    display: grid;
+    grid-template-columns: repeat(2, minmax(180px, 1fr));
+    gap: 0.75rem;
+}
+
+.shift-counter-section {
+    margin-top: 1rem;
+}
+
+.shift-progress-item {
+    background: #ffffff;
+    border: 1px solid #e9ecef;
+    border-radius: 10px;
+    padding: 0.75rem;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+}
+
+.shift-progress-label {
+    font-size: 0.85rem;
+    color: #6c757d;
+    margin-bottom: 0.35rem;
+}
+
+.shift-progress-value {
+    font-size: 1.1rem;
+    color: #495057;
+    font-weight: 700;
+    font-family: 'Courier New', monospace;
+}
+
+.shift-progress-value.shift-remaining {
+    color: #dc3545;
+}
+
+.shift-progress-value.shift-remaining.shift-target-reached {
+    color: #198754;
+}
+
+.shift-progress-value.shift-remaining.shift-target-pending {
+    color: #dc3545;
+}
+
 
 /* Interface Admin */
 .admin-controls {
@@ -963,6 +1061,10 @@ tr:hover {
     
     .timer-display {
         font-size: 2rem;
+    }
+
+    .shift-progress {
+        grid-template-columns: 1fr;
     }
 }
 
@@ -1338,6 +1440,37 @@ tr:hover {
     justify-content: center;
     min-width: 36px;
     min-height: 36px;
+}
+
+/* Ligne déjà transmise à SILOG (StatutTraitement = T) : grisée, lecture seule */
+#operationsTable tbody tr.row-transmitted {
+    background-color: #e9ecef !important;
+    color: #6c757d;
+    opacity: 0.85;
+}
+
+#operationsTable tbody tr.row-transmitted:hover {
+    background-color: #dee2e6 !important;
+}
+
+#operationsTable tbody tr.row-transmitted td {
+    color: #6c757d;
+}
+
+#operationsTable tbody tr.row-transmitted .status-badge.status-T {
+    background-color: #6c757d;
+    color: #fff;
+}
+
+/* Ligne déjà transmise à SILOG : indicateur verrouillé (pas d'action possible) */
+.actions-cell .transmitted-lock {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    color: #6c757d;
+    font-size: 12px;
+    font-style: italic;
+    white-space: nowrap;
 }
 
 /* Améliorations spécifiques tablettes */
@@ -2325,6 +2458,45 @@ tr:hover {
 }
 
 .fsop-operator-other-input:focus {
+    outline: none;
+    border-color: #667eea;
+    box-shadow: 0 0 0 2px rgba(102, 126, 234, 0.2);
+}
+
+/* Lot dropdown (2+ codes lot pour le même article) — même pattern que opérateurs */
+.fsop-lot-cell {
+    width: 100%;
+    position: relative;
+}
+
+.fsop-lot-select {
+    width: 100%;
+    border: 1px solid #ccc;
+    border-radius: 4px;
+    padding: 4px 8px;
+    background: #fff;
+    font-size: 13px;
+    cursor: pointer;
+    min-height: 28px;
+}
+
+.fsop-lot-select:focus {
+    outline: none;
+    border-color: #667eea;
+    box-shadow: 0 0 0 2px rgba(102, 126, 234, 0.2);
+}
+
+.fsop-lot-other-input {
+    width: 100%;
+    border: 1px solid #ccc;
+    border-radius: 4px;
+    padding: 4px 8px;
+    background: #fff;
+    font-size: 13px;
+    min-height: 28px;
+}
+
+.fsop-lot-other-input:focus {
     outline: none;
     border-color: #667eea;
     box-shadow: 0 0 0 2px rgba(102, 126, 234, 0.2);
@@ -3332,4 +3504,17 @@ tr:hover {
         min-width: 48px;
         min-height: 48px;
     }
+}
+
+/* Accessibilité — labels associés aux champs (Sonar Web:InputWithoutLabelCheck) */
+.visually-hidden {
+    position: absolute !important;
+    width: 1px !important;
+    height: 1px !important;
+    padding: 0 !important;
+    margin: -1px !important;
+    overflow: hidden !important;
+    clip: rect(0, 0, 0, 0) !important;
+    white-space: nowrap !important;
+    border: 0 !important;
 }

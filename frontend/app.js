@@ -1,6 +1,7 @@
 // Classe principale de l'application
 import OperateurInterface from './OperateurInterface.js';
 import AdminPage from './AdminPage.js';
+import { getLocalDevApiBase } from '../utils/DevBackendUrl.js';
 
 class App {
     constructor() {
@@ -52,7 +53,10 @@ class App {
         
         try {
             this.showLoading(true);
-            const response = await fetch(`${this.getApiBaseUrl()}/operators/${operatorCode}`);
+            const response = await fetch(`${this.getApiBaseUrl()}/operators/${operatorCode}`, {
+                cache: 'no-store',
+                headers: { Accept: 'application/json' }
+            });
             
             if (response.ok) {
                 const operator = await response.json();
@@ -124,7 +128,7 @@ class App {
         const isLocalDev = (currentHost === 'localhost' || currentHost === '127.0.0.1') && currentPort === '8080';
         
         if (isLocalDev) {
-            return 'http://localhost:3033/api';
+            return getLocalDevApiBase();
         } else {
             return `${window.location.protocol}//${window.location.host}/api`;
         }
