@@ -3,17 +3,16 @@
  */
 
 const sql = require('mssql');
+const { loadProductionConfig, resolveDbCredentials } = require('../utils/sqlScriptEnv');
 
-let productionConfig = null;
-try {
-    productionConfig = require('../config-production');
-} catch (error) {}
+const productionConfig = loadProductionConfig();
+const { user, password } = resolveDbCredentials(productionConfig, { erp: true });
 
 const erpConfig = {
-    server: productionConfig?.DB_ERP_SERVER || process.env.DB_ERP_SERVER || '192.168.1.14',
+    server: productionConfig?.DB_ERP_SERVER || process.env.DB_ERP_SERVER || process.env.DB_SERVER,
     database: productionConfig?.DB_ERP_DATABASE || process.env.DB_ERP_DATABASE || 'SEDI_ERP',
-    user: productionConfig?.DB_ERP_USER || process.env.DB_ERP_USER || 'QUALITE',
-    password: productionConfig?.DB_ERP_PASSWORD || process.env.DB_ERP_PASSWORD || 'QUALITE',
+    user,
+    password,
     options: {
         encrypt: false,
         trustServerCertificate: true,

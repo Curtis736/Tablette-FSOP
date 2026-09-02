@@ -9,6 +9,7 @@ frontend/node_modules/
 .env.development.local
 .env.test.local
 .env.production.local
+backend/config-email-simple.env
 
 # VM local overrides (keep examples committed, keep local copies untracked)
 docker/env.vm.local

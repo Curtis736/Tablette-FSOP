@@ -6,11 +6,16 @@ Write-Host "Execution de toutes les migrations SQL" -ForegroundColor Cyan
 Write-Host "========================================" -ForegroundColor Cyan
 Write-Host ""
 
-# Configuration depuis config-production.js
-$Server = "192.168.1.14"
-$Database = "SEDI_APP_INDEPENDANTE"
-$User = "QUALITE"
-$Password = "QUALITE"
+# Configuration depuis variables d'environnement (ne jamais committer de mot de passe)
+$Server = if ($env:DB_SERVER) { $env:DB_SERVER } else { "192.168.1.14" }
+$Database = if ($env:DB_DATABASE) { $env:DB_DATABASE } else { "SEDI_APP_INDEPENDANTE" }
+$User = $env:DB_USER
+$Password = $env:DB_PASSWORD
+
+if (-not $User -or -not $Password) {
+    Write-Host "ERREUR: definir DB_USER et DB_PASSWORD avant d'executer ce script" -ForegroundColor Red
+    exit 1
+}
 
 Write-Host "Serveur: $Server" -ForegroundColor Yellow
 Write-Host "Base de donnees: $Database" -ForegroundColor Yellow
