@@ -7,12 +7,15 @@
 
 const sql = require('mssql');
 require('dotenv').config();
+const { resolveDbCredentials } = require('../utils/sqlScriptEnv');
+
+const { user, password } = resolveDbCredentials(null);
 
 const config = {
     server: process.env.DB_SERVER || 'SERVEURERP',
     database: 'SEDI_APP_INDEPENDANTE', // Forcer la base SEDI_APP_INDEPENDANTE
-    user: process.env.DB_USER || 'QUALITE',
-    password: process.env.DB_PASSWORD || 'QUALITE',
+    user,
+    password,
     options: {
         encrypt: process.env.DB_ENCRYPT === 'true',
         trustServerCertificate: process.env.DB_TRUST_CERT === 'true'

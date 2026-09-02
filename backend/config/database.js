@@ -42,8 +42,8 @@ try {
 const config = {
     server: productionConfig?.DB_SERVER || process.env.DB_SERVER,
     database: productionConfig?.DB_DATABASE || process.env.DB_DATABASE || 'SEDI_APP_INDEPENDANTE',
-    user: productionConfig?.DB_USER || process.env.DB_USER || 'QUALITE',
-    password: productionConfig?.DB_PASSWORD || process.env.DB_PASSWORD || 'QUALITE',
+    user: productionConfig?.DB_USER || process.env.DB_USER,
+    password: productionConfig?.DB_PASSWORD || process.env.DB_PASSWORD,
     options: {
         encrypt: productionConfig?.DB_ENCRYPT || process.env.DB_ENCRYPT === 'true' || false,
         trustServerCertificate: productionConfig?.DB_TRUST_CERT || process.env.DB_TRUST_CERT === 'true' || true,
@@ -67,7 +67,9 @@ const config = {
 // En production, ne jamais démarrer avec des secrets "par défaut"
 if (process.env.NODE_ENV === 'production') {
     const missing = [];
+    if (!process.env.DB_USER && !productionConfig?.DB_USER) missing.push('DB_USER');
     if (!process.env.DB_PASSWORD && !productionConfig?.DB_PASSWORD) missing.push('DB_PASSWORD');
+    if (!process.env.DB_ERP_USER && !productionConfig?.DB_ERP_USER) missing.push('DB_ERP_USER');
     if (!process.env.DB_ERP_PASSWORD && !productionConfig?.DB_ERP_PASSWORD) missing.push('DB_ERP_PASSWORD');
     if (!process.env.JWT_SECRET || process.env.JWT_SECRET === 'change-me-in-production') missing.push('JWT_SECRET');
     if (missing.length) {
@@ -87,8 +89,8 @@ console.log('🔧 Configuration finale de la base de données:', {
 const erpConfig = {
     server: productionConfig?.DB_ERP_SERVER || process.env.DB_ERP_SERVER,
     database: productionConfig?.DB_ERP_DATABASE || process.env.DB_ERP_DATABASE || 'SEDI_ERP',
-    user: productionConfig?.DB_ERP_USER || process.env.DB_ERP_USER || 'QUALITE',
-    password: productionConfig?.DB_ERP_PASSWORD || process.env.DB_ERP_PASSWORD || 'QUALITE',
+    user: productionConfig?.DB_ERP_USER || process.env.DB_ERP_USER,
+    password: productionConfig?.DB_ERP_PASSWORD || process.env.DB_ERP_PASSWORD,
     options: {
         encrypt: productionConfig?.DB_ERP_ENCRYPT || process.env.DB_ERP_ENCRYPT === 'true' || false,
         trustServerCertificate: productionConfig?.DB_ERP_TRUST_CERT || process.env.DB_ERP_TRUST_CERT === 'true' || true,

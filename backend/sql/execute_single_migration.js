@@ -4,28 +4,26 @@
  */
 
 const { splitSqlBatches, isMeaningfulBatch } = require('../utils/sqlBatchUtils');
+const { loadProductionConfig, resolveDbCredentials } = require('../utils/sqlScriptEnv');
 const fs = require('fs');
 const path = require('path');
 const sql = require('mssql');
 
-// Charger la configuration de production si disponible
-let productionConfig = null;
-try {
-    productionConfig = require('../config-production');
+const productionConfig = loadProductionConfig();
+if (productionConfig) {
     console.log('✅ Configuration de production chargée');
-} catch (error) {
-    if (error.code !== 'MODULE_NOT_FOUND') {
-        throw error;
-    }
+} else {
     console.log('📝 Utilisation des variables d\'environnement');
 }
+
+const { user, password } = resolveDbCredentials(productionConfig);
 
 // Configuration de la base de données
 const config = {
     server: productionConfig?.DB_SERVER || process.env.DB_SERVER,
     database: productionConfig?.DB_DATABASE || process.env.DB_DATABASE || 'SEDI_APP_INDEPENDANTE',
-    user: productionConfig?.DB_USER || process.env.DB_USER || 'QUALITE',
-    password: productionConfig?.DB_PASSWORD || process.env.DB_PASSWORD || 'QUALITE',
+    user,
+    password,
     options: {
         encrypt: productionConfig?.DB_ENCRYPT || process.env.DB_ENCRYPT === 'true' || false,
         trustServerCertificate: productionConfig?.DB_TRUST_CERT || process.env.DB_TRUST_CERT === 'true' || true,

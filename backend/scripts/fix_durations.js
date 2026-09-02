@@ -4,13 +4,15 @@
  */
 
 const sql = require('mssql');
+const { resolveDbCredentials } = require('../utils/sqlScriptEnv');
 
-// Configuration de la base de données depuis les variables d'environnement
+const { user, password } = resolveDbCredentials(null);
+
 const dbConfig = {
     server: process.env.DB_SERVER || 'SERVEURERP',
     database: process.env.DB_DATABASE || 'SEDI_APP_INDEPENDANTE',
-    user: process.env.DB_USER || 'QUALITE',
-    password: process.env.DB_PASSWORD || 'QUALITE',
+    user,
+    password,
     options: {
         encrypt: process.env.DB_ENCRYPT === 'true',
         trustServerCertificate: process.env.DB_TRUST_CERT !== 'false',

@@ -8,11 +8,24 @@ echo Execution de toutes les migrations SQL
 echo ========================================
 echo.
 
-REM Configuration (à adapter selon votre environnement)
-set SERVER=192.168.1.14
-set DATABASE=SEDI_APP_INDEPENDANTE
-set USER=QUALITE
-set PASSWORD=QUALITE
+REM Configuration depuis variables d'environnement (definir DB_USER et DB_PASSWORD avant execution)
+if "%DB_SERVER%"=="" set SERVER=192.168.1.14
+if not "%DB_SERVER%"=="" set SERVER=%DB_SERVER%
+if "%DB_DATABASE%"=="" set DATABASE=SEDI_APP_INDEPENDANTE
+if not "%DB_DATABASE%"=="" set DATABASE=%DB_DATABASE%
+set USER=%DB_USER%
+set PASSWORD=%DB_PASSWORD%
+
+if "%USER%"=="" (
+    echo ERREUR: definir DB_USER et DB_PASSWORD avant d'executer ce script
+    pause
+    exit /b 1
+)
+if "%PASSWORD%"=="" (
+    echo ERREUR: definir DB_PASSWORD avant d'executer ce script
+    pause
+    exit /b 1
+)
 
 echo Serveur: %SERVER%
 echo Base de donnees: %DATABASE%

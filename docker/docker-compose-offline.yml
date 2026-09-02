@@ -10,8 +10,8 @@ services:
       - PORT=3001
       - DB_SERVER=SERVEURERP
       - DB_DATABASE=SEDI_ERP
-      - DB_USER=QUALITE
-      - DB_PASSWORD=QUALITE
+      - DB_USER=${DB_USER}
+      - DB_PASSWORD=${DB_PASSWORD}
       - DB_ENCRYPT=false
       - DB_TRUST_CERT=true
       - FRONTEND_URL=http://localhost
