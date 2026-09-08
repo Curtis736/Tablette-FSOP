@@ -1,7 +1,7 @@
 // Interface simplifiée pour les opérateurs - v20260309-no-cache-issues
 import TimeUtils from '../utils/TimeUtils.js';
 import ScannerManager from '../utils/ScannerManager.js?v=20260706.1';
-import FsopForm from './FsopForm.js?v=20260908.5';
+import FsopForm from './FsopForm.js?v=20260908.6';
 import Logger from '../utils/Logger.js?v=20260512.1';
 
 class OperateurInterface {
