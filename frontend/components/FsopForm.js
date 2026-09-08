@@ -1,8 +1,8 @@
 /**
  * Composant pour afficher et remplir un formulaire FSOP de manière interactive
  */
-import { collectLotsForVoieCell, collectLotsForLotCell, normalizeFsopLotKey, parseSavedVoies, parseSavedEtiquettes, cellHasEtiquetteSplit } from './fsopForm/lotMatching.js?v=20260908.2';
-import { loadStructure } from './fsopForm/loadStructure.js?v=20260908.2';
+import { collectLotsForVoieCell, collectLotsForLotCell, normalizeFsopLotKey, parseSavedVoies, parseSavedEtiquettes, cellHasEtiquetteSplit } from './fsopForm/lotMatching.js?v=20260908.3';
+import { loadStructure } from './fsopForm/loadStructure.js?v=20260908.3';
 const CHECKBOX_LINE_RE = /^([☐☑✓□]|\[[ x]\])[\t ]+(\S[\s\S]{0,400})$/i;
 const UNIT_SPEC_RE = /\d{1,8}[\t ](?:h|min|°C|°F)/i;
 const STEP_NUMBER_PREFIX_RE = /^(\d{1,2}(?:[a-z])?)[ \t]*[-–.][ \t]*/i;
@@ -70,8 +70,96 @@ class FsopForm {
 
         let html = '<div class="fsop-form-container">';
         
-        // Identity header (logo / N° cordon / SILOG / lancement / désignation) intentionally omitted.
+        // Render header with logo, title, and fields (like in the Word document)
         html += '<div class="fsop-header-section">';
+        
+        // Header top row: Logo, Title, N° cordon
+        html += '<div class="fsop-header-top">';
+        
+        // Logo (left)
+        html += '<div class="fsop-header-logo">';
+        html += '<div class="fsop-logo-text">SEDI<span class="fsop-logo-dot">•</span>ATI</div>';
+        html += '<div class="fsop-logo-subtitle">by Fiber Optics Group</div>';
+        html += '</div>';
+        
+        // Title (center)
+        const documentTitle = this.structure.documentTitle || this.structure.metadata?.source?.replace(/\.docx$/i, '') || 'Formulaire FSOP';
+        html += `<div class="fsop-header-title">${this.escapeHtml(documentTitle)}</div>`;
+        
+        // N° cordon field (right) - separate from other header fields
+        const cordonField = this.structure.headerFields?.find(f => f.key === 'NUMERO_CORDON');
+        if (cordonField) {
+            const cordonValue = this.formData.placeholders[cordonField.placeholder] || 
+                               this.formData.placeholders[cordonField.key] || 
+                               initialData.placeholders?.[cordonField.placeholder] || 
+                               initialData.placeholders?.[cordonField.key] || '';
+            html += `
+                <div class="fsop-header-cordon">
+                    <label for="header_${cordonField.key}">${this.escapeHtml(cordonField.label)}</label>
+                    <input 
+                        type="text" 
+                        id="header_${cordonField.key}" 
+                        data-placeholder="${cordonField.placeholder || cordonField.key}"
+                        value="${this.escapeHtml(cordonValue)}"
+                        class="fsop-input fsop-header-input fsop-cordon-input"
+                    />
+                </div>
+            `;
+        }
+        
+        html += '</div>'; // End header-top
+        
+        // Header bottom: Numéro lancement and Référence SILOG in a box
+        const otherHeaderFields = this.structure.headerFields?.filter(f => f.key !== 'NUMERO_CORDON') || [];
+        if (otherHeaderFields.length > 0) {
+            html += '<div class="fsop-header-box">';
+            
+            otherHeaderFields.forEach(field => {
+                const fieldKey = field.placeholder || field.key;
+                let value = '';
+                if (field.key === 'NUMERO_LANCEMENT') {
+                    value = this.formData.placeholders['{{LT}}'] || 
+                           this.formData.placeholders[field.placeholder] || 
+                           this.formData.placeholders[fieldKey] || 
+                           initialData.placeholders?.['{{LT}}'] ||
+                           initialData.placeholders?.[field.placeholder] || 
+                           initialData.placeholders?.[fieldKey] || 
+                           initialData.launchNumber || '';
+                } else if (field.key === 'REFERENCE_SILOG' || field.key === 'NUMERO_SERIE' || 
+                           (field.label && (field.label.includes('S/N') || field.label.includes('Série') || field.label.includes('SN')))) {
+                    value = this.formData.placeholders['{{SN}}'] || 
+                           this.formData.placeholders[field.placeholder] || 
+                           this.formData.placeholders[fieldKey] || 
+                           initialData.placeholders?.['{{SN}}'] ||
+                           initialData.placeholders?.[field.placeholder] || 
+                           initialData.placeholders?.[fieldKey] ||
+                           initialData.serialNumber || '';
+                } else {
+                    value = this.formData.placeholders[field.placeholder] || 
+                           this.formData.placeholders[fieldKey] || 
+                           initialData.placeholders?.[field.placeholder] || 
+                           initialData.placeholders?.[fieldKey] || '';
+                }
+                
+                html += `
+                    <div class="fsop-header-box-field">
+                        <label for="header_${field.key}">${this.escapeHtml(field.label)}</label>
+                        <input 
+                            type="text" 
+                            id="header_${field.key}" 
+                            data-placeholder="${field.placeholder || field.key}"
+                            data-field-key="${field.key}"
+                            value="${this.escapeHtml(value)}"
+                            class="fsop-input fsop-header-box-input"
+                        />
+                    </div>
+                `;
+            });
+            
+            html += '</div>'; // End header-box
+        }
+        
+        // Add reference field for Excel transfer
         html += '<div class="fsop-reference-section">';
         html += '<label for="fsop_reference">Référence (pour transfert Excel):</label>';
         html += `<input 
@@ -83,6 +171,7 @@ class FsopForm {
         />`;
         html += '<small class="fsop-reference-hint">Cette référence sera utilisée pour trouver le fichier Excel de mesures</small>';
         html += '</div>';
+        
         html += '</div>'; // End header-section
         
         // Render placeholders (if any remain after header fields)
@@ -279,29 +368,6 @@ class FsopForm {
             `;
         };
 
-        const isIdentityHeaderTable = (rows) => {
-            const flat = (Array.isArray(rows) ? rows : [])
-                .flat()
-                .map((c) => String(c?.text || '').toLowerCase())
-                .join(' | ');
-            const hits = [
-                /num[eé]ro\s+de\s+cordon|n[°º]\s*cordon/i,
-                /r[eé]f[eé]rence\s+silog/i,
-                /num[eé]ro\s+lancement/i,
-                /d[eé]signation/i
-            ].filter((re) => re.test(flat)).length;
-            return hits >= 2;
-        };
-
-        const isSkippableHeaderParagraph = (text) => {
-            const t = String(text || '').trim();
-            if (!t) return false;
-            if (/^cordon\s+/i.test(t) && t.length <= 60) return true;
-            if (/^n[°º]\s*cordon\s*:?\s*$/i.test(t)) return true;
-            if (/^by\s+fiber\s+optics/i.test(t)) return true;
-            return false;
-        };
-
         const stripStepNumberPrefix = (text) => String(text || '').replace(STEP_NUMBER_PREFIX_RE, '').trim();
 
         const normalizeCellText = (t) => String(t || '').replace(/\s+/g, ' ').trim();
@@ -405,21 +471,27 @@ class FsopForm {
             return false;
         };
 
-        const renderTitleHtml = (titleText) => {
-            const clean = stripStepNumberPrefix(titleText) || String(titleText || '').trim();
+        const renderTitleHtml = (titleText, explicitNumber = '') => {
+            const raw = String(titleText || '').trim();
+            const stripped = stripStepNumberPrefix(raw);
+            const number = String(explicitNumber || '').trim() || (STEP_NUMBER_PREFIX_RE.exec(raw)?.[1] || '');
+            const clean = stripped || raw;
             const mo = extractMoFromText(clean);
             if (mo) currentCodeOperation = mo;
+            const numberHtml = number
+                ? `<span class="fsop-word-title-number">${this.escapeHtml(String(number))}.</span>`
+                : '';
             return `
                 <div class="fsop-word-title">
+                    ${numberHtml}
                     <span class="fsop-word-title-text">${renderTextWithInputs(clean)}</span>
                 </div>
             `;
         };
 
         const renderAutoNumberedTitle = (text) => {
-            // Keep counter for completeness checks, but never display step numbers.
             autoTitleCounter += 1;
-            return renderTitleHtml(text);
+            return renderTitleHtml(text, String(autoTitleCounter));
         };
 
         const extractMoFromText = (text) => {
@@ -448,11 +520,6 @@ class FsopForm {
             const safeRows = rows || [];
             if (safeRows.length === 0) {
                 return '<table class="fsop-word-table"></table>';
-            }
-
-            // Hide identity header (N° cordon / SILOG / lancement / désignation)
-            if (isIdentityHeaderTable(safeRows)) {
-                return '';
             }
 
             // Strict base-file fidelity:
@@ -1147,12 +1214,12 @@ class FsopForm {
                     const m = bannerText.match(/^(\d{1,2}(?:[a-z])?)[ \t]*[-–.][ \t]*(\S[^\n]{0,300})$/i);
                     if (m) {
                         bumpCounterFromExplicit(m[1]);
-                        t += renderTitleHtml(m[2]).replace('fsop-word-title', 'fsop-word-title fsop-word-title-from-table');
+                        t += renderTitleHtml(m[2], m[1]).replace('fsop-word-title', 'fsop-word-title fsop-word-title-from-table');
                     } else {
                         if (isMainStepTitleWithoutNumber(bannerText)) {
                             t += renderAutoNumberedTitle(bannerText).replace('fsop-word-title', 'fsop-word-title fsop-word-title-from-table');
                         } else {
-                            t += `<div class="fsop-word-subtitle fsop-word-subtitle-from-table">${renderTextWithInputs(stripStepNumberPrefix(bannerText) || bannerText)}</div>`;
+                            t += `<div class="fsop-word-subtitle fsop-word-subtitle-from-table">${renderTextWithInputs(bannerText)}</div>`;
                         }
                     }
                 });
@@ -1198,14 +1265,6 @@ class FsopForm {
                     return;
                 }
 
-                // Skip Word identity header paragraphs (Cordon OHA / N° cordon / logo subtitle)
-                if (isSkippableHeaderParagraph(text)) {
-                    return;
-                }
-                if (/^(num[eé]ro\s+de\s+cordon|n[°º]\s*cordon|r[eé]f[eé]rence\s+silog|num[eé]ro\s+lancement|d[eé]signation)\s*:?\s*$/i.test(text)) {
-                    return;
-                }
-
                 // Checkboxes MUST be detected before MO+ind subtitle heuristic
                 // (e.g. "☐ Test de flexion ... MO 1050 ind ___")
                 const checkboxHtml = renderCheckboxLine(text);
@@ -1214,20 +1273,20 @@ class FsopForm {
                     return;
                 }
 
-                // Titles / headings — never show step numbers (1-, 2-, …)
+                // Titles / headings with visible step numbers
                 const sectionTitleMatch = text.match(/^(\d{1,2}(?:[a-z])?)[ \t]*[-–.][ \t]*(\S[^\n]{0,300})$/i);
                 if (sectionTitleMatch) {
                     const n = sectionTitleMatch[1];
                     const title = sectionTitleMatch[2];
                     bumpCounterFromExplicit(n);
-                    html += renderTitleHtml(title);
+                    html += renderTitleHtml(title, n);
                     return;
                 }
                 // Strict base-file fidelity:
                 // do not auto-number headings that are not explicitly numbered in extracted text.
                 // But never treat checkbox-like / path report lines as non-interactive subtitles.
                 if ((/:\s*$/.test(text) && text.length <= 60) || (text.length <= 130 && /\bMO\s*\d{3,5}\b/i.test(text) && /\bind\b/i.test(text) && !FULL_PATH_HINT_RE.test(text))) {
-                    html += `<div class="fsop-word-subtitle">${renderTextWithInputs(stripStepNumberPrefix(text) || text)}</div>`;
+                    html += `<div class="fsop-word-subtitle">${renderTextWithInputs(text)}</div>`;
                     return;
                 }
 
@@ -1241,16 +1300,16 @@ class FsopForm {
         });
 
         html += '</div></div>';
-        // Completeness check: numbered titles in source vs rendered step titles (numbers are hidden in UI).
-        const renderedTitleCount = (html.match(/fsop-word-title\b/g) || []).length;
+        // Completeness check: numbered titles in source vs rendered step titles.
+        const renderedTitleCount = (html.match(/fsop-word-title-number/g) || []).length;
         if (sourceTitleCount > renderedTitleCount) {
-            console.warn('⚠️ FSOP incomplet potentiel: titres manquants', {
+            console.warn('⚠️ FSOP incomplet potentiel: titres numérotés manquants', {
                 sourceTitleCount,
                 renderedTitleCount,
                 missing: sourceTitleCount - renderedTitleCount
             });
         } else {
-            console.log('✅ FSOP complétude titres OK', { sourceTitleCount, renderedTitleCount });
+            console.log('✅ FSOP complétude titres numérotés OK', { sourceTitleCount, renderedTitleCount });
         }
         return html;
     }
@@ -1287,10 +1346,9 @@ class FsopForm {
         if (!displayTitle || displayTitle.trim() === '' || displayTitle.match(/^Section\s+\d+$/i)) {
             console.warn(`⚠️ Section ${section.id} has no title, using fallback`);
             displayTitle = section.id === 0 ? 'Général : Composant' : `Section ${section.id}`;
+        } else if (section.id !== 0 && !displayTitle.match(/^\d+/)) {
+            displayTitle = `${section.id}- ${displayTitle}`;
         }
-
-        // Never show leading step numbers ("1-", "2.", …)
-        displayTitle = String(displayTitle || '').replace(STEP_NUMBER_PREFIX_RE, '').trim() || displayTitle;
         
         // Always render the title, even if it's a fallback
         html += `<h3 class="fsop-section-title">${this.escapeHtml(displayTitle)}</h3>`;
