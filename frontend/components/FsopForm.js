@@ -1,8 +1,8 @@
 /**
  * Composant pour afficher et remplir un formulaire FSOP de manière interactive
  */
-import { collectLotsForVoieCell, collectLotsForLotCell, normalizeFsopLotKey, parseSavedVoies, parseSavedEtiquettes, cellHasEtiquetteSplit } from './fsopForm/lotMatching.js?v=20260908.4';
-import { loadStructure } from './fsopForm/loadStructure.js?v=20260908.4';
+import { collectLotsForVoieCell, collectLotsForLotCell, normalizeFsopLotKey, parseSavedVoies, parseSavedEtiquettes, cellHasEtiquetteSplit } from './fsopForm/lotMatching.js?v=20260908.5';
+import { loadStructure } from './fsopForm/loadStructure.js?v=20260908.5';
 const CHECKBOX_LINE_RE = /^([☐☑✓□]|\[[ x]\])[\t ]+(\S[\s\S]{0,400})$/i;
 const UNIT_SPEC_RE = /\d{1,8}[\t ](?:h|min|°C|°F)/i;
 const STEP_NUMBER_PREFIX_RE = /^(\d{1,2}(?:[a-z])?)[ \t]*[-–.][ \t]*/i;
@@ -125,6 +125,45 @@ class FsopForm {
     }
 
     /**
+     * Titre produit du FSOP (ex. "Cordon OHA"), jamais un libellé de champ ("cordon :").
+     */
+    resolveDocumentTitle() {
+        const badTitle = (t) => {
+            const s = String(t || '').trim();
+            if (!s) return true;
+            if (/^(n[°º]?\s*)?cordon\s*:?\s*$/i.test(s)) return true;
+            if (/num[eé]ro\s+(de\s+)?cordon/i.test(s) && s.length < 45) return true;
+            if (/^r[eé]f[eé]rence\s+silog/i.test(s)) return true;
+            return false;
+        };
+
+        const candidates = [];
+        const push = (t) => {
+            const s = String(t || '').trim();
+            if (!s || badTitle(s)) return;
+            candidates.push(s);
+        };
+
+        push(this.structure?.documentTitle);
+        push(this.structure?.metadata?.source?.replace(/\.docx$/i, ''));
+
+        const blocks = Array.isArray(this.structure?.blocks) ? this.structure.blocks : [];
+        for (const b of blocks.slice(0, 25)) {
+            if (b?.type !== 'paragraph') continue;
+            const t = String(b.text || '').trim();
+            if (/^cordon\s+\S+/i.test(t) && t.length <= 60) {
+                push(t);
+                break;
+            }
+        }
+
+        const preferred = candidates.find((t) => /^cordon\s+\S+/i.test(t)) ||
+            candidates.find((t) => /cordon/i.test(t)) ||
+            candidates[0];
+        return preferred || 'Formulaire FSOP';
+    }
+
+    /**
      * En-tête identité Word (logo SEDI / titre Cordon / N° cordon + tableau SILOG/LT/désignation).
      * Toujours affiché, y compris en mode word-like.
      */
@@ -181,9 +220,7 @@ class FsopForm {
         html += '<div class="fsop-logo-subtitle">by Fiber Optics Group</div>';
         html += '</div>';
 
-        const documentTitle = this.structure.documentTitle ||
-            this.structure.metadata?.source?.replace(/\.docx$/i, '') ||
-            'Formulaire FSOP';
+        const documentTitle = this.resolveDocumentTitle();
         html += `<div class="fsop-header-title">${this.escapeHtml(documentTitle)}</div>`;
 
         const cordonValue = resolveValue(cordonField);
@@ -1325,7 +1362,7 @@ class FsopForm {
                     return;
                 }
 
-                // Titles / headings with visible step numbers
+                // Titles / headings with visible step numbers (when Word kept "1- …" in text)
                 const sectionTitleMatch = text.match(/^(\d{1,2}(?:[a-z])?)[ \t]*[-–.][ \t]*(\S[^\n]{0,300})$/i);
                 if (sectionTitleMatch) {
                     const n = sectionTitleMatch[1];
@@ -1334,11 +1371,22 @@ class FsopForm {
                     html += renderTitleHtml(title, n);
                     return;
                 }
-                // Strict base-file fidelity:
-                // do not auto-number headings that are not explicitly numbered in extracted text.
-                // But never treat checkbox-like / path report lines as non-interactive subtitles.
-                if ((/:\s*$/.test(text) && text.length <= 60) || (text.length <= 130 && /\bMO\s*\d{3,5}\b/i.test(text) && /\bind\b/i.test(text) && !FULL_PATH_HINT_RE.test(text))) {
+
+                // Short labels like "Général :" → subtitle (no step number)
+                if (/:\s*$/.test(text) && text.length <= 60 && !/\bMO\s*\d{3,5}\b/i.test(text)) {
                     html += `<div class="fsop-word-subtitle">${renderTextWithInputs(text)}</div>`;
+                    return;
+                }
+
+                // Main operation lines with MO + ind → numbered step title.
+                // Word often stores the "1-" as list numbering (not in w:t), so we auto-number.
+                if (
+                    text.length <= 180 &&
+                    /\bMO\s*\d{3,5}\b/i.test(text) &&
+                    /\bind\b/i.test(text) &&
+                    !FULL_PATH_HINT_RE.test(text)
+                ) {
+                    html += renderAutoNumberedTitle(text);
                     return;
                 }
 

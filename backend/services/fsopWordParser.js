@@ -525,9 +525,12 @@ function extractDocumentTitle(xmlContent) {
         
         const paraText = texts.join('').trim();
         if (paraText && paraText.length > 5 && paraText.length < 100) {
-            // Check if it looks like a title (contains "Cordon" or similar patterns)
+            // Prefer real product titles ("Cordon OHA"), not field labels ("N° cordon :")
             if (/Cordon|FSOP|Formulaire/i.test(paraText)) {
-                return paraText;
+                if (!/^(n[°º]?\s*)?cordon\s*:?\s*$/i.test(paraText) &&
+                    !/num[eé]ro\s+(de\s+)?cordon/i.test(paraText)) {
+                    return paraText;
+                }
             }
             firstParagraphs.push(paraText);
         }
