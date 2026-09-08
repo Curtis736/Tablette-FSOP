@@ -1,12 +1,55 @@
 /**
  * Composant pour afficher et remplir un formulaire FSOP de manière interactive
  */
-import { collectLotsForVoieCell, collectLotsForLotCell, normalizeFsopLotKey, parseSavedVoies, parseSavedEtiquettes, cellHasEtiquetteSplit } from './fsopForm/lotMatching.js?v=20260908.6';
-import { loadStructure } from './fsopForm/loadStructure.js?v=20260908.6';
+import { collectLotsForVoieCell, collectLotsForLotCell, normalizeFsopLotKey, parseSavedVoies, parseSavedEtiquettes, cellHasEtiquetteSplit } from './fsopForm/lotMatching.js?v=20260908.7';
+import { loadStructure } from './fsopForm/loadStructure.js?v=20260908.7';
 const CHECKBOX_LINE_RE = /^([☐☑✓□]|\[[ x]\])[\t ]+(\S[\s\S]{0,400})$/i;
 const UNIT_SPEC_RE = /\d{1,8}[\t ](?:h|min|°C|°F)/i;
 const STEP_NUMBER_PREFIX_RE = /^(\d{1,2}(?:[a-z])?)[ \t]*[-–.][ \t]*/i;
 const FULL_PATH_HINT_RE = /tra[cç]abilit[eé]|interfero|faces[_ ]?optiques|[a-z]:\s*[\\/]|code_article|n[°º]\s*du\s*lt/i;
+const REPORT_FOLDER_RE = /\*?(INTERFERO[_\w]*|FACES[_ ]?OPTIQUES[_\w]*)\*?/i;
+const CANONICAL_REPORT_ROOT = 'X:/Traçabilité/Code_article/N° du LT';
+
+/**
+ * Word sometimes drops "X:/Traçabilité/Code_article" and only keeps "/N° du LT/INTERFERO_E".
+ * Expand short report paths back to the full template path for display.
+ */
+function expandFsopReportPath(text) {
+    let t = String(text || '');
+    if (!REPORT_FOLDER_RE.test(t) && !/n[°º]\s*du\s*lt/i.test(t)) return t;
+    if (/tra[cç]abilit/i.test(t) && /code_article/i.test(t)) return t;
+
+    // "... sous /N° du LT/INTERFERO_E" or "... sous INTERFERO_E"
+    t = t.replace(
+        /(?:sous\s+)?(?:[\\/])?(?:N[°º]\s*du\s*LT\s*[\\/]\s*)?\*?(INTERFERO[_\w]*|FACES[_ ]?OPTIQUES[_\w]*)\*?/gi,
+        (_m, folder) => `sous ${CANONICAL_REPORT_ROOT}/${String(folder).replace(/^\*|\*$/g, '')}`
+    );
+
+    // Bare leftover "/N° du LT/" without folder already handled above
+    t = t.replace(
+        /(?:sous\s+)?[\\/]?N[°º]\s*du\s*LT(?![\\/]\S)/gi,
+        `sous ${CANONICAL_REPORT_ROOT}`
+    );
+
+    return t;
+}
+
+/**
+ * Protect path-like spans before blank/N° input rewrites.
+ */
+function extractProtectedPaths(text) {
+    const pathSlots = [];
+    let protectedText = String(text || '');
+    protectedText = protectedText.replace(
+        /(?:[A-Za-z]\s*:\s*[\\/]|[A-Za-z]\s+[\\/]|\\\\\w|[\\/]?[Tt]ra[cç]abilit[eéé]|[\\/]?N[°º]\s*du\s*LT|[\\/]?\*?(?:INTERFERO|FACES[_ ]?OPTIQUES)[_\w]*)[^\n]{0,220}/gi,
+        (m) => {
+            const token = `__FSOP_PATH_${pathSlots.length}__`;
+            pathSlots.push(m.trim());
+            return token;
+        }
+    );
+    return { protectedText, pathSlots };
+}
 
 class FsopForm {
     constructor(apiService, notificationManager) {
@@ -282,19 +325,11 @@ class FsopForm {
                 return `<input class="fsop-ind-input" type="text" maxlength="${maxLen}" data-placeholder="${placeholderKey}" value="${this.escapeHtml(currentValue)}" />`;
             };
 
-            // Protect file paths / report folders so we never turn "N° du LT" into an input
-            // or truncate "X:/Traçabilité/.../INTERFERO_E" down to just "INTERFERO_E".
-            const pathSlots = [];
-            let protectedText = String(text);
-            // Match drive paths with optional colon ("X:/", "X /", "X:\") and bare Traçabilité/...
-            protectedText = protectedText.replace(
-                /(?:[A-Za-z]\s*:\s*[\\/]|[A-Za-z]\s+[\\/]|\\\\\w|[\\/]?[Tt]ra[cç]abilit[eéé])[^\n]{0,240}/g,
-                (m) => {
-                    const token = `__FSOP_PATH_${pathSlots.length}__`;
-                    pathSlots.push(m.trim());
-                    return token;
-                }
-            );
+            // Protect / expand file paths so "N° du LT" never becomes an input
+            // and short "/N° du LT/INTERFERO_E" becomes the full Traçabilité path.
+            const expanded = expandFsopReportPath(text);
+            const { protectedText, pathSlots } = extractProtectedPaths(expanded);
+            const pathContext = FULL_PATH_HINT_RE.test(expanded) || pathSlots.length > 0;
 
             let out = this.escapeHtml(protectedText);
             out = out.replace(/\{\{([A-Z0-9_]+)\}\}/g, (_m, tag) => {
@@ -314,14 +349,17 @@ class FsopForm {
             });
 
             out = out.replace(/\b(num(?:é|e)ro)\s+_{2,}/gi, (_m, label) => {
+                if (pathContext) return _m;
                 return `${this.escapeHtml(label)} ${makeBlankInput(32)}`;
             });
 
             out = out.replace(/_{3,}/g, () => {
+                if (pathContext) return '___';
                 return makeBlankInput(32);
             });
 
             out = out.replace(/(?:[-–—─_]\s*){3,}/g, () => {
+                if (pathContext) return '____';
                 return makeBlankInput(32);
             });
 
@@ -331,8 +369,8 @@ class FsopForm {
                 const currentValue = this.formData.placeholders?.[placeholderKey] || '';
                 return `MO ${this.escapeHtml(String(moRaw || '').trim())} ind <input class="fsop-ind-input" type="text" maxlength="24" data-placeholder="${placeholderKey}" value="${this.escapeHtml(currentValue)}" /> `;
             });
-            // Do NOT rewrite bare "N°" / "numero" when they are part of a file path context.
-            if (!FULL_PATH_HINT_RE.test(text)) {
+            // Do NOT rewrite bare "N°" / "numero" in path / report contexts.
+            if (!pathContext) {
                 out = out.replace(/\b(num(?:é|e)ro|n°|no)\b(?!\s*<input)\s*(?=($|[A-ZÀ-Ý]))/gi, (_m, label) => {
                     return `${this.escapeHtml(label)} ${makeBlankInput(32)} `;
                 });
