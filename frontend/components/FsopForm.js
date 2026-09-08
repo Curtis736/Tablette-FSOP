@@ -1,10 +1,12 @@
 /**
  * Composant pour afficher et remplir un formulaire FSOP de manière interactive
  */
-import { collectLotsForVoieCell, collectLotsForLotCell, normalizeFsopLotKey, parseSavedVoies, parseSavedEtiquettes, cellHasEtiquetteSplit } from './fsopForm/lotMatching.js?v=20260908.1';
-import { loadStructure } from './fsopForm/loadStructure.js?v=20260908.1';
-const CHECKBOX_LINE_RE = /^([☐☑✓□]|\[[ x]\])[\t ]+(\S[^\n]{0,300})$/i;
+import { collectLotsForVoieCell, collectLotsForLotCell, normalizeFsopLotKey, parseSavedVoies, parseSavedEtiquettes, cellHasEtiquetteSplit } from './fsopForm/lotMatching.js?v=20260908.2';
+import { loadStructure } from './fsopForm/loadStructure.js?v=20260908.2';
+const CHECKBOX_LINE_RE = /^([☐☑✓□]|\[[ x]\])[\t ]+(\S[\s\S]{0,400})$/i;
 const UNIT_SPEC_RE = /\d{1,8}[\t ](?:h|min|°C|°F)/i;
+const STEP_NUMBER_PREFIX_RE = /^(\d{1,2}(?:[a-z])?)[ \t]*[-–.][ \t]*/i;
+const FULL_PATH_HINT_RE = /tra[cç]abilit[eé]|interfero|faces[_ ]?optiques|[a-z]:\s*[\\/]|code_article|n[°º]\s*du\s*lt/i;
 
 class FsopForm {
     constructor(apiService, notificationManager) {
@@ -68,110 +70,8 @@ class FsopForm {
 
         let html = '<div class="fsop-form-container">';
         
-        // Render header with logo, title, and fields (like in the Word document)
+        // Identity header (logo / N° cordon / SILOG / lancement / désignation) intentionally omitted.
         html += '<div class="fsop-header-section">';
-        
-        // Header top row: Logo, Title, N° cordon
-        html += '<div class="fsop-header-top">';
-        
-        // Logo (left)
-        html += '<div class="fsop-header-logo">';
-        html += '<div class="fsop-logo-text">SEDI<span class="fsop-logo-dot">•</span>ATI</div>';
-        html += '<div class="fsop-logo-subtitle">by Fiber Optics Group</div>';
-        html += '</div>';
-        
-        // Title (center)
-        const documentTitle = this.structure.documentTitle || this.structure.metadata?.source?.replace(/\.docx$/i, '') || 'Formulaire FSOP';
-        html += `<div class="fsop-header-title">${this.escapeHtml(documentTitle)}</div>`;
-        
-        // N° cordon field (right) - separate from other header fields
-        const cordonField = this.structure.headerFields?.find(f => f.key === 'NUMERO_CORDON');
-        if (cordonField) {
-            const cordonValue = this.formData.placeholders[cordonField.placeholder] || 
-                               this.formData.placeholders[cordonField.key] || 
-                               initialData.placeholders?.[cordonField.placeholder] || 
-                               initialData.placeholders?.[cordonField.key] || '';
-            html += `
-                <div class="fsop-header-cordon">
-                    <label for="header_${cordonField.key}">${this.escapeHtml(cordonField.label)}</label>
-                    <input 
-                        type="text" 
-                        id="header_${cordonField.key}" 
-                        data-placeholder="${cordonField.placeholder || cordonField.key}"
-                        value="${this.escapeHtml(cordonValue)}"
-                        class="fsop-input fsop-header-input fsop-cordon-input"
-                    />
-                </div>
-            `;
-        }
-        
-        html += '</div>'; // End header-top
-        
-        // Header bottom: Numéro lancement and Référence SILOG in a box
-        const otherHeaderFields = this.structure.headerFields?.filter(f => f.key !== 'NUMERO_CORDON') || [];
-        if (otherHeaderFields.length > 0) {
-            html += '<div class="fsop-header-box">';
-            
-            otherHeaderFields.forEach(field => {
-                const fieldKey = field.placeholder || field.key;
-                // Special handling for "Numéro lancement" - always pre-fill with LT if available
-                let value = '';
-                if (field.key === 'NUMERO_LANCEMENT') {
-                    // Try multiple ways to find the launch number
-                    value = this.formData.placeholders['{{LT}}'] || 
-                           this.formData.placeholders[field.placeholder] || 
-                           this.formData.placeholders[fieldKey] || 
-                           initialData.placeholders?.['{{LT}}'] ||
-                           initialData.placeholders?.[field.placeholder] || 
-                           initialData.placeholders?.[fieldKey] || 
-                           initialData.launchNumber || '';
-                } else if (field.key === 'REFERENCE_SILOG' || field.key === 'NUMERO_SERIE' || 
-                           (field.label && (field.label.includes('S/N') || field.label.includes('Série') || field.label.includes('SN')))) {
-                    // For Référence SILOG or S/N fields, use serial number instead of LT
-                    value = this.formData.placeholders['{{SN}}'] || 
-                           this.formData.placeholders[field.placeholder] || 
-                           this.formData.placeholders[fieldKey] || 
-                           initialData.placeholders?.['{{SN}}'] ||
-                           initialData.placeholders?.[field.placeholder] || 
-                           initialData.placeholders?.[fieldKey] ||
-                           initialData.serialNumber || '';
-                } else {
-                    value = this.formData.placeholders[field.placeholder] || 
-                           this.formData.placeholders[fieldKey] || 
-                           initialData.placeholders?.[field.placeholder] || 
-                           initialData.placeholders?.[fieldKey] || '';
-                }
-                
-                // Pour "Numéro lancement", rendre le champ éditable (pas readonly)
-                const isReadonly = false;
-                
-                html += `
-                    <div class="fsop-header-box-field">
-                        <label for="header_${field.key}">${this.escapeHtml(field.label)}</label>
-                        <input 
-                            type="text" 
-                            id="header_${field.key}" 
-                            data-placeholder="${field.placeholder || field.key}"
-                            data-field-key="${field.key}"
-                            value="${this.escapeHtml(value)}"
-                            class="fsop-input fsop-header-box-input"
-                            ${isReadonly ? 'readonly' : ''}
-                        />
-                    </div>
-                `;
-                
-                // Debug pour Numéro lancement
-                if (field.key === 'NUMERO_LANCEMENT') {
-                    console.log(`🔍 Numéro lancement - value: "${value}", placeholder: "${field.placeholder}", fieldKey: "${fieldKey}"`);
-                    console.log(`🔍 initialData.placeholders:`, initialData.placeholders);
-                    console.log(`🔍 this.formData.placeholders:`, this.formData.placeholders);
-                }
-            });
-            
-            html += '</div>'; // End header-box
-        }
-        
-        // Add reference field for Excel transfer
         html += '<div class="fsop-reference-section">';
         html += '<label for="fsop_reference">Référence (pour transfert Excel):</label>';
         html += `<input 
@@ -183,7 +83,6 @@ class FsopForm {
         />`;
         html += '<small class="fsop-reference-hint">Cette référence sera utilisée pour trouver le fichier Excel de mesures</small>';
         html += '</div>';
-        
         html += '</div>'; // End header-section
         
         // Render placeholders (if any remain after header fields)
@@ -253,20 +152,30 @@ class FsopForm {
                 const currentValue = this.formData.placeholders?.[placeholderKey] || '';
                 return `<input class="fsop-ind-input" type="text" maxlength="${maxLen}" data-placeholder="${placeholderKey}" value="${this.escapeHtml(currentValue)}" />`;
             };
-            // Replace placeholders like {{LT}} with inputs bound to formData.placeholders
-            let out = this.escapeHtml(text);
+
+            // Protect file paths / report folders so we never turn "N° du LT" into an input
+            // or truncate "X:/Traçabilité/.../INTERFERO_E" down to just "INTERFERO_E".
+            const pathSlots = [];
+            let protectedText = String(text);
+            // Match drive paths with optional colon ("X:/", "X /", "X:\") and bare Traçabilité/...
+            protectedText = protectedText.replace(
+                /(?:[A-Za-z]\s*:\s*[\\/]|[A-Za-z]\s+[\\/]|\\\\\w|[\\/]?[Tt]ra[cç]abilit[eéé])[^\n]{0,240}/g,
+                (m) => {
+                    const token = `__FSOP_PATH_${pathSlots.length}__`;
+                    pathSlots.push(m.trim());
+                    return token;
+                }
+            );
+
+            let out = this.escapeHtml(protectedText);
             out = out.replace(/\{\{([A-Z0-9_]+)\}\}/g, (_m, tag) => {
                 const placeholder = `{{${tag}}}`;
-                // ⚡ FIX: Ensure {{LT}} gets the launch number value
-                const val = this.formData.placeholders?.[placeholder] || 
+                const val = this.formData.placeholders?.[placeholder] ||
                            (tag === 'LT' ? (this.formData.placeholders?.['{{LT}}'] || '') : '');
                 return `<input class="fsop-inline-input" type="text" data-placeholder="${placeholder}" value="${this.escapeHtml(val)}" />`;
             });
             
             // Detect "ind __" patterns (with 2+ underscores) and replace with editable input.
-            // Robust to:
-            // - punctuation at end: "MO 1114 ind _____:"
-            // - spaced MO numbers: "MO 1 114 ind _____"
             out = out.replace(/\bMO[ \t]*([\d \t]{3,8})[ \t]+ind[ \t]+_{2,}(?:[ \t]*[:;,.!?)]|[ \t]*$)/gi, (match, moRaw, suffix) => {
                 const moNumber = String(moRaw || '').replace(/\s+/g, '');
                 const placeholderKey = `{{IND_MO${moNumber}}}`;
@@ -275,44 +184,37 @@ class FsopForm {
                 return `MO ${this.escapeHtml(String(moRaw || '').trim())} ind <input class="fsop-ind-input" type="text" maxlength="24" data-placeholder="${placeholderKey}" value="${this.escapeHtml(currentValue)}" />${this.escapeHtml(cleanSuffix)}`;
             });
 
-            // Specific pattern often used in FSOP paragraphs:
-            // "Brulé au tir numéro ______"
             out = out.replace(/\b(num(?:é|e)ro)\s+_{2,}/gi, (_m, label) => {
                 return `${this.escapeHtml(label)} ${makeBlankInput(32)}`;
             });
 
-            // Fallback: any remaining blank sequence "_____" becomes an editable input.
             out = out.replace(/_{3,}/g, () => {
                 return makeBlankInput(32);
             });
 
-            // Additional fallback: templates sometimes use long dash/line sequences as blanks.
-            // Examples: "-----", "———", "───"
             out = out.replace(/(?:[-–—─_]\s*){3,}/g, () => {
                 return makeBlankInput(32);
             });
 
-            // Global fallback for templates that encode blanks without underscores:
-            // e.g. "MO 715 ind Nombre d'essai..." or "Brulé au tir numéro" (no trailing "_____").
             out = out.replace(/\bMO[ \t]*([\d \t]{3,8})[ \t]+ind\b(?![ \t]*<input)[ \t]*(?=($|[A-ZÀ-Ý]))/gi, (_m, moRaw) => {
                 const moNumber = String(moRaw || '').replace(/\s+/g, '');
                 const placeholderKey = `{{IND_MO${moNumber}}}`;
                 const currentValue = this.formData.placeholders?.[placeholderKey] || '';
                 return `MO ${this.escapeHtml(String(moRaw || '').trim())} ind <input class="fsop-ind-input" type="text" maxlength="24" data-placeholder="${placeholderKey}" value="${this.escapeHtml(currentValue)}" /> `;
             });
-            out = out.replace(/\b(num(?:é|e)ro|n°|no)\b(?!\s*<input)\s*(?=($|[A-ZÀ-Ý]))/gi, (_m, label) => {
-                return `${this.escapeHtml(label)} ${makeBlankInput(32)} `;
-            });
+            // Do NOT rewrite bare "N°" / "numero" when they are part of a file path context.
+            if (!FULL_PATH_HINT_RE.test(text)) {
+                out = out.replace(/\b(num(?:é|e)ro|n°|no)\b(?!\s*<input)\s*(?=($|[A-ZÀ-Ý]))/gi, (_m, label) => {
+                    return `${this.escapeHtml(label)} ${makeBlankInput(32)} `;
+                });
+            }
 
-            // Checkbox-like square placeholders in text blocks (e.g. "□ □ □") -> short text input.
-            // This allows writing a quick value while keeping the form editable everywhere.
             out = out.replace(/(?:[□◻⬜]\s*){2,}/g, (match) => {
                 const boxes = (match.match(/[□◻⬜]/g) || []).length;
                 const maxLen = Math.max(2, Math.min(8, boxes));
                 return makeBlankInput(maxLen);
             });
 
-            // Convert explicit date/time placeholders to native inputs when found in text blocks.
             out = out.replace(/\bjj\/mm\/aaaa\b/gi, () => {
                 const placeholderKey = `{{TEXT_DATE_${++blankId}}}`;
                 const currentValue = this.formData.placeholders?.[placeholderKey] || '';
@@ -322,6 +224,14 @@ class FsopForm {
                 const placeholderKey = `{{TEXT_TIME_${++blankId}}}`;
                 const currentValue = this.formData.placeholders?.[placeholderKey] || '';
                 return `<input class="fsop-ind-input fsop-cell-input-time" type="time" data-placeholder="${placeholderKey}" value="${this.escapeHtml(currentValue)}" />`;
+            });
+
+            pathSlots.forEach((pathText, idx) => {
+                const safe = this.escapeHtml(pathText);
+                out = out.replace(
+                    `__FSOP_PATH_${idx}__`,
+                    `<span class="fsop-full-path" title="${safe}">${safe}</span>`
+                );
             });
             
             return out;
@@ -351,21 +261,48 @@ class FsopForm {
         };
 
         const renderCheckboxLine = (text) => {
-            // Pattern: "☐ Label" or "[ ] Label"
-            const m = CHECKBOX_LINE_RE.exec(text);
+            // Pattern: "☐ Label" or "[ ] Label" (including lines with MO / ind)
+            const m = CHECKBOX_LINE_RE.exec(String(text || '').trim());
             if (!m) return null;
             const sym = m[1];
             const label = m[2].trim();
             const labelHtml = renderTextWithInputs(label);
             const checked = /[☑✓x]/i.test(sym);
             const id = `cb_${++blankId}`;
+            const saved = this.formData.checkboxes?.wordlike?.[label];
+            const isChecked = saved === true || (saved == null && checked);
             return `
                 <label class="fsop-word-checkbox">
-                    <input id="${id}" type="checkbox" data-checkbox-label="${this.escapeHtml(label)}" ${checked ? 'checked' : ''} />
+                    <input id="${id}" type="checkbox" data-checkbox-label="${this.escapeHtml(label)}" ${isChecked ? 'checked' : ''} />
                     <span class="fsop-word-checkbox-label">${labelHtml}</span>
                 </label>
             `;
         };
+
+        const isIdentityHeaderTable = (rows) => {
+            const flat = (Array.isArray(rows) ? rows : [])
+                .flat()
+                .map((c) => String(c?.text || '').toLowerCase())
+                .join(' | ');
+            const hits = [
+                /num[eé]ro\s+de\s+cordon|n[°º]\s*cordon/i,
+                /r[eé]f[eé]rence\s+silog/i,
+                /num[eé]ro\s+lancement/i,
+                /d[eé]signation/i
+            ].filter((re) => re.test(flat)).length;
+            return hits >= 2;
+        };
+
+        const isSkippableHeaderParagraph = (text) => {
+            const t = String(text || '').trim();
+            if (!t) return false;
+            if (/^cordon\s+/i.test(t) && t.length <= 60) return true;
+            if (/^n[°º]\s*cordon\s*:?\s*$/i.test(t)) return true;
+            if (/^by\s+fiber\s+optics/i.test(t)) return true;
+            return false;
+        };
+
+        const stripStepNumberPrefix = (text) => String(text || '').replace(STEP_NUMBER_PREFIX_RE, '').trim();
 
         const normalizeCellText = (t) => String(t || '').replace(/\s+/g, ' ').trim();
 
@@ -468,16 +405,21 @@ class FsopForm {
             return false;
         };
 
-        const renderAutoNumberedTitle = (text) => {
-            autoTitleCounter += 1;
-            const mo = extractMoFromText(text);
+        const renderTitleHtml = (titleText) => {
+            const clean = stripStepNumberPrefix(titleText) || String(titleText || '').trim();
+            const mo = extractMoFromText(clean);
             if (mo) currentCodeOperation = mo;
             return `
                 <div class="fsop-word-title">
-                    <span class="fsop-word-title-number">${this.escapeHtml(String(autoTitleCounter))}.</span>
-                    <span class="fsop-word-title-text">${renderTextWithInputs(text)}</span>
+                    <span class="fsop-word-title-text">${renderTextWithInputs(clean)}</span>
                 </div>
             `;
+        };
+
+        const renderAutoNumberedTitle = (text) => {
+            // Keep counter for completeness checks, but never display step numbers.
+            autoTitleCounter += 1;
+            return renderTitleHtml(text);
         };
 
         const extractMoFromText = (text) => {
@@ -506,6 +448,11 @@ class FsopForm {
             const safeRows = rows || [];
             if (safeRows.length === 0) {
                 return '<table class="fsop-word-table"></table>';
+            }
+
+            // Hide identity header (N° cordon / SILOG / lancement / désignation)
+            if (isIdentityHeaderTable(safeRows)) {
+                return '';
             }
 
             // Strict base-file fidelity:
@@ -1200,17 +1147,12 @@ class FsopForm {
                     const m = bannerText.match(/^(\d{1,2}(?:[a-z])?)[ \t]*[-–.][ \t]*(\S[^\n]{0,300})$/i);
                     if (m) {
                         bumpCounterFromExplicit(m[1]);
-                        t += `
-                            <div class="fsop-word-title fsop-word-title-from-table">
-                                <span class="fsop-word-title-number">${this.escapeHtml(m[1])}.</span>
-                                <span class="fsop-word-title-text">${renderTextWithInputs(m[2])}</span>
-                            </div>
-                        `;
+                        t += renderTitleHtml(m[2]).replace('fsop-word-title', 'fsop-word-title fsop-word-title-from-table');
                     } else {
                         if (isMainStepTitleWithoutNumber(bannerText)) {
-                            t += `<div class="fsop-word-title-from-table">${renderAutoNumberedTitle(bannerText)}</div>`;
+                            t += renderAutoNumberedTitle(bannerText).replace('fsop-word-title', 'fsop-word-title fsop-word-title-from-table');
                         } else {
-                            t += `<div class="fsop-word-subtitle fsop-word-subtitle-from-table">${renderTextWithInputs(bannerText)}</div>`;
+                            t += `<div class="fsop-word-subtitle fsop-word-subtitle-from-table">${renderTextWithInputs(stripStepNumberPrefix(bannerText) || bannerText)}</div>`;
                         }
                     }
                 });
@@ -1243,7 +1185,10 @@ class FsopForm {
                 return;
             }
             if (b.type === 'table') {
-                html += `<div class="fsop-word-block fsop-word-block-table">${renderTable(b.rows, b.id)}</div>`;
+                const tableHtml = renderTable(b.rows, b.id);
+                if (tableHtml) {
+                    html += `<div class="fsop-word-block fsop-word-block-table">${tableHtml}</div>`;
+                }
                 return;
             }
             if (b.type === 'paragraph') {
@@ -1253,37 +1198,39 @@ class FsopForm {
                     return;
                 }
 
-                // Titles / headings
-                // Examples:
-                // - "1- Préparation ..." -> main section title
-                // - "Général :" -> sub title
-                const sectionTitleMatch = text.match(/^(\d{1,2}(?:[a-z])?)[ \t]*[-–.][ \t]*(\S[^\n]{0,300})$/i);
-                if (sectionTitleMatch) {
-                    const n = sectionTitleMatch[1];
-                    const title = sectionTitleMatch[2];
-                    const mo = extractMoFromText(text);
-                    if (mo) currentCodeOperation = mo;
-                    bumpCounterFromExplicit(n);
-                    html += `
-                        <div class="fsop-word-title">
-                            <span class="fsop-word-title-number">${this.escapeHtml(n)}.</span>
-                            <span class="fsop-word-title-text">${renderTextWithInputs(title)}</span>
-                        </div>
-                    `;
+                // Skip Word identity header paragraphs (Cordon OHA / N° cordon / logo subtitle)
+                if (isSkippableHeaderParagraph(text)) {
                     return;
                 }
-                // Strict base-file fidelity:
-                // do not auto-number headings that are not explicitly numbered in extracted text.
-                if ((/:\s*$/.test(text) && text.length <= 60) || (text.length <= 130 && /\bMO\s*\d{3,5}\b/i.test(text) && /\bind\b/i.test(text))) {
-                    html += `<div class="fsop-word-subtitle">${renderTextWithInputs(text)}</div>`;
+                if (/^(num[eé]ro\s+de\s+cordon|n[°º]\s*cordon|r[eé]f[eé]rence\s+silog|num[eé]ro\s+lancement|d[eé]signation)\s*:?\s*$/i.test(text)) {
                     return;
                 }
 
+                // Checkboxes MUST be detected before MO+ind subtitle heuristic
+                // (e.g. "☐ Test de flexion ... MO 1050 ind ___")
                 const checkboxHtml = renderCheckboxLine(text);
                 if (checkboxHtml) {
                     html += `<div class="fsop-word-block">${checkboxHtml}</div>`;
                     return;
                 }
+
+                // Titles / headings — never show step numbers (1-, 2-, …)
+                const sectionTitleMatch = text.match(/^(\d{1,2}(?:[a-z])?)[ \t]*[-–.][ \t]*(\S[^\n]{0,300})$/i);
+                if (sectionTitleMatch) {
+                    const n = sectionTitleMatch[1];
+                    const title = sectionTitleMatch[2];
+                    bumpCounterFromExplicit(n);
+                    html += renderTitleHtml(title);
+                    return;
+                }
+                // Strict base-file fidelity:
+                // do not auto-number headings that are not explicitly numbered in extracted text.
+                // But never treat checkbox-like / path report lines as non-interactive subtitles.
+                if ((/:\s*$/.test(text) && text.length <= 60) || (text.length <= 130 && /\bMO\s*\d{3,5}\b/i.test(text) && /\bind\b/i.test(text) && !FULL_PATH_HINT_RE.test(text))) {
+                    html += `<div class="fsop-word-subtitle">${renderTextWithInputs(stripStepNumberPrefix(text) || text)}</div>`;
+                    return;
+                }
+
                 const pfHtml = b.hasPassFail ? renderPassFailLine(text) : null;
                 if (pfHtml) {
                     html += `<div class="fsop-word-block">${pfHtml}</div>`;
@@ -1294,16 +1241,16 @@ class FsopForm {
         });
 
         html += '</div></div>';
-        // Completeness check: detect missing numbered titles in rendered HTML.
-        const renderedTitleCount = (html.match(/fsop-word-title-number/g) || []).length;
+        // Completeness check: numbered titles in source vs rendered step titles (numbers are hidden in UI).
+        const renderedTitleCount = (html.match(/fsop-word-title\b/g) || []).length;
         if (sourceTitleCount > renderedTitleCount) {
-            console.warn('⚠️ FSOP incomplet potentiel: titres numérotés manquants', {
+            console.warn('⚠️ FSOP incomplet potentiel: titres manquants', {
                 sourceTitleCount,
                 renderedTitleCount,
                 missing: sourceTitleCount - renderedTitleCount
             });
         } else {
-            console.log('✅ FSOP complétude titres numérotés OK', { sourceTitleCount, renderedTitleCount });
+            console.log('✅ FSOP complétude titres OK', { sourceTitleCount, renderedTitleCount });
         }
         return html;
     }
@@ -1340,10 +1287,10 @@ class FsopForm {
         if (!displayTitle || displayTitle.trim() === '' || displayTitle.match(/^Section\s+\d+$/i)) {
             console.warn(`⚠️ Section ${section.id} has no title, using fallback`);
             displayTitle = section.id === 0 ? 'Général : Composant' : `Section ${section.id}`;
-        } else if (section.id !== 0 && !displayTitle.match(/^\d+/)) {
-            // If title doesn't start with number (and not section 0), prepend it
-            displayTitle = `${section.id}- ${displayTitle}`;
         }
+
+        // Never show leading step numbers ("1-", "2.", …)
+        displayTitle = String(displayTitle || '').replace(STEP_NUMBER_PREFIX_RE, '').trim() || displayTitle;
         
         // Always render the title, even if it's a fallback
         html += `<h3 class="fsop-section-title">${this.escapeHtml(displayTitle)}</h3>`;
@@ -1728,7 +1675,7 @@ class FsopForm {
             });
         });
 
-        // Checkbox inputs
+        // Checkbox inputs (section-based)
         this.container.querySelectorAll('input[type="checkbox"][data-section-id]').forEach(checkbox => {
             checkbox.addEventListener('change', (e) => {
                 const sectionId = e.target.dataset.sectionId;
@@ -1738,6 +1685,18 @@ class FsopForm {
                     this.formData.checkboxes[sectionId] = {};
                 }
                 this.formData.checkboxes[sectionId][checkboxId] = e.target.checked;
+            });
+        });
+
+        // Word-like checkbox lines (☐ Test de flexion …)
+        this.container.querySelectorAll('input[type="checkbox"][data-checkbox-label]').forEach(checkbox => {
+            checkbox.addEventListener('change', (e) => {
+                const label = e.target.dataset.checkboxLabel;
+                if (!label) return;
+                if (!this.formData.checkboxes.wordlike) {
+                    this.formData.checkboxes.wordlike = {};
+                }
+                this.formData.checkboxes.wordlike[label] = e.target.checked;
             });
         });
 

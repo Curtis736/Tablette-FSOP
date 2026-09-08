@@ -2268,21 +2268,22 @@ tr:hover {
 }
 
 .fsop-word-title-number {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    min-width: 34px; /* allow "11a." without cropping */
-    height: 22px;
-    border-radius: 6px;
-    background: #667eea;
-    color: #fff;
-    font-weight: 800;
-    font-size: 12px;
-    padding: 0 8px;
+    display: none; /* step numbers hidden per operator request */
 }
 
 .fsop-word-title-text {
     color: #111;
+    flex: 1 1 auto;
+    min-width: 0;
+    overflow-wrap: anywhere;
+}
+
+.fsop-full-path {
+    display: inline;
+    font-weight: 700;
+    word-break: break-word;
+    overflow-wrap: anywhere;
+    white-space: normal;
 }
 
 .fsop-word-subtitle {
