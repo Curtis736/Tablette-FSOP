@@ -1,8 +1,8 @@
 /**
  * Composant pour afficher et remplir un formulaire FSOP de manière interactive
  */
-import { collectLotsForVoieCell, collectLotsForLotCell, normalizeFsopLotKey, parseSavedVoies, parseSavedEtiquettes, cellHasEtiquetteSplit } from './fsopForm/lotMatching.js?v=20260908.5';
-import { loadStructure } from './fsopForm/loadStructure.js?v=20260908.5';
+import { collectLotsForVoieCell, collectLotsForLotCell, normalizeFsopLotKey, parseSavedVoies, parseSavedEtiquettes, cellHasEtiquetteSplit } from './fsopForm/lotMatching.js?v=20260908.6';
+import { loadStructure } from './fsopForm/loadStructure.js?v=20260908.6';
 const CHECKBOX_LINE_RE = /^([☐☑✓□]|\[[ x]\])[\t ]+(\S[\s\S]{0,400})$/i;
 const UNIT_SPEC_RE = /\d{1,8}[\t ](?:h|min|°C|°F)/i;
 const STEP_NUMBER_PREFIX_RE = /^(\d{1,2}(?:[a-z])?)[ \t]*[-–.][ \t]*/i;
@@ -256,18 +256,6 @@ class FsopForm {
                 </div>
             `;
         });
-        html += '</div>';
-
-        html += '<div class="fsop-reference-section">';
-        html += '<label for="fsop_reference">Référence (pour transfert Excel):</label>';
-        html += `<input
-            type="text"
-            id="fsop_reference"
-            class="fsop-input fsop-reference-input"
-            placeholder="Ex: RETA-697-HOI-23.199"
-            value="${this.escapeHtml(this.formData.reference || '')}"
-        />`;
-        html += '<small class="fsop-reference-hint">Cette référence sera utilisée pour trouver le fichier Excel de mesures</small>';
         html += '</div>';
         html += '</div>'; // header-section
         return html;
