@@ -41,6 +41,41 @@ describe('fsopWordParser text extraction', () => {
         expect(text).not.toContain('<w:');
     });
 
+    it('joins styled first-letter runs without inserting a space (Fibre, not F ibre)', () => {
+        const xml = `
+            <w:p>
+              <w:r><w:t>F</w:t></w:r>
+              <w:r><w:t>ibre (F01LCH105NUF01)</w:t></w:r>
+            </w:p>
+        `;
+        const text = parser.__test.extractTextFromParagraphXml(xml);
+        expect(text).toBe('Fibre (F01LCH105NUF01)');
+    });
+
+    it('joins decimal fragments without a space (2.3, not 2. 3)', () => {
+        const xml = `
+            <w:p>
+              <w:r><w:t>Gaine inox 2.</w:t></w:r>
+              <w:r><w:t>3 + Kapton</w:t></w:r>
+            </w:p>
+        `;
+        const text = parser.__test.extractTextFromParagraphXml(xml);
+        expect(text).toBe('Gaine inox 2.3 + Kapton');
+    });
+
+    it('preserves paragraph breaks inside table cells', () => {
+        const xml = `
+            <w:tc>
+              <w:p><w:r><w:t>Coté étiquette</w:t></w:r></w:p>
+              <w:p><w:r><w:t>Côté sans étiquette</w:t></w:r></w:p>
+            </w:tc>
+        `;
+        const text = parser.__test.extractTextFromCellXml(xml);
+        expect(text).toContain('Coté étiquette');
+        expect(text).toContain('Côté sans étiquette');
+        expect(text).toContain('\n');
+    });
+
     it('stripXmlMarkup removes tags without eating comparison text', () => {
         expect(parser.__test.stripXmlMarkup('A<w:br/>B < 0,5')).toContain('A');
         expect(parser.__test.stripXmlMarkup('A<w:br/>B < 0,5')).toContain('B');

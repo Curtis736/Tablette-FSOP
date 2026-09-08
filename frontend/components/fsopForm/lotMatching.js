@@ -102,3 +102,60 @@ export function parseSavedVoies(savedLot) {
     }
     return savedVoies;
 }
+
+function valueAfterEtiquetteLabel(line, kind) {
+    const raw = String(line || '');
+    if (kind === 'etiquette') {
+        if (/sans\s+[eé]tiquette/i.test(raw) && !/cot[eé]\s*(?:avec\s+)?[eé]tiquette/i.test(raw)) {
+            return null;
+        }
+        const m = raw.match(/cot[eé]\s*(?:avec\s+)?[eé]tiquette\s*:?\s*(.*)$/i);
+        if (!m) return null;
+        return String(m[1] || '').trim() || null;
+    }
+    if (kind === 'sans') {
+        const m = raw.match(/sans\s+[eé]tiquette\s*:?\s*(.*)$/i);
+        if (!m) return null;
+        return String(m[1] || '').trim() || null;
+    }
+    return null;
+}
+
+/** Parse saved "Coté étiquette / Côté sans étiquette" lot lines. */
+export function parseSavedEtiquettes(savedLot) {
+    const out = { etiquette: '', sans: '' };
+    if (!savedLot) return out;
+    const text = String(savedLot);
+    for (const line of text.split('\n')) {
+        const e = valueAfterEtiquetteLabel(line, 'etiquette');
+        const s = valueAfterEtiquetteLabel(line, 'sans');
+        if (e !== null && e !== undefined) out.etiquette = e || out.etiquette;
+        if (s !== null && s !== undefined) out.sans = s || out.sans;
+        // Labels alone on line (empty value) still count as structure
+        if (/cot[eé]\s*(?:avec\s+)?[eé]tiquette/i.test(line) && !/sans\s+[eé]tiquette/i.test(line) && e === null) {
+            out.etiquette = out.etiquette || '';
+        }
+        if (/sans\s+[eé]tiquette/i.test(line) && s === null) {
+            out.sans = out.sans || '';
+        }
+    }
+    // Single-line legacy: "lotA / lotB"
+    if (!out.etiquette && !out.sans && text.includes('/') && !/\n/.test(text.trim())) {
+        const parts = text.split('/').map((p) => p.trim()).filter(Boolean);
+        if (parts.length === 2) {
+            out.etiquette = parts[0];
+            out.sans = parts[1];
+        }
+    }
+    return out;
+}
+
+export function cellHasEtiquetteSplit(cellText, composantText = '') {
+    const t = String(cellText || '');
+    const hasE = /cot[eé]\s*(?:avec\s+)?[eé]tiquette/i.test(t);
+    const hasS = /sans\s+[eé]tiquette/i.test(t);
+    if (hasE && hasS) return true;
+    // F457: these composants always use dual side lots in the Word template
+    const comp = String(composantText || '');
+    return /contact\s*elio/i.test(comp) || /sous\s*ensemble\s*inox/i.test(comp);
+}

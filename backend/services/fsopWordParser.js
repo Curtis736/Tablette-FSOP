@@ -260,10 +260,51 @@ function extractOuterElement(xml, tag, startIndex) {
     return null;
 }
 
+/**
+ * Word often splits styled words into runs ("F"+"ibre", "2."+"3").
+ * Insert a space between runs only when it looks like a real word boundary.
+ */
+function shouldInsertSpaceBetweenRuns(prev, next) {
+    if (!prev || !next) return false;
+    if (/\s$/.test(prev) || /^\s/.test(next)) return false;
+    if (/^[,.;:!?)/\]%]/.test(next)) return false;
+    if (/[(\[]$/.test(prev)) return false;
+
+    // Mid-word first letter: "F" + "ibre", "G" + "aine"
+    if (prev.length === 1 && /[A-Za-zÀ-ÿ]/.test(prev) && /^[a-zà-ÿ]/.test(next)) {
+        return false;
+    }
+    // Decimal / version fragments: "2." + "3", "2" + ".3"
+    if (/\d\.$/.test(prev) && /^\d/.test(next)) return false;
+    if (/\d$/.test(prev) && /^\.\d/.test(next)) return false;
+
+    // Two alphanumeric fragments → space (Hello + World), except tight code-like joins
+    if (/[A-Za-zÀ-ÿ0-9]$/.test(prev) && /^[A-Za-zÀ-ÿ0-9]/.test(next)) {
+        if (/[a-zà-ÿ]$/.test(prev) && /^[A-ZÀ-Ý]/.test(next)) return true;
+        if (prev.length >= 2 && next.length >= 2) return true;
+        return false;
+    }
+
+    return /[A-Za-zÀ-ÿ0-9)]$/.test(prev) && /^[A-Za-zÀ-ÿ(]/.test(next);
+}
+
+function appendTextRun(parts, raw, preserve) {
+    if (preserve) {
+        parts.push(raw);
+        return;
+    }
+    const trimmed = raw.trim();
+    if (!trimmed) return;
+    if (parts.length > 0 && shouldInsertSpaceBetweenRuns(parts[parts.length - 1], trimmed)) {
+        parts.push(' ');
+    }
+    parts.push(trimmed);
+}
+
 function extractTextFromParagraphXml(paraXml) {
     // Preserve Word spacing rules:
     // - xml:space="preserve" nodes must keep leading/trailing spaces
-    // - Other nodes: trim, but insert a space between runs when needed to avoid "motscollés"
+    // - Other nodes: trim; insert space only at real word boundaries (avoid "F ibre")
     const textRegex = /<w:t([^>]*)>([\s\S]*?)<\/w:t>/g;
     const parts = [];
     let m;
@@ -274,29 +315,7 @@ function extractTextFromParagraphXml(paraXml) {
         // Strip any XML-like tags that include a namespace prefix (something:tag), but keep comparisons like "< 0,5 dB".
         raw = raw.replaceAll(/<\/?[A-Za-z0-9._-]+:[^>]*>/g, '');
         const preserve = /xml:space="preserve"/i.test(attrs);
-
-        if (preserve) {
-            parts.push(raw);
-            continue;
-        }
-
-        const trimmed = raw.trim();
-        if (!trimmed) continue;
-
-        if (parts.length > 0) {
-            const prev = parts[parts.length - 1];
-            const needsSpace =
-                prev &&
-                !prev.endsWith(' ') &&
-                !trimmed.startsWith(' ') &&
-                // don't insert space before punctuation
-                !/^[,.;:!?)]/.test(trimmed) &&
-                // don't insert after opening paren
-                !/[(]$/.test(prev);
-            if (needsSpace) parts.push(' ');
-        }
-
-        parts.push(trimmed);
+        appendTextRun(parts, raw, preserve);
     }
 
     // Handle tabs and line breaks inside paragraphs (best-effort)
@@ -374,37 +393,28 @@ function getCellFill(tcXml) {
 }
 
 function extractTextFromCellXml(tcXml) {
-    // Same spacing strategy as paragraphs to avoid concatenating words.
+    // Preserve paragraph boundaries (needed for "Coté étiquette" / "Côté sans étiquette").
+    const paraRegex = /<w:p\b[^>]*>([\s\S]*?)<\/w:p>/g;
+    const paragraphs = [];
+    let paraMatch;
+    while ((paraMatch = paraRegex.exec(tcXml)) !== null) {
+        const paraText = extractTextFromParagraphXml(paraMatch[0]);
+        if (paraText) paragraphs.push(paraText);
+    }
+    if (paragraphs.length > 0) {
+        return paragraphs.join('\n');
+    }
+
+    // Fallback when the cell has no <w:p> wrappers.
     const textRegex = /<w:t([^>]*)>([\s\S]*?)<\/w:t>/g;
     const parts = [];
     let m;
     while ((m = textRegex.exec(tcXml)) !== null) {
         const attrs = m[1] || '';
         let raw = (m[2] || '').replaceAll('&lt;', '<').replaceAll('&gt;', '>').replaceAll('&amp;', '&');
-        // Same protection as paragraphs: strip namespaced XML tags embedded as literal text.
         raw = raw.replaceAll(/<\/?[A-Za-z0-9._-]+:[^>]*>/g, '');
         const preserve = /xml:space="preserve"/i.test(attrs);
-
-        if (preserve) {
-            parts.push(raw);
-            continue;
-        }
-
-        const trimmed = raw.trim();
-        if (!trimmed) continue;
-
-        if (parts.length > 0) {
-            const prev = parts[parts.length - 1];
-            const needsSpace =
-                prev &&
-                !prev.endsWith(' ') &&
-                !trimmed.startsWith(' ') &&
-                !/^[,.;:!?)]/.test(trimmed) &&
-                !/[(]$/.test(prev);
-            if (needsSpace) parts.push(' ');
-        }
-
-        parts.push(trimmed);
+        appendTextRun(parts, raw, preserve);
     }
 
     let text = parts.join('');
@@ -455,8 +465,10 @@ function extractHeaderFields(xmlContent) {
     // Common header field patterns
     const headerPatterns = [
         { label: 'Numéro lancement', key: 'NUMERO_LANCEMENT', placeholder: '{{LT}}' },
+        { label: 'Numéro de cordon', key: 'NUMERO_CORDON', placeholder: null },
         { label: 'N° cordon', key: 'NUMERO_CORDON', placeholder: null },
         { label: 'Référence SILOG', key: 'REFERENCE_SILOG', placeholder: null },
+        { label: 'Désignation', key: 'DESIGNATION', placeholder: null },
         { label: 'Numéro de série', key: 'NUMERO_SERIE', placeholder: '{{SN}}' }
     ];
     

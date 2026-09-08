@@ -1,8 +1,8 @@
 /**
  * Composant pour afficher et remplir un formulaire FSOP de manière interactive
  */
-import { collectLotsForVoieCell, collectLotsForLotCell, normalizeFsopLotKey, parseSavedVoies } from './fsopForm/lotMatching.js?v=20260826.1';
-import { loadStructure } from './fsopForm/loadStructure.js?v=20260826.1';
+import { collectLotsForVoieCell, collectLotsForLotCell, normalizeFsopLotKey, parseSavedVoies, parseSavedEtiquettes, cellHasEtiquetteSplit } from './fsopForm/lotMatching.js?v=20260908.1';
+import { loadStructure } from './fsopForm/loadStructure.js?v=20260908.1';
 const CHECKBOX_LINE_RE = /^([☐☑✓□]|\[[ x]\])[\t ]+(\S[^\n]{0,300})$/i;
 const UNIT_SPEC_RE = /\d{1,8}[\t ](?:h|min|°C|°F)/i;
 
@@ -704,53 +704,23 @@ class FsopForm {
 
                 const cellText = (cell?.text || '').trim();
                 const isBlank = !cellText || /^_{3,}$/.test(cellText);
-                
-                // ⚡ FIX: Detect if this column is for "Numéro lancement" by checking:
-                // 1. If any header cell in this column contains "Numéro lancement" or "Numéro de cœur"
-                // 2. If any cell in ANY data row contains "Numéro lancement:" or "Numéro de cœur" (with colon)
-                // 3. If the cell text itself contains "Numéro lancement", "Numéro de cœur", or "{{LT}}"
-                // 4. If the cell is in a column where the previous cell (same row) contains "Numéro lancement:" or "Numéro de cœur"
-                const checkIfLaunchNumberColumn = () => {
-                    // Check header cells in this column
-                    const headerText = String(head[colIdx]?.text || '').toLowerCase();
-                    if (headerText && (/numéro\s*lancement/i.test(headerText) || /numéro\s*de\s*c[oô]eur/i.test(headerText))) {
-                        return true;
+
+                const prevCellTextSameRow = (() => {
+                    if (colIdx <= 0) return '';
+                    if (isHeader) return String(head[colIdx - 1]?.text || '').trim();
+                    if (rowIdx >= 0 && Array.isArray(body[rowIdx])) {
+                        return String(body[rowIdx][colIdx - 1]?.text || '').trim();
                     }
-                    // Check ALL data rows for "Numéro lancement:" or "Numéro de cœur" label
-                    for (let i = 0; i < body.length; i++) {
-                        if (body[i] && body[i][colIdx]) {
-                            const cell = body[i][colIdx];
-                            const cellTextLower = String(cell?.text || '').toLowerCase();
-                            if (/numéro\s*lancement/i.test(cellTextLower) || /numéro\s*de\s*c[oô]eur/i.test(cellTextLower)) {
-                                return true;
-                            }
-                        }
-                        // Also check if previous column in same row has "Numéro lancement:" or "Numéro de cœur"
-                        if (colIdx > 0 && body[i] && body[i][colIdx - 1]) {
-                            const prevCell = body[i][colIdx - 1];
-                            const prevTextLower = String(prevCell?.text || '').toLowerCase();
-                            if (/numéro\s*lancement\s*:?/i.test(prevTextLower) || /numéro\s*de\s*c[oô]eur/i.test(prevTextLower)) {
-                                return true;
-                            }
-                        }
-                    }
-                    // Check current cell
-                    const cellTextLower = cellText.toLowerCase();
-                    if (/numéro\s*lancement/i.test(cellTextLower) || /numéro\s*de\s*c[oô]eur/i.test(cellTextLower) || cellText.includes('{{LT}}')) {
-                        return true;
-                    }
-                    // Check if previous cell in same row has "Numéro lancement:" or "Numéro de cœur"
-                    if (!isHeader && rowIdx >= 0 && body[rowIdx] && colIdx > 0 && body[rowIdx][colIdx - 1]) {
-                        const prevCell = body[rowIdx][colIdx - 1];
-                        const prevTextLower = String(prevCell?.text || '').toLowerCase();
-                        if (/numéro\s*lancement\s*:?/i.test(prevTextLower) || /numéro\s*de\s*c[oô]eur/i.test(prevTextLower)) {
-                            return true;
-                        }
-                    }
-                    return false;
-                };
-                
-                const isLaunchNumberColumn = checkIfLaunchNumberColumn();
+                    return '';
+                })();
+                const prevCellLower = prevCellTextSameRow.toLowerCase();
+                const isLaunchLabelPrev =
+                    /^(num[eé]ro[ \t]+lancement|num[eé]ro[ \t]+de[ \t]+c[oô]eur(?:[ \t]*\+[ \t]*num[eé]ro[ \t]+de[ \t]+lancement)?)\s*:?\s*$/i
+                        .test(prevCellLower);
+                const isCordonLabelPrev = /^(num[eé]ro[ \t]+de[ \t]+cordon|n[°º][ \t]*cordon)\s*:?\s*$/i.test(prevCellLower);
+                const isSilogLabelPrev = /^r[eé]f[eé]rence[ \t]+silog\s*:?\s*$/i.test(prevCellLower);
+                const isDesignationLabelPrev = /^d[eé]signation\s*:?\s*$/i.test(prevCellLower);
+                const isHeaderValueAfterLabel = isBlank && (isLaunchLabelPrev || isCordonLabelPrev || isSilogLabelPrev || isDesignationLabelPrev);
                 
                 const content = (() => {
                     // Header cells are never editable (except for placeholders)
@@ -852,134 +822,34 @@ class FsopForm {
                         }
                     }
 
-                    // ⚡ FIX: Special handling for "Numéro lancement" cells:
-                    // - If this cell is the *value* cell (blank/underscores or already has a saved LT), render as input
-                    // - If the label+underscores are in the same cell, replace underscores by an inline input
-                    if (isLaunchNumberColumn) {
+                    // Header identity fields: only "Numéro lancement" gets {{LT}}.
+                    // Cordon / SILOG / Désignation stay empty (operator fills).
+                    if (isHeaderValueAfterLabel) {
+                        const launchValue = isLaunchLabelPrev
+                            ? (saved || this.formData.placeholders?.['{{LT}}'] || '')
+                            : (saved || '');
+                        const dataLaunch = isLaunchLabelPrev ? ' data-launch-number="true"' : '';
+                        return `<input
+                            type="text"
+                            class="fsop-cell-input fsop-cell-input-text"
+                            data-row="${rowIdx}"
+                            data-col="${colIdx}"${dataLaunch}
+                            value="${this.escapeHtml(launchValue)}"
+                            style="width: 100%; border: 1px solid #ccc; padding: 4px; background: white;"
+                        />`;
+                    }
+
+                    if (!isHeader && (cellText.includes('{{LT}}') || (/num[eé]ro[ \t]+lancement/i.test(cellText) && /_{3,}/.test(cellText)))) {
                         const launchValue = saved || this.formData.placeholders?.['{{LT}}'] || '';
-                        const hasUnderscoreSlot = /_{3,}/.test(cellText);
-                        const isLikelyValueCell = isBlank || !!saved || /^\s*LT\d+/i.test(cellText) || cellText.includes('{{LT}}');
-                        if (hasUnderscoreSlot && !isLikelyValueCell) {
-                            // Inline slot inside a label cell
+                        if (/_{3,}/.test(cellText)) {
                             const parts = cellText.split(/_{3,}/);
-                            const before = parts[0] || '';
-                            const after = parts.slice(1).join('') || '';
                             return `
-                                <span>${this.escapeHtml(before)}</span>
-                                <input type="text"
-                                    class="fsop-inline-input"
-                                    data-row="${rowIdx}"
-                                    data-col="${colIdx}"
-                                    data-launch-number="true"
-                                    value="${this.escapeHtml(launchValue)}" />
-                                <span>${this.escapeHtml(after)}</span>
+                                <span>${this.escapeHtml(parts[0] || '')}</span>
+                                <input type="text" class="fsop-inline-input" data-row="${rowIdx}" data-col="${colIdx}" data-launch-number="true" value="${this.escapeHtml(launchValue)}" />
+                                <span>${this.escapeHtml(parts.slice(1).join('') || '')}</span>
                             `;
                         }
-                        if (isLikelyValueCell) {
-                        console.log(`🔍 Rendering launch number input at row ${rowIdx}, col ${colIdx} with value: "${launchValue}"`);
-                        return `<input 
-                            type="text" 
-                            class="fsop-cell-input fsop-cell-input-text" 
-                            data-row="${rowIdx}" 
-                            data-col="${colIdx}" 
-                            data-launch-number="true"
-                            value="${this.escapeHtml(launchValue)}" 
-                            style="width: 100%; border: 1px solid #ccc; padding: 4px; background: white;"
-                        />`;
-                        }
-                    }
-                    
-                    // ⚡ FIX: Also check if this is an empty cell that follows "Numéro lancement:" or "Numéro de cœur" in the same row
-                    // This handles the case where "Numéro lancement:" or "Numéro de cœur + Numéro de lancement" is in col 0 and the input should be in col 1
-                    if (isBlank && !isHeader && rowIdx >= 0 && body[rowIdx] && colIdx > 0) {
-                        const prevCell = body[rowIdx][colIdx - 1];
-                        const prevText = String(prevCell?.text || '').trim().toLowerCase();
-                        if (prevCell && (/numéro[ \t]*lancement[ \t]*:?[ \t]*$/i.test(prevText) || /numéro[ \t]*de[ \t]*c[oô]eur/i.test(prevText))) {
-                            // This is the cell right after "Numéro lancement:" or "Numéro de cœur + Numéro de lancement" - make it an input
-                            const launchValue = saved || this.formData.placeholders?.['{{LT}}'] || '';
-                            console.log(`🔍 Rendering launch number input (detected from prev cell: "${prevText}") at row ${rowIdx}, col ${colIdx} with value: "${launchValue}"`);
-                            return `<input 
-                                type="text" 
-                                class="fsop-cell-input fsop-cell-input-text" 
-                                data-row="${rowIdx}" 
-                                data-col="${colIdx}" 
-                                data-launch-number="true"
-                                value="${this.escapeHtml(launchValue)}" 
-                                style="width: 100%; border: 1px solid #ccc; padding: 4px; background: white;"
-                            />`;
-                        }
-                    }
-                    
-                    // ⚡ FIX: Check if this cell or adjacent cells contain "Numéro de cœur" or "Numéro lancement"
-                    // Strategy: If cell contains label, render label + input. If cell is empty but previous/next has label, render input.
-                    const cellTextLower = cellText.toLowerCase();
-                    const hasCoeurLancement = /numéro\s*de\s*c[oô]eur/i.test(cellTextLower) || /numéro\s*lancement/i.test(cellTextLower);
-                    
-                    // Check adjacent cells in same row for the label
-                    let adjacentHasLabel = false;
-                    if (!isHeader && rowIdx >= 0 && body[rowIdx]) {
-                        // Check previous cell
-                        if (colIdx > 0 && body[rowIdx][colIdx - 1]) {
-                            const prevText = String(body[rowIdx][colIdx - 1]?.text || '').toLowerCase();
-                            if (/numéro\s*de\s*c[oô]eur/i.test(prevText) || /numéro\s*lancement/i.test(prevText)) {
-                                adjacentHasLabel = true;
-                            }
-                        }
-                        // Check next cell
-                        if (!adjacentHasLabel && body[rowIdx][colIdx + 1]) {
-                            const nextText = String(body[rowIdx][colIdx + 1]?.text || '').toLowerCase();
-                            if (/numéro\s*de\s*c[oô]eur/i.test(nextText) || /numéro\s*lancement/i.test(nextText)) {
-                                adjacentHasLabel = true;
-                            }
-                        }
-                    }
-                    
-                    if ((hasCoeurLancement || adjacentHasLabel || isLaunchNumberColumn) && !isHeader) {
-                        const launchValue = saved || this.formData.placeholders?.['{{LT}}'] || '';
-                        // If cell contains the label, render as label + input inline
-                        if (cellText && !isBlank && hasCoeurLancement) {
-                            // Cell contains label, render label + input inline
-                            console.log(`🔍 Rendering launch number input (cell contains label: "${cellText}") at row ${rowIdx}, col ${colIdx} with value: "${launchValue}"`);
-                            return `
-                                <span style="margin-right: 8px;">${this.escapeHtml(cellText)}</span>
-                                <input 
-                                    type="text" 
-                                    class="fsop-cell-input fsop-cell-input-text" 
-                                    data-row="${rowIdx}" 
-                                    data-col="${colIdx}" 
-                                    data-launch-number="true"
-                                    value="${this.escapeHtml(launchValue)}" 
-                                    style="flex: 1; border: 1px solid #ccc; padding: 4px; background: white; min-width: 120px;"
-                                />
-                            `;
-                        } else if (isBlank || adjacentHasLabel || isLaunchNumberColumn) {
-                            // Cell is empty or adjacent has label, render just input
-                            console.log(`🔍 Rendering launch number input (empty/adjacent cell) at row ${rowIdx}, col ${colIdx} with value: "${launchValue}"`);
-                            return `<input 
-                                type="text" 
-                                class="fsop-cell-input fsop-cell-input-text" 
-                                data-row="${rowIdx}" 
-                                data-col="${colIdx}" 
-                                data-launch-number="true"
-                                value="${this.escapeHtml(launchValue)}" 
-                                style="width: 100%; border: 1px solid #ccc; padding: 4px; background: white;"
-                            />`;
-                        }
-                    }
-                    
-                    // ⚡ FALLBACK: For first table, first row, if col 0 or 1 and we have a launch number, make it an input
-                    if (tableIdx === 0 && rowIdx === 0 && (colIdx === 0 || colIdx === 1) && this.formData.placeholders?.['{{LT}}'] && isBlank) {
-                        const launchValue = this.formData.placeholders['{{LT}}'] || '';
-                        console.log(`🔍 Fallback: Rendering launch number input at first table, row 0, col ${colIdx} with value: "${launchValue}"`);
-                        return `<input 
-                            type="text" 
-                            class="fsop-cell-input fsop-cell-input-text" 
-                            data-row="${rowIdx}" 
-                            data-col="${colIdx}" 
-                            data-launch-number="true"
-                            value="${this.escapeHtml(launchValue)}" 
-                            style="width: 100%; border: 1px solid #ccc; padding: 4px; background: white;"
-                        />`;
+                        return renderTextWithInputs(cellText.replaceAll('{{LT}}', launchValue));
                     }
                     
                     // Special handling: Lot column should always be easy to fill (use input instead of contenteditable)
@@ -1058,6 +928,56 @@ class FsopForm {
                             
                             multiVoieHtml += '</div>';
                             return multiVoieHtml;
+                        }
+
+                        // Dual side lots: Coté étiquette / Côté sans étiquette (F457 Cordon OHA…)
+                        const compTextEtq = normalizeCellText(body?.[rowIdx]?.[composantColIdx]?.text || '');
+                        if (cellHasEtiquetteSplit(cellText, compTextEtq)) {
+                            const hintsEtq = extractParenHints(compTextEtq);
+                            const linesEtq = Array.isArray(this.formData?.fsopLots?.lines) ? this.formData.fsopLots.lines : [];
+                            const itemsEtq = Array.isArray(this.formData?.fsopLots?.items) ? this.formData.fsopLots.items : [];
+                            const lotsEtq = collectLotsForLotCell(
+                                linesEtq,
+                                itemsEtq,
+                                [],
+                                hintsEtq,
+                                compTextEtq,
+                                currentCodeOperation
+                            );
+                            const savedEtq = parseSavedEtiquettes(savedLot);
+                            const autoLotEtq = lotsEtq.length === 1 ? lotsEtq[0] : '';
+                            const valE = savedEtq.etiquette || autoLotEtq || '';
+                            const valS = savedEtq.sans || autoLotEtq || '';
+
+                            const renderEtqField = (key, label, value) => {
+                                if (lotsEtq.length >= 1) {
+                                    const isOther = Boolean(value && !lotsEtq.includes(value));
+                                    let optionsHtml = '<option value="">-- Choisir --</option>';
+                                    lotsEtq.forEach((lot) => {
+                                        const selected = !isOther && value === lot ? 'selected' : '';
+                                        optionsHtml += `<option value="${this.escapeHtml(lot)}" ${selected}>${this.escapeHtml(lot)}</option>`;
+                                    });
+                                    optionsHtml += `<option value="__OTHER__" ${isOther ? 'selected' : ''}>Autre…</option>`;
+                                    if (isOther) {
+                                        return `<div class="fsop-voie-row"><label>${label}</label>
+                                            <select class="fsop-lot-select" data-row="${rowIdx}" data-col="${colIdx}" data-etiquette="${key}" style="display:none;">${optionsHtml}</select>
+                                            <input type="text" class="fsop-lot-other-input fsop-cell-input fsop-cell-input-lot" data-row="${rowIdx}" data-col="${colIdx}" data-etiquette="${key}" value="${this.escapeHtml(value)}" placeholder="Lot" />
+                                        </div>`;
+                                    }
+                                    return `<div class="fsop-voie-row"><label>${label}</label>
+                                        <select class="fsop-lot-select fsop-cell-input fsop-cell-input-lot" data-row="${rowIdx}" data-col="${colIdx}" data-etiquette="${key}">${optionsHtml}</select>
+                                        <input type="text" class="fsop-lot-other-input fsop-cell-input fsop-cell-input-lot" data-row="${rowIdx}" data-col="${colIdx}" data-etiquette="${key}" style="display:none;" placeholder="Lot" />
+                                    </div>`;
+                                }
+                                return `<div class="fsop-voie-row"><label>${label}</label>
+                                    <input type="text" class="fsop-cell-input fsop-cell-input-lot" data-row="${rowIdx}" data-col="${colIdx}" data-etiquette="${key}" value="${this.escapeHtml(value)}" placeholder="Lot" />
+                                </div>`;
+                            };
+
+                            return `<div class="fsop-etiquette-lot-cell">
+                                ${renderEtqField('etiquette', 'Coté étiquette :', valE)}
+                                ${renderEtqField('sans', 'Côté sans étiquette :', valS)}
+                            </div>`;
                         }
                         
                         // Single lot cell (normal case) — même menu déroulant que les opérateurs
@@ -1245,21 +1165,6 @@ class FsopForm {
                     }
 
                     if (isBlank) {
-                        // ⚡ FIX: If this is the first table (tableIdx === 0) and first data row (rowIdx === 0) and second column (colIdx === 1),
-                        // and we have a launch number, make it an input (fallback detection)
-                        if (tableIdx === 0 && rowIdx === 0 && colIdx === 1 && this.formData.placeholders?.['{{LT}}']) {
-                            const launchValue = this.formData.placeholders['{{LT}}'] || '';
-                            console.log(`🔍 Fallback: Rendering launch number input at first table, row 0, col 1 with value: "${launchValue}"`);
-                            return `<input 
-                                type="text" 
-                                class="fsop-cell-input fsop-cell-input-text" 
-                                data-row="${rowIdx}" 
-                                data-col="${colIdx}" 
-                                data-launch-number="true"
-                                value="${this.escapeHtml(launchValue)}" 
-                                style="width: 100%; border: 1px solid #ccc; padding: 4px; background: white;"
-                            />`;
-                        }
                         const initial = saved ? String(saved) : '';
                         const valueAttr = initial ? ` value="${this.escapeHtml(initial)}"` : '';
                         return `<input class="fsop-cell-input fsop-cell-input-text" type="text" data-row="${rowIdx}" data-col="${colIdx}"${valueAttr} />`;
@@ -2058,6 +1963,39 @@ class FsopForm {
                 if (!this.formData.tables[tableIdx][row]) {
                     this.formData.tables[tableIdx][row] = {};
                 }
+                this.formData.tables[tableIdx][row][col] = serialized;
+            });
+        });
+
+        // Coté étiquette / sans étiquette: serialize to multi-line
+        this.container.querySelectorAll('.fsop-etiquette-lot-cell [data-etiquette]').forEach((el) => {
+            el.addEventListener('change', (e) => {
+                const table = e.target.closest('table.fsop-word-table[data-table-idx]');
+                if (!table) return;
+                const tableIdx = table.dataset.tableIdx;
+                const row = e.target.dataset.row;
+                const col = e.target.dataset.col;
+                if (tableIdx === null || row === null || col === null) return;
+
+                const cell = e.target.closest('.fsop-etiquette-lot-cell');
+                const vals = { etiquette: '', sans: '' };
+                cell.querySelectorAll('[data-etiquette]').forEach((v) => {
+                    const key = v.dataset.etiquette;
+                    let val = v.value || '';
+                    if (val === '__OTHER__') {
+                        const other = cell.querySelector(`.fsop-lot-other-input[data-etiquette="${key}"]`);
+                        val = other ? (other.value || '') : '';
+                    }
+                    if (key) vals[key] = val;
+                });
+
+                const parts = [];
+                if (vals.etiquette) parts.push(`Coté étiquette : ${vals.etiquette}`);
+                if (vals.sans) parts.push(`Côté sans étiquette : ${vals.sans}`);
+                const serialized = parts.join('\n');
+
+                if (!this.formData.tables[tableIdx]) this.formData.tables[tableIdx] = {};
+                if (!this.formData.tables[tableIdx][row]) this.formData.tables[tableIdx][row] = {};
                 this.formData.tables[tableIdx][row][col] = serialized;
             });
         });
