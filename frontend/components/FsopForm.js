@@ -1,8 +1,8 @@
 /**
  * Composant pour afficher et remplir un formulaire FSOP de manière interactive
  */
-import { collectLotsForVoieCell, collectLotsForLotCell, normalizeFsopLotKey, parseSavedVoies, parseSavedEtiquettes, cellHasEtiquetteSplit } from './fsopForm/lotMatching.js?v=20260908.9';
-import { loadStructure } from './fsopForm/loadStructure.js?v=20260908.9';
+import { collectLotsForVoieCell, collectLotsForLotCell, normalizeFsopLotKey, parseSavedVoies, parseSavedEtiquettes, cellHasEtiquetteSplit } from './fsopForm/lotMatching.js?v=20260908.10';
+import { loadStructure } from './fsopForm/loadStructure.js?v=20260908.10';
 const CHECKBOX_LINE_RE = /^([☐☑✓□]|\[[ x]\])[\t ]+(\S[\s\S]{0,400})$/i;
 /** "Nombre d'essai (≤ 3) : ☐ ☐ ☐" — several boxes after a label */
 const INLINE_CHECKBOX_GROUP_RE = /^(.+?)\s*:\s*((?:[☐☑✓□◻⬜]|\[[ x]\])(?:[\t ]+(?:[☐☑✓□◻⬜]|\[[ x\]])){1,7})\s*$/i;
@@ -19,7 +19,9 @@ const CANONICAL_REPORT_ROOT = 'X:/Traçabilité/Code_article/N° du LT';
 function expandFsopReportPath(text) {
     let t = String(text || '');
     if (!REPORT_FOLDER_RE.test(t) && !/n[°º]\s*du\s*lt/i.test(t)) return t;
-    if (/tra[cç]abilit/i.test(t) && /code_article/i.test(t)) return t;
+    // Already a full-ish path (with or without underscore in Code_article)
+    if (/tra[cç]abilit/i.test(t) && /code[_\s-]?article/i.test(t)) return t;
+    if (/[A-Za-z]\s*:?\s*[\\/][^\n]{0,40}tra[cç]abilit/i.test(t)) return t;
 
     // "... sous /N° du LT/INTERFERO_E" or "... sous INTERFERO_E"
     t = t.replace(
@@ -27,7 +29,6 @@ function expandFsopReportPath(text) {
         (_m, folder) => `sous ${CANONICAL_REPORT_ROOT}/${String(folder).replace(/^\*|\*$/g, '')}`
     );
 
-    // Bare leftover "/N° du LT/" without folder already handled above
     t = t.replace(
         /(?:sous\s+)?[\\/]?N[°º]\s*du\s*LT(?![\\/]\S)/gi,
         `sous ${CANONICAL_REPORT_ROOT}`
@@ -319,6 +320,26 @@ class FsopForm {
 
         let blankId = 0;
 
+        const buildWordlikeOperatorSelect = (placeholderKey) => {
+            const operatorOptions = Array.isArray(this.formData.operatorOptions) ? this.formData.operatorOptions : [];
+            const savedOperator = String(this.formData.placeholders?.[placeholderKey] || '').trim();
+            const isOtherValue = savedOperator && !operatorOptions.some((opt) => opt.initials === savedOperator);
+            let optionsHtml = '<option value="">-- Choisir --</option>';
+            operatorOptions.forEach((opt) => {
+                const selected = savedOperator === opt.initials ? 'selected' : '';
+                optionsHtml += `<option value="${this.escapeHtml(opt.initials)}" ${selected}>${this.escapeHtml(opt.label)}</option>`;
+            });
+            optionsHtml += `<option value="__OTHER__" ${isOtherValue ? 'selected' : ''}>Autre…</option>`;
+            return `
+                <span class="fsop-operator-cell fsop-operator-inline">
+                    <select class="fsop-operator-select fsop-wordlike-operator-select" data-placeholder="${this.escapeHtml(placeholderKey)}" ${isOtherValue ? 'style="display:none"' : ''}>
+                        ${optionsHtml}
+                    </select>
+                    <input type="text" class="fsop-operator-other-input fsop-ind-input" data-placeholder="${this.escapeHtml(placeholderKey)}" value="${this.escapeHtml(isOtherValue ? savedOperator : '')}" placeholder="Initiales" ${isOtherValue ? '' : 'style="display:none"'} />
+                </span>
+            `;
+        };
+
         const renderTextWithInputs = (text) => {
             if (!text) return '';
             const makeBlankInput = (maxLen = 32) => {
@@ -342,8 +363,6 @@ class FsopForm {
             });
             
             // Detect "MO #### ind ___" (and Word leftovers like "ind 76___40") → one clean input.
-            // Those stray digits next to the field are NOT step numbers; they come from broken blanks.
-            // Note: "_" is a word char, so "ind___" has no \b after ind — allow _ / digit directly.
             out = out.replace(
                 /\bMO[ \t]*([\d \t]{3,8})[ \t]+ind(?=[\s_☐☑□◻⬜\d]|$)(?:[\s_]*(?:\d{1,4}|_{1,}|[☐☑□◻⬜]))*/gi,
                 (_m, moRaw) => {
@@ -354,15 +373,13 @@ class FsopForm {
                 }
             );
 
+            // Strip any leftover digits / underscores glued after the ind input (36, 67, 8, …)
+            out = out.replace(/(ind\s*<input\b[^>]*class="fsop-ind-input"[^>]*>)(?:[\s\u00a0]*(?:\d{1,4}|_{2,}))+/gi, '$1');
+
             out = out.replace(/\b(num(?:é|e)ro)\s+_{2,}/gi, (_m, label) => {
                 if (pathContext) return _m;
                 return `${this.escapeHtml(label)} ${makeBlankInput(32)}`;
             });
-
-            // Avoid turning leftover underscore runs right after an ind input into another field.
-            out = out.replace(/(ind\s*<input\b[^>]*>)\s*_{2,}/gi, '$1');
-            out = out.replace(/(ind\s*<input\b[^>]*>)\s*\d{1,4}\b/gi, '$1');
-            out = out.replace(/(ind\s*<input\b[^>]*>)(?:\s*\d{1,4})+/gi, '$1');
 
             out = out.replace(/_{3,}/g, () => {
                 if (pathContext) return '___';
@@ -374,6 +391,12 @@ class FsopForm {
                 return makeBlankInput(32);
             });
 
+            // Opérateur + blank/input → dropdown (after blanks became <input>)
+            out = out.replace(/\b(op[ée]rateur)\b(?:\s*[:：])?\s*(?:_{2,}|[□◻⬜☐]|<input\b[^>]*>)/gi, (_m, label) => {
+                const key = `{{OP_${++blankId}}}`;
+                return `${this.escapeHtml(label)} ${buildWordlikeOperatorSelect(key)}`;
+            });
+
             // Do NOT rewrite bare "N°" / "numero" in path / report contexts.
             if (!pathContext) {
                 out = out.replace(/\b(num(?:é|e)ro|n°|no)\b(?!\s*<input)\s*(?=($|[A-ZÀ-Ý]))/gi, (_m, label) => {
@@ -382,7 +405,6 @@ class FsopForm {
             }
 
             // Do NOT turn checkbox rows (☐ ☐ ☐) into a text field — handled as real checkboxes.
-            // Only convert empty square placeholders that look like fill-in blanks (rare).
             out = out.replace(/(?:[◻⬜]\s*){2,}/g, (match) => {
                 const boxes = (match.match(/[◻⬜]/g) || []).length;
                 const maxLen = Math.max(2, Math.min(8, boxes));
@@ -400,6 +422,9 @@ class FsopForm {
                 return `<input class="fsop-ind-input fsop-cell-input-time" type="time" data-placeholder="${placeholderKey}" value="${this.escapeHtml(currentValue)}" />`;
             });
 
+            // Final sweep: digits still stuck after ind inputs
+            out = out.replace(/(ind\s*<input\b[^>]*class="fsop-ind-input"[^>]*>)(?:[\s\u00a0]*\d{1,4})+/gi, '$1');
+
             pathSlots.forEach((pathText, idx) => {
                 const safe = this.escapeHtml(pathText);
                 out = out.replace(
@@ -412,13 +437,16 @@ class FsopForm {
         };
 
         const renderPassFailLine = (text) => {
-            // Pattern: "Mesure X : PASS FAIL" -> label + radios
-            const m = text.match(/^(.+?):\s*PASS\s*FAIL\s*$/i);
+            // "Contact A_P : PASS FAIL" or "... PASS FAIL enregistrement sous ..."
+            const m = String(text || '').match(/^(.+?)\s*:\s*PASS\s+FAIL\b([\s\S]*)$/i);
             if (!m) return null;
             const label = m[1].trim();
-            const key = label; // used by backend injection regex (field: PASS/FAIL)
+            const rest = String(m[2] || '').trim();
+            if (!label || label.length > 180) return null;
+            const key = label;
             const current = this.formData.passFail?.wordlike?.[key] || '';
             const labelHtml = renderTextWithInputs(label);
+            const restHtml = rest ? ` <span class="fsop-word-passfail-rest">${renderTextWithInputs(rest)}</span>` : '';
             return `
                 <div class="fsop-word-passfail">
                     <span class="fsop-word-passfail-label">${labelHtml} :</span>
@@ -430,6 +458,7 @@ class FsopForm {
                         <input type="radio" name="pf_${this.escapeHtml(key)}" value="FAIL" data-passfail-key="${this.escapeHtml(key)}" ${current === 'FAIL' ? 'checked' : ''}/>
                         FAIL
                     </label>
+                    ${restHtml}
                 </div>
             `;
         };
@@ -1417,6 +1446,13 @@ class FsopForm {
                     return;
                 }
 
+                // PASS/FAIL interactive (even when followed by a report path)
+                const pfHtml = renderPassFailLine(text);
+                if (pfHtml) {
+                    html += `<div class="fsop-word-block">${pfHtml}</div>`;
+                    return;
+                }
+
                 // Checkboxes MUST be detected before MO+ind subtitle heuristic
                 // (e.g. "☐ Test de flexion ... MO 1050 ind ___")
                 const checkboxGroupHtml = renderInlineCheckboxGroup(text);
@@ -1447,7 +1483,6 @@ class FsopForm {
                 }
 
                 // Main operation lines with MO + ind → numbered step title.
-                // Word often stores the "1-" as list numbering (not in w:t), so we auto-number.
                 if (
                     text.length <= 180 &&
                     /\bMO\s*\d{3,5}\b/i.test(text) &&
@@ -1458,11 +1493,6 @@ class FsopForm {
                     return;
                 }
 
-                const pfHtml = b.hasPassFail ? renderPassFailLine(text) : null;
-                if (pfHtml) {
-                    html += `<div class="fsop-word-block">${pfHtml}</div>`;
-                    return;
-                }
                 html += `<div class="fsop-word-block fsop-word-paragraph">${renderTextWithInputs(text)}</div>`;
             }
         });
@@ -1932,31 +1962,33 @@ class FsopForm {
                 const rowIdx = Number.parseInt(e.target.dataset.row, 10);
                 const colIdx = Number.parseInt(e.target.dataset.col, 10);
                 const value = e.target.value;
+                const placeholderKey = e.target.dataset.placeholder;
                 const cell = e.target.closest('.fsop-operator-cell');
                 const otherInput = cell?.querySelector('.fsop-operator-other-input');
                 
                 if (value === '__OTHER__') {
-                    // Show input, hide select
                     e.target.style.display = 'none';
                     if (otherInput) {
                         otherInput.style.display = 'block';
                         otherInput.focus();
                     }
-                } else {
-                    // Hide input, show select, save value
-                    if (otherInput) {
-                        otherInput.style.display = 'none';
-                        otherInput.value = '';
-                    }
-                    // Save to wordlikeTables
-                    const table = e.target.closest('table[data-table-idx]');
-                    if (table) {
-                        const tableIdx = table.dataset.tableIdx;
-                        if (!this.formData.wordlikeTables) this.formData.wordlikeTables = {};
-                        if (!this.formData.wordlikeTables[tableIdx]) this.formData.wordlikeTables[tableIdx] = {};
-                        if (!this.formData.wordlikeTables[tableIdx][rowIdx]) this.formData.wordlikeTables[tableIdx][rowIdx] = {};
-                        this.formData.wordlikeTables[tableIdx][rowIdx][colIdx] = value;
-                    }
+                    return;
+                }
+
+                if (otherInput) {
+                    otherInput.style.display = 'none';
+                    otherInput.value = '';
+                }
+                if (placeholderKey) {
+                    this.formData.placeholders[placeholderKey] = value;
+                }
+                const table = e.target.closest('table[data-table-idx]');
+                if (table && Number.isFinite(rowIdx) && Number.isFinite(colIdx)) {
+                    const tableIdx = table.dataset.tableIdx;
+                    if (!this.formData.wordlikeTables) this.formData.wordlikeTables = {};
+                    if (!this.formData.wordlikeTables[tableIdx]) this.formData.wordlikeTables[tableIdx] = {};
+                    if (!this.formData.wordlikeTables[tableIdx][rowIdx]) this.formData.wordlikeTables[tableIdx][rowIdx] = {};
+                    this.formData.wordlikeTables[tableIdx][rowIdx][colIdx] = value;
                 }
             });
         });
@@ -1967,10 +1999,13 @@ class FsopForm {
                 const rowIdx = Number.parseInt(e.target.dataset.row, 10);
                 const colIdx = Number.parseInt(e.target.dataset.col, 10);
                 const value = e.target.value.trim().toUpperCase();
+                const placeholderKey = e.target.dataset.placeholder;
+                if (placeholderKey) {
+                    this.formData.placeholders[placeholderKey] = value;
+                }
                 
-                // Save to wordlikeTables
                 const table = e.target.closest('table[data-table-idx]');
-                if (table) {
+                if (table && Number.isFinite(rowIdx) && Number.isFinite(colIdx)) {
                     const tableIdx = table.dataset.tableIdx;
                     if (!this.formData.wordlikeTables) this.formData.wordlikeTables = {};
                     if (!this.formData.wordlikeTables[tableIdx]) this.formData.wordlikeTables[tableIdx] = {};
