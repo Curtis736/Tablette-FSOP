@@ -1,8 +1,8 @@
 /**
  * Composant pour afficher et remplir un formulaire FSOP de manière interactive
  */
-import { collectLotsForVoieCell, collectLotsForLotCell, normalizeFsopLotKey, parseSavedVoies, parseSavedEtiquettes, cellHasEtiquetteSplit } from './fsopForm/lotMatching.js?v=20260908.10';
-import { loadStructure } from './fsopForm/loadStructure.js?v=20260908.10';
+import { collectLotsForVoieCell, collectLotsForLotCell, normalizeFsopLotKey, parseSavedVoies, parseSavedEtiquettes, cellHasEtiquetteSplit } from './fsopForm/lotMatching.js?v=20260908.11';
+import { loadStructure } from './fsopForm/loadStructure.js?v=20260908.11';
 const CHECKBOX_LINE_RE = /^([☐☑✓□]|\[[ x]\])[\t ]+(\S[\s\S]{0,400})$/i;
 /** "Nombre d'essai (≤ 3) : ☐ ☐ ☐" — several boxes after a label */
 const INLINE_CHECKBOX_GROUP_RE = /^(.+?)\s*:\s*((?:[☐☑✓□◻⬜]|\[[ x]\])(?:[\t ]+(?:[☐☑✓□◻⬜]|\[[ x\]])){1,7})\s*$/i;
@@ -376,7 +376,12 @@ class FsopForm {
             // Strip any leftover digits / underscores glued after the ind input (36, 67, 8, …)
             out = out.replace(/(ind\s*<input\b[^>]*class="fsop-ind-input"[^>]*>)(?:[\s\u00a0]*(?:\d{1,4}|_{2,}))+/gi, '$1');
 
-            out = out.replace(/\b(num(?:é|e)ro)\s+_{2,}/gi, (_m, label) => {
+            // "Numéro ___ de série des cordons" next to Traçabilité is a label, not a fillable blank.
+            out = out.replace(/\b(num(?:é|e)ro)\s+_{2,}(\s*de\s+s[eé]rie)/gi, '$1$2');
+            out = out.replace(/\b(num(?:é|e)ro)\s+_{2,}(\s*des?\s+c\s*ordons)/gi, '$1$2');
+            out = out.replace(/\bc\s+ordons\b/gi, 'cordons');
+
+            out = out.replace(/\b(num(?:é|e)ro)\s+_{2,}(?!\s*de\s+s[eé]rie)/gi, (_m, label) => {
                 if (pathContext) return _m;
                 return `${this.escapeHtml(label)} ${makeBlankInput(32)}`;
             });
@@ -910,6 +915,9 @@ class FsopForm {
                 const isHeaderValueAfterLabel = isBlank && (isLaunchLabelPrev || isCordonLabelPrev || isSilogLabelPrev || isDesignationLabelPrev);
                 
                 const content = (() => {
+                    const prevIsTracabilite = /^tra[cç]abilit/i.test(prevCellLower);
+                    const looksLikeSerieLabel = /num[eé]ro.*s[eé]rie|s[eé]rie.*cordon/i.test(cellText);
+
                     // Header cells are never editable (except for placeholders)
                     if (isHeader) {
                         // Some FSOP variants have an empty first header cell in extraction.
@@ -927,7 +935,23 @@ class FsopForm {
                                 return 'Opération';
                             }
                         }
+                        // Cell next to "Traçabilité": keep "Numéro de série des cordons" as plain label (no blank).
+                        if (prevIsTracabilite && (looksLikeSerieLabel || isBlank)) {
+                            const label = looksLikeSerieLabel
+                                ? cellText.replace(/_{2,}/g, ' ').replace(/\s+/g, ' ').trim()
+                                : 'Numéro de série des cordons';
+                            return this.escapeHtml(label);
+                        }
                         return cellText ? renderTextWithInputs(cellText) : `<span class="fsop-cell-empty"></span>`;
+                    }
+
+                    // Body: same rule for Traçabilité row labels
+                    if (prevIsTracabilite && looksLikeSerieLabel) {
+                        return this.escapeHtml(cellText.replace(/_{2,}/g, ' ').replace(/\s+/g, ' ').trim());
+                    }
+                    if (prevIsTracabilite && isBlank && !getSavedCellValue(rowIdx, colIdx)) {
+                        // Empty cell right after Traçabilité header label — not a useful fillable field
+                        return this.escapeHtml('Numéro de série des cordons');
                     }
                     // Body cells:
                     // - Keep the document look (no extra inputs) except for Date/Heure columns which must be fillable with native pickers.
