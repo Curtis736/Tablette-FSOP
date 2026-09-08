@@ -1,8 +1,8 @@
 /**
  * Composant pour afficher et remplir un formulaire FSOP de manière interactive
  */
-import { collectLotsForVoieCell, collectLotsForLotCell, normalizeFsopLotKey, parseSavedVoies, parseSavedEtiquettes, cellHasEtiquetteSplit } from './fsopForm/lotMatching.js?v=20260908.8';
-import { loadStructure } from './fsopForm/loadStructure.js?v=20260908.8';
+import { collectLotsForVoieCell, collectLotsForLotCell, normalizeFsopLotKey, parseSavedVoies, parseSavedEtiquettes, cellHasEtiquetteSplit } from './fsopForm/lotMatching.js?v=20260908.9';
+import { loadStructure } from './fsopForm/loadStructure.js?v=20260908.9';
 const CHECKBOX_LINE_RE = /^([☐☑✓□]|\[[ x]\])[\t ]+(\S[\s\S]{0,400})$/i;
 /** "Nombre d'essai (≤ 3) : ☐ ☐ ☐" — several boxes after a label */
 const INLINE_CHECKBOX_GROUP_RE = /^(.+?)\s*:\s*((?:[☐☑✓□◻⬜]|\[[ x]\])(?:[\t ]+(?:[☐☑✓□◻⬜]|\[[ x\]])){1,7})\s*$/i;
@@ -341,19 +341,28 @@ class FsopForm {
                 return `<input class="fsop-inline-input" type="text" data-placeholder="${placeholder}" value="${this.escapeHtml(val)}" />`;
             });
             
-            // Detect "ind __" patterns (with 2+ underscores) and replace with editable input.
-            out = out.replace(/\bMO[ \t]*([\d \t]{3,8})[ \t]+ind[ \t]+_{2,}(?:[ \t]*[:;,.!?)]|[ \t]*$)/gi, (match, moRaw, suffix) => {
-                const moNumber = String(moRaw || '').replace(/\s+/g, '');
-                const placeholderKey = `{{IND_MO${moNumber}}}`;
-                const currentValue = this.formData.placeholders?.[placeholderKey] || '';
-                const cleanSuffix = suffix || '';
-                return `MO ${this.escapeHtml(String(moRaw || '').trim())} ind <input class="fsop-ind-input" type="text" maxlength="24" data-placeholder="${placeholderKey}" value="${this.escapeHtml(currentValue)}" />${this.escapeHtml(cleanSuffix)}`;
-            });
+            // Detect "MO #### ind ___" (and Word leftovers like "ind 76___40") → one clean input.
+            // Those stray digits next to the field are NOT step numbers; they come from broken blanks.
+            // Note: "_" is a word char, so "ind___" has no \b after ind — allow _ / digit directly.
+            out = out.replace(
+                /\bMO[ \t]*([\d \t]{3,8})[ \t]+ind(?=[\s_☐☑□◻⬜\d]|$)(?:[\s_]*(?:\d{1,4}|_{1,}|[☐☑□◻⬜]))*/gi,
+                (_m, moRaw) => {
+                    const moNumber = String(moRaw || '').replace(/\s+/g, '');
+                    const placeholderKey = `{{IND_MO${moNumber}}}`;
+                    const currentValue = this.formData.placeholders?.[placeholderKey] || '';
+                    return `MO ${this.escapeHtml(String(moRaw || '').trim())} ind <input class="fsop-ind-input" type="text" maxlength="24" data-placeholder="${placeholderKey}" value="${this.escapeHtml(currentValue)}" placeholder="ind" />`;
+                }
+            );
 
             out = out.replace(/\b(num(?:é|e)ro)\s+_{2,}/gi, (_m, label) => {
                 if (pathContext) return _m;
                 return `${this.escapeHtml(label)} ${makeBlankInput(32)}`;
             });
+
+            // Avoid turning leftover underscore runs right after an ind input into another field.
+            out = out.replace(/(ind\s*<input\b[^>]*>)\s*_{2,}/gi, '$1');
+            out = out.replace(/(ind\s*<input\b[^>]*>)\s*\d{1,4}\b/gi, '$1');
+            out = out.replace(/(ind\s*<input\b[^>]*>)(?:\s*\d{1,4})+/gi, '$1');
 
             out = out.replace(/_{3,}/g, () => {
                 if (pathContext) return '___';
@@ -365,12 +374,6 @@ class FsopForm {
                 return makeBlankInput(32);
             });
 
-            out = out.replace(/\bMO[ \t]*([\d \t]{3,8})[ \t]+ind\b(?![ \t]*<input)[ \t]*(?=($|[A-ZÀ-Ý]))/gi, (_m, moRaw) => {
-                const moNumber = String(moRaw || '').replace(/\s+/g, '');
-                const placeholderKey = `{{IND_MO${moNumber}}}`;
-                const currentValue = this.formData.placeholders?.[placeholderKey] || '';
-                return `MO ${this.escapeHtml(String(moRaw || '').trim())} ind <input class="fsop-ind-input" type="text" maxlength="24" data-placeholder="${placeholderKey}" value="${this.escapeHtml(currentValue)}" /> `;
-            });
             // Do NOT rewrite bare "N°" / "numero" in path / report contexts.
             if (!pathContext) {
                 out = out.replace(/\b(num(?:é|e)ro|n°|no)\b(?!\s*<input)\s*(?=($|[A-ZÀ-Ý]))/gi, (_m, label) => {
