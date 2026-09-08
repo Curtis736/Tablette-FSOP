@@ -5,6 +5,8 @@ import {
     collectLotsForVoieCell,
     collectLotsForLotCell,
     parseSavedVoies,
+    parseSavedEtiquettes,
+    cellHasEtiquetteSplit,
     sourceMatchesComponent
 } from '../../components/fsopForm/lotMatching.js';
 
@@ -50,6 +52,16 @@ describe('lotMatching', () => {
         const saved = parseSavedVoies('Voie 940 : A\nVoie Ligne : B\nVoie 1310 : C');
         expect(saved).toEqual({ '940': 'A', Ligne: 'B', '1310': 'C' });
         expect(parseSavedVoies('')).toEqual({});
+    });
+
+    it('parses and detects étiquette / sans étiquette lot splits', () => {
+        expect(cellHasEtiquetteSplit('Coté étiquette\nCôté sans étiquette')).toBe(true);
+        expect(cellHasEtiquetteSplit('', 'Contact Elio')).toBe(true);
+        expect(cellHasEtiquetteSplit('Lot unique', 'Fibre')).toBe(false);
+        expect(parseSavedEtiquettes('Coté étiquette : A\nCôté sans étiquette : B')).toEqual({
+            etiquette: 'A',
+            sans: 'B'
+        });
     });
 
     it('ignores lines with a different operation code', () => {

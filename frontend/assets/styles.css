@@ -2543,7 +2543,8 @@ tr:hover {
 }
 
 /* Multi-voies lot cells (Voie 940/Ligne/1310) */
-.fsop-multivoie-lot-cell {
+.fsop-multivoie-lot-cell,
+.fsop-etiquette-lot-cell {
     display: flex;
     flex-direction: column;
     gap: 4px;
@@ -2561,6 +2562,10 @@ tr:hover {
     font-weight: 600;
     min-width: 70px;
     color: #2c3e50;
+}
+
+.fsop-etiquette-lot-cell .fsop-voie-row label {
+    min-width: 140px;
 }
 
 .fsop-voie-row input,
