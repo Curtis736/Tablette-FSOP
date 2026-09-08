@@ -1,8 +1,8 @@
 /**
  * Composant pour afficher et remplir un formulaire FSOP de manière interactive
  */
-import { collectLotsForVoieCell, collectLotsForLotCell, normalizeFsopLotKey, parseSavedVoies, parseSavedEtiquettes, cellHasEtiquetteSplit } from './fsopForm/lotMatching.js?v=20260908.3';
-import { loadStructure } from './fsopForm/loadStructure.js?v=20260908.3';
+import { collectLotsForVoieCell, collectLotsForLotCell, normalizeFsopLotKey, parseSavedVoies, parseSavedEtiquettes, cellHasEtiquetteSplit } from './fsopForm/lotMatching.js?v=20260908.4';
+import { loadStructure } from './fsopForm/loadStructure.js?v=20260908.4';
 const CHECKBOX_LINE_RE = /^([☐☑✓□]|\[[ x]\])[\t ]+(\S[\s\S]{0,400})$/i;
 const UNIT_SPEC_RE = /\d{1,8}[\t ](?:h|min|°C|°F)/i;
 const STEP_NUMBER_PREFIX_RE = /^(\d{1,2}(?:[a-z])?)[ \t]*[-–.][ \t]*/i;
@@ -62,117 +62,20 @@ class FsopForm {
         }
 
         // Word-like rendering: preserve exact order (paragraphs/tables/page breaks)
+        // Always prepend the identity header (logo / Cordon / N° cordon / SILOG / LT / désignation)
         if (Array.isArray(this.structure.blocks) && this.structure.blocks.length > 0) {
-            container.innerHTML = this.renderWordLike(this.structure.blocks);
+            container.innerHTML = `
+                <div class="fsop-form-container">
+                    ${this.buildIdentityHeaderHtml(initialData)}
+                    ${this.renderWordLike(this.structure.blocks)}
+                </div>
+            `;
             this.attachEventListeners();
             return;
         }
 
         let html = '<div class="fsop-form-container">';
-        
-        // Render header with logo, title, and fields (like in the Word document)
-        html += '<div class="fsop-header-section">';
-        
-        // Header top row: Logo, Title, N° cordon
-        html += '<div class="fsop-header-top">';
-        
-        // Logo (left)
-        html += '<div class="fsop-header-logo">';
-        html += '<div class="fsop-logo-text">SEDI<span class="fsop-logo-dot">•</span>ATI</div>';
-        html += '<div class="fsop-logo-subtitle">by Fiber Optics Group</div>';
-        html += '</div>';
-        
-        // Title (center)
-        const documentTitle = this.structure.documentTitle || this.structure.metadata?.source?.replace(/\.docx$/i, '') || 'Formulaire FSOP';
-        html += `<div class="fsop-header-title">${this.escapeHtml(documentTitle)}</div>`;
-        
-        // N° cordon field (right) - separate from other header fields
-        const cordonField = this.structure.headerFields?.find(f => f.key === 'NUMERO_CORDON');
-        if (cordonField) {
-            const cordonValue = this.formData.placeholders[cordonField.placeholder] || 
-                               this.formData.placeholders[cordonField.key] || 
-                               initialData.placeholders?.[cordonField.placeholder] || 
-                               initialData.placeholders?.[cordonField.key] || '';
-            html += `
-                <div class="fsop-header-cordon">
-                    <label for="header_${cordonField.key}">${this.escapeHtml(cordonField.label)}</label>
-                    <input 
-                        type="text" 
-                        id="header_${cordonField.key}" 
-                        data-placeholder="${cordonField.placeholder || cordonField.key}"
-                        value="${this.escapeHtml(cordonValue)}"
-                        class="fsop-input fsop-header-input fsop-cordon-input"
-                    />
-                </div>
-            `;
-        }
-        
-        html += '</div>'; // End header-top
-        
-        // Header bottom: Numéro lancement and Référence SILOG in a box
-        const otherHeaderFields = this.structure.headerFields?.filter(f => f.key !== 'NUMERO_CORDON') || [];
-        if (otherHeaderFields.length > 0) {
-            html += '<div class="fsop-header-box">';
-            
-            otherHeaderFields.forEach(field => {
-                const fieldKey = field.placeholder || field.key;
-                let value = '';
-                if (field.key === 'NUMERO_LANCEMENT') {
-                    value = this.formData.placeholders['{{LT}}'] || 
-                           this.formData.placeholders[field.placeholder] || 
-                           this.formData.placeholders[fieldKey] || 
-                           initialData.placeholders?.['{{LT}}'] ||
-                           initialData.placeholders?.[field.placeholder] || 
-                           initialData.placeholders?.[fieldKey] || 
-                           initialData.launchNumber || '';
-                } else if (field.key === 'REFERENCE_SILOG' || field.key === 'NUMERO_SERIE' || 
-                           (field.label && (field.label.includes('S/N') || field.label.includes('Série') || field.label.includes('SN')))) {
-                    value = this.formData.placeholders['{{SN}}'] || 
-                           this.formData.placeholders[field.placeholder] || 
-                           this.formData.placeholders[fieldKey] || 
-                           initialData.placeholders?.['{{SN}}'] ||
-                           initialData.placeholders?.[field.placeholder] || 
-                           initialData.placeholders?.[fieldKey] ||
-                           initialData.serialNumber || '';
-                } else {
-                    value = this.formData.placeholders[field.placeholder] || 
-                           this.formData.placeholders[fieldKey] || 
-                           initialData.placeholders?.[field.placeholder] || 
-                           initialData.placeholders?.[fieldKey] || '';
-                }
-                
-                html += `
-                    <div class="fsop-header-box-field">
-                        <label for="header_${field.key}">${this.escapeHtml(field.label)}</label>
-                        <input 
-                            type="text" 
-                            id="header_${field.key}" 
-                            data-placeholder="${field.placeholder || field.key}"
-                            data-field-key="${field.key}"
-                            value="${this.escapeHtml(value)}"
-                            class="fsop-input fsop-header-box-input"
-                        />
-                    </div>
-                `;
-            });
-            
-            html += '</div>'; // End header-box
-        }
-        
-        // Add reference field for Excel transfer
-        html += '<div class="fsop-reference-section">';
-        html += '<label for="fsop_reference">Référence (pour transfert Excel):</label>';
-        html += `<input 
-            type="text" 
-            id="fsop_reference" 
-            class="fsop-input fsop-reference-input"
-            placeholder="Ex: RETA-697-HOI-23.199"
-            value="${this.escapeHtml(this.formData.reference)}"
-        />`;
-        html += '<small class="fsop-reference-hint">Cette référence sera utilisée pour trouver le fichier Excel de mesures</small>';
-        html += '</div>';
-        
-        html += '</div>'; // End header-section
+        html += this.buildIdentityHeaderHtml(initialData);
         
         // Render placeholders (if any remain after header fields)
         if (this.structure.placeholders && this.structure.placeholders.length > 0) {
@@ -219,6 +122,118 @@ class FsopForm {
 
         // Attach event listeners
         this.attachEventListeners();
+    }
+
+    /**
+     * En-tête identité Word (logo SEDI / titre Cordon / N° cordon + tableau SILOG/LT/désignation).
+     * Toujours affiché, y compris en mode word-like.
+     */
+    buildIdentityHeaderHtml(initialData = {}) {
+        const fieldsFromStructure = Array.isArray(this.structure?.headerFields) ? this.structure.headerFields : [];
+        const byKey = new Map(fieldsFromStructure.map((f) => [f.key, f]));
+
+        const ensureField = (key, label, placeholder = null) => {
+            if (byKey.has(key)) return byKey.get(key);
+            return { key, label, placeholder, value: '' };
+        };
+
+        // Always keep the 4 identity cells from the Word template, even if parser missed one.
+        const cordonField = ensureField('NUMERO_CORDON', 'N° cordon :');
+        const gridFields = [
+            ensureField('NUMERO_CORDON', 'Numéro de cordon :'),
+            ensureField('REFERENCE_SILOG', 'Référence SILOG :'),
+            ensureField('NUMERO_LANCEMENT', 'Numéro lancement :', '{{LT}}'),
+            ensureField('DESIGNATION', 'Désignation :')
+        ];
+
+        const resolveValue = (field) => {
+            const fieldKey = field.placeholder || field.key;
+            if (field.key === 'NUMERO_LANCEMENT') {
+                return this.formData.placeholders['{{LT}}'] ||
+                    this.formData.placeholders[field.placeholder] ||
+                    this.formData.placeholders[fieldKey] ||
+                    initialData.placeholders?.['{{LT}}'] ||
+                    initialData.placeholders?.[field.placeholder] ||
+                    initialData.placeholders?.[fieldKey] ||
+                    initialData.launchNumber || '';
+            }
+            if (field.key === 'REFERENCE_SILOG' || field.key === 'NUMERO_SERIE') {
+                return this.formData.placeholders['{{SN}}'] ||
+                    this.formData.placeholders[field.placeholder] ||
+                    this.formData.placeholders[fieldKey] ||
+                    initialData.placeholders?.['{{SN}}'] ||
+                    initialData.placeholders?.[field.placeholder] ||
+                    initialData.placeholders?.[fieldKey] ||
+                    initialData.serialNumber || '';
+            }
+            return this.formData.placeholders[field.placeholder] ||
+                this.formData.placeholders[field.key] ||
+                this.formData.placeholders[fieldKey] ||
+                initialData.placeholders?.[field.placeholder] ||
+                initialData.placeholders?.[field.key] ||
+                initialData.placeholders?.[fieldKey] || '';
+        };
+
+        let html = '<div class="fsop-header-section">';
+        html += '<div class="fsop-header-top">';
+        html += '<div class="fsop-header-logo">';
+        html += '<div class="fsop-logo-text">SEDI<span class="fsop-logo-dot">•</span>ATI</div>';
+        html += '<div class="fsop-logo-subtitle">by Fiber Optics Group</div>';
+        html += '</div>';
+
+        const documentTitle = this.structure.documentTitle ||
+            this.structure.metadata?.source?.replace(/\.docx$/i, '') ||
+            'Formulaire FSOP';
+        html += `<div class="fsop-header-title">${this.escapeHtml(documentTitle)}</div>`;
+
+        const cordonValue = resolveValue(cordonField);
+        html += `
+            <div class="fsop-header-cordon">
+                <label for="header_${cordonField.key}">${this.escapeHtml(cordonField.label.replace(/\s*:?\s*$/, '') + ' :')}</label>
+                <input
+                    type="text"
+                    id="header_${cordonField.key}_top"
+                    data-placeholder="${cordonField.placeholder || cordonField.key}"
+                    value="${this.escapeHtml(cordonValue)}"
+                    class="fsop-input fsop-header-input fsop-cordon-input"
+                />
+            </div>
+        `;
+        html += '</div>'; // header-top
+
+        html += '<div class="fsop-header-box fsop-header-identity-grid">';
+        gridFields.forEach((field) => {
+            const value = resolveValue(field);
+            const label = /:\s*$/.test(field.label) ? field.label : `${field.label} :`;
+            html += `
+                <div class="fsop-header-box-field">
+                    <label for="header_${field.key}">${this.escapeHtml(label)}</label>
+                    <input
+                        type="text"
+                        id="header_${field.key}"
+                        data-placeholder="${field.placeholder || field.key}"
+                        data-field-key="${field.key}"
+                        value="${this.escapeHtml(value)}"
+                        class="fsop-input fsop-header-box-input"
+                    />
+                </div>
+            `;
+        });
+        html += '</div>';
+
+        html += '<div class="fsop-reference-section">';
+        html += '<label for="fsop_reference">Référence (pour transfert Excel):</label>';
+        html += `<input
+            type="text"
+            id="fsop_reference"
+            class="fsop-input fsop-reference-input"
+            placeholder="Ex: RETA-697-HOI-23.199"
+            value="${this.escapeHtml(this.formData.reference || '')}"
+        />`;
+        html += '<small class="fsop-reference-hint">Cette référence sera utilisée pour trouver le fichier Excel de mesures</small>';
+        html += '</div>';
+        html += '</div>'; // header-section
+        return html;
     }
 
     renderWordLike(blocks) {
@@ -370,6 +385,30 @@ class FsopForm {
 
         const stripStepNumberPrefix = (text) => String(text || '').replace(STEP_NUMBER_PREFIX_RE, '').trim();
 
+        const isIdentityHeaderTable = (rows) => {
+            const flat = (Array.isArray(rows) ? rows : [])
+                .flat()
+                .map((c) => String(c?.text || '').toLowerCase())
+                .join(' | ');
+            const hits = [
+                /num[eé]ro\s+de\s+cordon|n[°º]\s*cordon/i,
+                /r[eé]f[eé]rence\s+silog/i,
+                /num[eé]ro\s+lancement/i,
+                /d[eé]signation/i
+            ].filter((re) => re.test(flat)).length;
+            return hits >= 2;
+        };
+
+        const isSkippableHeaderParagraph = (text) => {
+            const t = String(text || '').trim();
+            if (!t) return false;
+            if (/^cordon\s+/i.test(t) && t.length <= 60) return true;
+            if (/^n[°º]\s*cordon\s*:?\s*$/i.test(t)) return true;
+            if (/^by\s+fiber\s+optics/i.test(t)) return true;
+            if (/^sedi/i.test(t) && /ati/i.test(t) && t.length <= 40) return true;
+            return false;
+        };
+
         const normalizeCellText = (t) => String(t || '').replace(/\s+/g, ' ').trim();
 
         const looksLikeTitleText = (t) => {
@@ -520,6 +559,11 @@ class FsopForm {
             const safeRows = rows || [];
             if (safeRows.length === 0) {
                 return '<table class="fsop-word-table"></table>';
+            }
+
+            // Identity header is rendered by buildIdentityHeaderHtml — skip Word duplicate.
+            if (isIdentityHeaderTable(safeRows)) {
+                return '';
             }
 
             // Strict base-file fidelity:
@@ -1262,6 +1306,14 @@ class FsopForm {
                 const text = (b.text || '').trim();
                 if (!text) {
                     html += `<div class="fsop-word-block fsop-word-block-empty"></div>`;
+                    return;
+                }
+
+                // Skip Word identity header paragraphs (already shown via buildIdentityHeaderHtml)
+                if (isSkippableHeaderParagraph(text)) {
+                    return;
+                }
+                if (/^(num[eé]ro\s+de\s+cordon|n[°º]\s*cordon|r[eé]f[eé]rence\s+silog|num[eé]ro\s+lancement|d[eé]signation)\s*:?\s*$/i.test(text)) {
                     return;
                 }
 

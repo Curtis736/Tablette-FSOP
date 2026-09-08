@@ -2775,6 +2775,25 @@ tr:hover {
     overflow: hidden;
 }
 
+/* Word identity header: 2x2 (cordon | SILOG / lancement | désignation) */
+.fsop-header-box.fsop-header-identity-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+}
+
+.fsop-header-box.fsop-header-identity-grid .fsop-header-box-field {
+    border-right: 2px solid #000000;
+    border-bottom: 2px solid #000000;
+}
+
+.fsop-header-box.fsop-header-identity-grid .fsop-header-box-field:nth-child(2n) {
+    border-right: none;
+}
+
+.fsop-header-box.fsop-header-identity-grid .fsop-header-box-field:nth-last-child(-n+2) {
+    border-bottom: none;
+}
+
 .fsop-header-box-field {
     flex: 1;
     display: flex;
