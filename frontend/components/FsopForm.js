@@ -1,9 +1,11 @@
 /**
  * Composant pour afficher et remplir un formulaire FSOP de manière interactive
  */
-import { collectLotsForVoieCell, collectLotsForLotCell, normalizeFsopLotKey, parseSavedVoies, parseSavedEtiquettes, cellHasEtiquetteSplit } from './fsopForm/lotMatching.js?v=20260908.7';
-import { loadStructure } from './fsopForm/loadStructure.js?v=20260908.7';
+import { collectLotsForVoieCell, collectLotsForLotCell, normalizeFsopLotKey, parseSavedVoies, parseSavedEtiquettes, cellHasEtiquetteSplit } from './fsopForm/lotMatching.js?v=20260908.8';
+import { loadStructure } from './fsopForm/loadStructure.js?v=20260908.8';
 const CHECKBOX_LINE_RE = /^([☐☑✓□]|\[[ x]\])[\t ]+(\S[\s\S]{0,400})$/i;
+/** "Nombre d'essai (≤ 3) : ☐ ☐ ☐" — several boxes after a label */
+const INLINE_CHECKBOX_GROUP_RE = /^(.+?)\s*:\s*((?:[☐☑✓□◻⬜]|\[[ x]\])(?:[\t ]+(?:[☐☑✓□◻⬜]|\[[ x\]])){1,7})\s*$/i;
 const UNIT_SPEC_RE = /\d{1,8}[\t ](?:h|min|°C|°F)/i;
 const STEP_NUMBER_PREFIX_RE = /^(\d{1,2}(?:[a-z])?)[ \t]*[-–.][ \t]*/i;
 const FULL_PATH_HINT_RE = /tra[cç]abilit[eé]|interfero|faces[_ ]?optiques|[a-z]:\s*[\\/]|code_article|n[°º]\s*du\s*lt/i;
@@ -376,8 +378,10 @@ class FsopForm {
                 });
             }
 
-            out = out.replace(/(?:[□◻⬜]\s*){2,}/g, (match) => {
-                const boxes = (match.match(/[□◻⬜]/g) || []).length;
+            // Do NOT turn checkbox rows (☐ ☐ ☐) into a text field — handled as real checkboxes.
+            // Only convert empty square placeholders that look like fill-in blanks (rare).
+            out = out.replace(/(?:[◻⬜]\s*){2,}/g, (match) => {
+                const boxes = (match.match(/[◻⬜]/g) || []).length;
                 const maxLen = Math.max(2, Math.min(8, boxes));
                 return makeBlankInput(maxLen);
             });
@@ -443,6 +447,36 @@ class FsopForm {
                     <input id="${id}" type="checkbox" data-checkbox-label="${this.escapeHtml(label)}" ${isChecked ? 'checked' : ''} />
                     <span class="fsop-word-checkbox-label">${labelHtml}</span>
                 </label>
+            `;
+        };
+
+        const renderInlineCheckboxGroup = (text) => {
+            // Pattern: "Nombre d'essai (≤ 3) : ☐ ☐ ☐"
+            const m = INLINE_CHECKBOX_GROUP_RE.exec(String(text || '').trim());
+            if (!m) return null;
+            const label = m[1].trim();
+            if (!label || label.length > 120) return null;
+            const boxTokens = m[2].match(/[☐☑✓□◻⬜]|\[[ x\]]/gi) || [];
+            if (boxTokens.length < 2) return null;
+
+            const boxesHtml = boxTokens.map((sym, idx) => {
+                const key = `${label}#${idx + 1}`;
+                const checkedDefault = /[☑✓x]/i.test(sym);
+                const saved = this.formData.checkboxes?.wordlike?.[key];
+                const isChecked = saved === true || (saved == null && checkedDefault);
+                const id = `cb_${++blankId}`;
+                return `
+                    <label class="fsop-word-checkbox fsop-word-checkbox-inline" title="${this.escapeHtml(`${label} ${idx + 1}`)}">
+                        <input id="${id}" type="checkbox" data-checkbox-label="${this.escapeHtml(key)}" ${isChecked ? 'checked' : ''} />
+                    </label>
+                `;
+            }).join('');
+
+            return `
+                <div class="fsop-word-checkbox-group">
+                    <span class="fsop-word-checkbox-group-label">${renderTextWithInputs(label)} :</span>
+                    <span class="fsop-word-checkbox-group-boxes">${boxesHtml}</span>
+                </div>
             `;
         };
 
@@ -1382,6 +1416,11 @@ class FsopForm {
 
                 // Checkboxes MUST be detected before MO+ind subtitle heuristic
                 // (e.g. "☐ Test de flexion ... MO 1050 ind ___")
+                const checkboxGroupHtml = renderInlineCheckboxGroup(text);
+                if (checkboxGroupHtml) {
+                    html += `<div class="fsop-word-block">${checkboxGroupHtml}</div>`;
+                    return;
+                }
                 const checkboxHtml = renderCheckboxLine(text);
                 if (checkboxHtml) {
                     html += `<div class="fsop-word-block">${checkboxHtml}</div>`;
