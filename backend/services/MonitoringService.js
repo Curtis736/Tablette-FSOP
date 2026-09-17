@@ -977,7 +977,7 @@ class MonitoringService {
                 validatedIds: validIds,
                 fixedCount: fixedIds.length,
                 invalidCount: invalidIds.length,
-                invalidIds: invalidIds.length > 0 ? invalidIds : undefined
+                invalidIds
             };
             
         } catch (error) {

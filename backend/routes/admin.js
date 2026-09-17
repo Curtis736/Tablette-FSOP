@@ -4805,6 +4805,8 @@ router.post('/monitoring/validate-and-transmit-batch', async (req, res) => {
                 ? `${result.message} (planifié: tâche SILOG sur SVC_SILOG/runner Windows)`
                 : result.message,
             count: result.count,
+            validatedIds: result.validatedIds || [],
+            invalidIds: result.invalidIds || [],
             ediJob: ediJobResult,
             marked: markResult,
             adminMarkedTransmitted: shouldMarkFromAdmin
