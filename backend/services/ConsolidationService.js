@@ -7,6 +7,9 @@ const { executeQuery, executeNonQuery, getConnection } = require('../config/data
 const OperationValidationService = require('./OperationValidationService');
 const DurationCalculationService = require('./DurationCalculationService');
 
+/** Qualifier SQL [DB] — suit DB_DATABASE en DEV sans dépendre du module RH. */
+const appDb = `[${String(process.env.DB_DATABASE || 'SEDI_APP_INDEPENDANTE').replace(/[\[\]]/g, '')}]`;
+
 class ConsolidationService {
     /**
      * Retourne une clé de date locale YYYY-MM-DD (évite les décalages UTC sur les champs SQL DATE)
@@ -159,7 +162,7 @@ class ConsolidationService {
             // 1. Récupérer tous les événements (on scoper ensuite sur le dernier cycle)
             const eventsQuery = `
                 SELECT * 
-                FROM [SEDI_APP_INDEPENDANTE].[dbo].[ABHISTORIQUE_OPERATEURS]
+                FROM ${appDb}.[dbo].[ABHISTORIQUE_OPERATEURS]
                 WHERE OperatorCode = @operatorCode 
                   AND CodeLanctImprod = @lancementCode
                 ORDER BY DateCreation ASC, NoEnreg ASC
@@ -283,7 +286,7 @@ class ConsolidationService {
                     let rows = await db.executeQuery(
                         `
                         SELECT TOP 1 Phase, CodeRubrique
-                        FROM [SEDI_APP_INDEPENDANTE].[dbo].[V_LCTC]
+                        FROM ${appDb}.[dbo].[V_LCTC]
                         WHERE CodeLancement = @lancementCode
                         `,
                         { lancementCode }
@@ -385,14 +388,14 @@ class ConsolidationService {
             startTime = buildDateTime(debutEvent, 'start');
             const endTime = buildDateTime(finEvent, 'end');
 
-            // 8bis. Vérifier si déjà consolidé selon la contrainte UNIQUE réelle (souvent basée sur StartTime)
-            // Certains environnements ont une contrainte UNIQUE sur (OperatorCode, LancementCode, StartTime).
-            // Si on ne check pas ça, on peut échouer avec "Cannot insert duplicate key".
+            // Idempotence = UNIQUE réelle (OperatorCode, LancementCode, StartTime).
+            // Ne PAS dédupliquer sur DateCreation seule : plusieurs cycles le même jour
+            // (ex. Mathieu LT2600401) doivent produire plusieurs lignes ABTEMPS.
             if (!force && startTime) {
                 try {
                     const byStartQuery = `
                         SELECT TOP 1 TempsId
-                        FROM [SEDI_APP_INDEPENDANTE].[dbo].[ABTEMPS_OPERATEURS]
+                        FROM ${appDb}.[dbo].[ABTEMPS_OPERATEURS]
                         WHERE OperatorCode = @operatorCode
                           AND LancementCode = @lancementCode
                           AND StartTime = @startTime
@@ -414,37 +417,7 @@ class ConsolidationService {
                 }
             }
 
-            // 8. Vérifier si déjà consolidé (sur les clés complètes : opérateur + LT + phase + rubrique + date)
-            if (!force) {
-                const existingQuery = `
-                    SELECT TempsId 
-                    FROM [SEDI_APP_INDEPENDANTE].[dbo].[ABTEMPS_OPERATEURS]
-                    WHERE OperatorCode = @operatorCode 
-                      AND LancementCode = @lancementCode
-                      AND ISNULL(LTRIM(RTRIM(Phase)), '') = ISNULL(LTRIM(RTRIM(@phase)), '')
-                      AND ISNULL(LTRIM(RTRIM(CodeRubrique)), '') = ISNULL(LTRIM(RTRIM(@codeRubrique)), '')
-                      AND DateCreation = @dateCreation
-                `;
-                const existing = await db.executeQuery(existingQuery, {
-                    operatorCode,
-                    lancementCode,
-                    phase,
-                    codeRubrique,
-                    dateCreation: opDate
-                });
-                if (existing.length > 0) {
-                    console.log(`ℹ️ Opération déjà consolidée: TempsId=${existing[0].TempsId}`);
-                    return await ConsolidationService._finishConsolidation({
-                        success: true,
-                        tempsId: existing[0].TempsId,
-                        error: null,
-                        warnings: ['Opération déjà consolidée'],
-                        alreadyExists: true
-                    }, options);
-                }
-            }
-            
-            // 7. Vérifier que ProductiveDuration > 0 (SILOG n'accepte pas les temps à 0)
+            // Vérifier que ProductiveDuration > 0 (SILOG n'accepte pas les temps à 0)
             if (durations.productiveDuration <= 0) {
                 console.warn(`⚠️ ProductiveDuration = ${durations.productiveDuration} (Total=${durations.totalDuration}, Pause=${durations.pauseDuration})`);
                 console.warn(`⚠️ SILOG n'accepte pas les enregistrements avec ProductiveDuration = 0`);
@@ -452,8 +425,8 @@ class ConsolidationService {
                 // L'admin pourra corriger manuellement si nécessaire
             }
             
-            // 8. Insérer ou mettre à jour dans ABTEMPS_OPERATEURS
-            // En mode force, on UPDATE la ligne existante au lieu d'en créer une nouvelle.
+            // Insérer ou mettre à jour dans ABTEMPS_OPERATEURS
+            // En mode force, UPDATE uniquement la ligne au même StartTime (sinon INSERT d'un nouveau cycle).
             const durationParams = {
                 operatorCode,
                 lancementCode,
@@ -470,19 +443,19 @@ class ConsolidationService {
 
             let tempsId = null;
 
-            if (force) {
+            if (force && startTime) {
                 const existingForUpdate = await db.executeQuery(
                     `SELECT TOP 1 TempsId
-                     FROM [SEDI_APP_INDEPENDANTE].[dbo].[ABTEMPS_OPERATEURS]
+                     FROM ${appDb}.[dbo].[ABTEMPS_OPERATEURS]
                      WHERE OperatorCode = @operatorCode AND LancementCode = @lancementCode
-                       AND CAST(DateCreation AS DATE) = CAST(@dateCreation AS DATE)
+                       AND StartTime = @startTime
                      ORDER BY TempsId DESC`,
-                    { operatorCode, lancementCode, dateCreation: opDate }
+                    { operatorCode, lancementCode, startTime }
                 );
                 if (existingForUpdate && existingForUpdate.length > 0) {
                     tempsId = existingForUpdate[0].TempsId;
                     await db.executeNonQuery(
-                        `UPDATE [SEDI_APP_INDEPENDANTE].[dbo].[ABTEMPS_OPERATEURS]
+                        `UPDATE ${appDb}.[dbo].[ABTEMPS_OPERATEURS]
                          SET StartTime = @startTime, EndTime = @endTime,
                              TotalDuration = @totalDuration, PauseDuration = @pauseDuration,
                              ProductiveDuration = @productiveDuration, EventsCount = @eventsCount,
@@ -498,7 +471,7 @@ class ConsolidationService {
 
             if (!tempsId) {
                 const insertQuery = `
-                    INSERT INTO [SEDI_APP_INDEPENDANTE].[dbo].[ABTEMPS_OPERATEURS]
+                    INSERT INTO ${appDb}.[dbo].[ABTEMPS_OPERATEURS]
                     (OperatorCode, LancementCode, StartTime, EndTime, TotalDuration, PauseDuration, ProductiveDuration, EventsCount, Phase, CodeRubrique, DateCreation, StatutTraitement)
                     OUTPUT INSERTED.TempsId
                     VALUES (@operatorCode, @lancementCode, @startTime, @endTime, @totalDuration, @pauseDuration, @productiveDuration, @eventsCount, @phase, @codeRubrique, CAST(@dateCreation AS DATE), NULL)
@@ -529,14 +502,14 @@ class ConsolidationService {
         } catch (error) {
             console.error(`❌ Erreur lors de la consolidation de ${operatorCode}/${lancementCode}:`, error);
             
-            // Vérifier si c'est une erreur de contrainte unique (doublon)
+            // Vérifier si c'est une erreur de contrainte unique (doublon StartTime)
             if (error.number === 2627 || error.originalError?.number === 2627) {
-                // Récupérer le TempsId existant (commencer par la clé de contrainte la plus probable: StartTime)
+                // Récupérer le TempsId existant via la clé UNIQUE (OperatorCode, LancementCode, StartTime)
                 try {
                     if (startTime) {
                         const byStartQuery = `
                             SELECT TOP 1 TempsId
-                            FROM [SEDI_APP_INDEPENDANTE].[dbo].[ABTEMPS_OPERATEURS]
+                            FROM ${appDb}.[dbo].[ABTEMPS_OPERATEURS]
                             WHERE OperatorCode = @operatorCode
                               AND LancementCode = @lancementCode
                               AND StartTime = @startTime
@@ -555,38 +528,6 @@ class ConsolidationService {
                     }
                 } catch (e) {
                     // ignore
-                }
-
-                // Fallback: clé historique (phase/rubrique/date)
-                const existingQuery = `
-                    SELECT TempsId 
-                    FROM [SEDI_APP_INDEPENDANTE].[dbo].[ABTEMPS_OPERATEURS]
-                    WHERE OperatorCode = @operatorCode 
-                      AND LancementCode = @lancementCode
-                      AND ISNULL(LTRIM(RTRIM(Phase)), '') = ISNULL(LTRIM(RTRIM(@phase)), '')
-                      AND ISNULL(LTRIM(RTRIM(CodeRubrique)), '') = ISNULL(LTRIM(RTRIM(@codeRubrique)), '')
-                      AND DateCreation = @dateCreation
-                `;
-                
-                try {
-                    const existing = await db.executeQuery(existingQuery, {
-                        operatorCode,
-                        lancementCode,
-                        phase,
-                        codeRubrique,
-                        dateCreation: opDate
-                    });
-                    if (existing.length > 0) {
-                        return await ConsolidationService._finishConsolidation({
-                            success: true,
-                            tempsId: existing[0].TempsId,
-                            error: null,
-                            warnings: ['Opération déjà consolidée (détecté après erreur)'],
-                            alreadyExists: true
-                        }, options);
-                    }
-                } catch (queryError) {
-                    // Ignorer l'erreur de requête
                 }
             }
             
@@ -689,7 +630,7 @@ class ConsolidationService {
             // Récupérer l'enregistrement consolidé
             const recordQuery = `
                 SELECT OperatorCode, LancementCode
-                FROM [SEDI_APP_INDEPENDANTE].[dbo].[ABTEMPS_OPERATEURS]
+                FROM ${appDb}.[dbo].[ABTEMPS_OPERATEURS]
                 WHERE TempsId = @tempsId
             `;
             
@@ -708,7 +649,7 @@ class ConsolidationService {
             // Récupérer les événements
             const eventsQuery = `
                 SELECT * 
-                FROM [SEDI_APP_INDEPENDANTE].[dbo].[ABHISTORIQUE_OPERATEURS]
+                FROM ${appDb}.[dbo].[ABHISTORIQUE_OPERATEURS]
                 WHERE OperatorCode = @operatorCode 
                   AND CodeLanctImprod = @lancementCode
                 ORDER BY DateCreation ASC, NoEnreg ASC
@@ -730,7 +671,7 @@ class ConsolidationService {
             
             // Mettre à jour l'enregistrement
             const updateQuery = `
-                UPDATE [SEDI_APP_INDEPENDANTE].[dbo].[ABTEMPS_OPERATEURS]
+                UPDATE ${appDb}.[dbo].[ABTEMPS_OPERATEURS]
                 SET TotalDuration = @totalDuration,
                     PauseDuration = @pauseDuration,
                     ProductiveDuration = @productiveDuration,

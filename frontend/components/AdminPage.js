@@ -2188,16 +2188,18 @@ class AdminPage {
         });
     }
 
-    _upsertTransferEligibleByKey(eligibleByKey, op) {
+    _upsertTransferEligibleByTempsId(eligibleByTempsId, op) {
         if (!op?.TempsId) return;
         if (!this.isOperationTerminated(op)) return;
-        if (op.StatutTraitement === 'T') return;
-        eligibleByKey.set(this._getLancementKey(op), op);
+        const st = String(op.StatutTraitement ?? '').toUpperCase().trim();
+        if (st === 'T') return;
+        eligibleByTempsId.set(String(op.TempsId), op);
     }
 
     /**
      * Résout les opérations transférables en s'appuyant sur ABTEMPS (TempsId),
      * indépendamment de l'affichage SILOG qui masque parfois les lignes consolidées.
+     * Une ligne UI / un cycle = un TempsId : plusieurs cycles le même LT restent tous éligibles.
      */
     async _resolveTransferEligibleOperations() {
         const filters = this._getAdminMonitoringFilters();
@@ -2205,23 +2207,45 @@ class AdminPage {
         const consolidatedOps = (monitoringResult?.success ? monitoringResult.data : this._consolidatedOpsRaw) || [];
         this._consolidatedOpsRaw = consolidatedOps;
 
-        const eligibleByKey = new Map();
-        consolidatedOps.forEach((op) => this._upsertTransferEligibleByKey(eligibleByKey, op));
+        const eligibleByTempsId = new Map();
+        consolidatedOps.forEach((op) => this._upsertTransferEligibleByTempsId(eligibleByTempsId, op));
+
+        const tempsIdsByLancement = new Map();
+        for (const op of eligibleByTempsId.values()) {
+            const lk = this._getLancementKey(op);
+            if (!lk || lk === '|') continue;
+            if (!tempsIdsByLancement.has(lk)) tempsIdsByLancement.set(lk, new Set());
+            tempsIdsByLancement.get(lk).add(String(op.TempsId));
+        }
 
         const seenLancements = new Set();
         const toConsolidate = [];
         for (const op of (this.operations || [])) {
-            if (op._isPauseRow || op.StatutTraitement === 'T') continue;
+            if (op._isPauseRow || String(op.StatutTraitement ?? '').toUpperCase().trim() === 'T') continue;
             const key = this._getLancementKey(op);
             if (!key || key === '|' || seenLancements.has(key)) continue;
             seenLancements.add(key);
-            if (eligibleByKey.has(key)) continue;
             const [operatorCode, lancementCode] = key.split('|');
             if (this._isLancementStillActiveInDisplay(operatorCode, lancementCode)) continue;
             if (!this.isOperationTerminated(op) &&
                 !consolidatedOps.some((c) => this._getLancementKey(c) === key && this.isOperationTerminated(c))) {
                 continue;
             }
+            // Consolider si aucun TempsId pour ce LT, ou si l'affichage a une ligne terminée sans TempsId
+            // (nouveau cycle après un cycle déjà consolidé le même jour).
+            const hasAbtemps = (tempsIdsByLancement.get(key)?.size || 0) > 0;
+            // Segments productifs affichés (_isWorkSegment) remplacent parfois la ligne ABTEMPS à l'écran
+            // mais le TempsId est déjà dans monitoring — ne pas re-consolider pour ça.
+            // En revanche une vraie ligne terminée sans TempsId (nouveau cycle) doit déclencher la consolidation.
+            const hasUnconsolidatedTerminated = (this.operations || []).some((row) =>
+                !row._isPauseRow
+                && !row._isWorkSegment
+                && this._getLancementKey(row) === key
+                && this.isOperationTerminated(row)
+                && (row.TempsId == null || String(row.TempsId).trim() === '')
+                && String(row.StatutTraitement ?? '').toUpperCase().trim() !== 'T'
+            );
+            if (hasAbtemps && !hasUnconsolidatedTerminated) continue;
             toConsolidate.push({ OperatorCode: operatorCode, LancementCode: lancementCode });
         }
 
@@ -2234,7 +2258,7 @@ class AdminPage {
 
             for (const item of consolidateResult?.results?.success || []) {
                 if (!item?.TempsId) continue;
-                this._upsertTransferEligibleByKey(eligibleByKey, {
+                this._upsertTransferEligibleByTempsId(eligibleByTempsId, {
                     OperatorCode: item.OperatorCode,
                     LancementCode: item.LancementCode,
                     TempsId: item.TempsId,
@@ -2245,7 +2269,7 @@ class AdminPage {
             }
             for (const item of skipped) {
                 if (!item?.TempsId) continue;
-                this._upsertTransferEligibleByKey(eligibleByKey, {
+                this._upsertTransferEligibleByTempsId(eligibleByTempsId, {
                     OperatorCode: item.OperatorCode,
                     LancementCode: item.LancementCode,
                     TempsId: item.TempsId,
@@ -2255,19 +2279,15 @@ class AdminPage {
                 });
             }
 
-            const missingAfterBatch = toConsolidate.filter(
-                (op) => !eligibleByKey.has(`${op.OperatorCode}|${String(op.LancementCode || '').trim().toUpperCase()}`)
-            );
-            if (missingAfterBatch.length > 0) {
-                const refresh = await this.apiService.getMonitoringTemps(filters);
-                const refreshed = (refresh?.success ? refresh.data : []) || [];
-                refreshed.forEach((op) => this._upsertTransferEligibleByKey(eligibleByKey, op));
-                this._consolidatedOpsRaw = refreshed;
-            }
+            // Toujours recharger ABTEMPS : un LT peut avoir plusieurs TempsId (multi-cycles).
+            const refresh = await this.apiService.getMonitoringTemps(filters);
+            const refreshed = (refresh?.success ? refresh.data : []) || [];
+            refreshed.forEach((op) => this._upsertTransferEligibleByTempsId(eligibleByTempsId, op));
+            this._consolidatedOpsRaw = refreshed.length > 0 ? refreshed : this._consolidatedOpsRaw;
         }
 
         return {
-            eligible: Array.from(eligibleByKey.values()),
+            eligible: Array.from(eligibleByTempsId.values()),
             skipped,
             errors,
             attemptedConsolidation: toConsolidate.length
@@ -2586,21 +2606,35 @@ class AdminPage {
 
     /**
      * Message admin selon le résultat EDI (ssh immédiat vs scheduled).
+     * Inclut le détail par TempsId quand le backend le renvoie.
      */
     _formatTransferResultMessage(result, fallbackCount) {
-        const n = result.count || fallbackCount;
+        const validatedIds = Array.isArray(result?.validatedIds) ? result.validatedIds : [];
+        const invalidIds = Array.isArray(result?.invalidIds) ? result.invalidIds : [];
+        const n = validatedIds.length || result.count || fallbackCount;
         const edi = result.ediJob;
+        let base;
         if (!edi) {
-            return `${n} opération(s) validée(s) (statut O)`;
-        }
-        if (edi.skipped) {
-            return `${n} validée(s) (O) — EDI non lancé ici (${edi.message || 'mode planifié'}). Attente tâche Windows.`;
-        }
-        if (edi.success) {
+            base = `${n} opération(s) validée(s) (statut O)`;
+        } else if (edi.skipped) {
+            base = `${n} validée(s) (O) — EDI non lancé ici (${edi.message || 'mode planifié'}). Attente tâche Windows.`;
+        } else if (edi.success) {
             const sec = edi.elapsedMs ? ` en ${Math.round(edi.elapsedMs / 1000)}s` : '';
-            return `${n} validée(s) (O) — EDI SILOG déclenché${sec}. Passage en TRANSMIS (T) après intégration.`;
+            base = `${n} validée(s) (O) — EDI SILOG déclenché${sec}. Passage en TRANSMIS (T) après intégration.`;
+        } else {
+            base = `${n} validée(s) (O) — EDI en erreur (lignes restent en attente)`;
         }
-        return `${n} validée(s) (O) — EDI en erreur (lignes restent en attente)`;
+        if (validatedIds.length > 0) {
+            base += ` | OK TempsId: ${validatedIds.join(', ')}`;
+        }
+        if (invalidIds.length > 0) {
+            const detail = invalidIds.map((inv) => {
+                const err = Array.isArray(inv.errors) ? inv.errors.join(', ') : (inv.errors || inv.error || '?');
+                return `${inv.tempsId}: ${err}`;
+            }).join(' ; ');
+            base += ` | Échec: ${detail}`;
+        }
+        return base;
     }
 
     async deleteOperation(id) {

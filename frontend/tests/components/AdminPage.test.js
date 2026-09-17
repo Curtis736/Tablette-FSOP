@@ -469,6 +469,72 @@ describe('AdminPage', () => {
       expect(mockApiService.consolidateMonitoringBatch).not.toHaveBeenCalled();
     });
 
+    it('conserve tous les TempsId multi-cycles du même LT (pas un seul par lancement)', async () => {
+      adminPage.operations = [
+        {
+          TempsId: 429,
+          OperatorCode: '865',
+          LancementCode: 'LT2600401',
+          StatusCode: 'TERMINE',
+          Status: 'Terminé',
+          StartTime: '2026-09-16T09:12:30',
+          EndTime: '2026-09-16T09:15:07',
+          ProductiveDuration: 3,
+          StatutTraitement: null
+        },
+        {
+          TempsId: 434,
+          OperatorCode: '865',
+          LancementCode: 'LT2600401',
+          StatusCode: 'TERMINE',
+          Status: 'Terminé',
+          StartTime: '2026-09-16T09:15:17',
+          EndTime: '2026-09-16T09:48:23',
+          ProductiveDuration: 33,
+          StatutTraitement: null
+        }
+      ];
+      mockApiService.getMonitoringTemps.mockResolvedValue({
+        success: true,
+        data: [
+          {
+            TempsId: 429,
+            OperatorCode: '865',
+            LancementCode: 'LT2600401',
+            StatusCode: 'TERMINE',
+            Status: 'Terminé',
+            ProductiveDuration: 3,
+            StatutTraitement: null
+          },
+          {
+            TempsId: 434,
+            OperatorCode: '865',
+            LancementCode: 'LT2600401',
+            StatusCode: 'TERMINE',
+            Status: 'Terminé',
+            ProductiveDuration: 33,
+            StatutTraitement: null
+          }
+        ]
+      });
+
+      const result = await adminPage._resolveTransferEligibleOperations();
+      expect(result.eligible).toHaveLength(2);
+      expect(result.eligible.map((o) => o.TempsId).sort((a, b) => a - b)).toEqual([429, 434]);
+      expect(mockApiService.consolidateMonitoringBatch).not.toHaveBeenCalled();
+    });
+
+    it('détaille les TempsId OK/échec dans le message de transfert', () => {
+      const msg = adminPage._formatTransferResultMessage({
+        count: 2,
+        validatedIds: [429, 434],
+        invalidIds: [{ tempsId: 435, errors: ['ProductiveDuration doit être > 0'] }],
+        ediJob: { skipped: true, message: 'mode planifié' }
+      }, 3);
+      expect(msg).toContain('OK TempsId: 429, 434');
+      expect(msg).toContain('Échec: 435:');
+    });
+
     it('utilise le TempsId renvoyé quand la consolidation répond "Déjà consolidé"', async () => {
       adminPage.operations = [{
         OperatorCode: '319',
