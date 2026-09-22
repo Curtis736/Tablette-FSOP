@@ -1333,22 +1333,30 @@ async function getAdminStats(date) {
         // IMPORTANT: DateCreation est renvoyé en 'YYYY-MM-DD' (string) pour éviter les décalages timezone.
         let filteredEvents = allEvents.filter(event => String(event.DateCreation || '') === targetDate);
 
-        // Exclure les opérations déjà transmises (StatutTraitement = 'T') pour ne pas les afficher dans le dashboard
+        // Exclure l'historique seulement si tous les ABTEMPS du couple
+        // opérateur+LT+phase+rubrique sont transmis (multi-cycles : un T ne masque pas les autres).
         try {
-            const transmittedQuery = `
-                SELECT OperatorCode, LancementCode, Phase, CodeRubrique
+            const abtempsQuery = `
+                SELECT OperatorCode, LancementCode, Phase, CodeRubrique, StatutTraitement
                 FROM [SEDI_APP_INDEPENDANTE].[dbo].[ABTEMPS_OPERATEURS] WITH (NOLOCK)
-                WHERE StatutTraitement = 'T'
-                  -- ABTEMPS.DateCreation is stored as DATE (see insertion), keep predicate sargable
-                  AND DateCreation = @date
+                WHERE DateCreation = @date
             `;
-            const transmitted = await executeQuery(transmittedQuery, { date: targetDate });
-            const transmittedSet = new Set(
-                transmitted.map(t => `${t.OperatorCode}_${t.LancementCode}_${String(t.Phase || '').trim()}_${String(t.CodeRubrique || '').trim()}`)
-            );
+            const abtempsRows = await executeQuery(abtempsQuery, { date: targetDate });
+            const fullyTransmittedKeys = new Set();
+            const keyStats = new Map();
+            for (const t of abtempsRows) {
+                const k = `${t.OperatorCode}_${t.LancementCode}_${String(t.Phase || '').trim()}_${String(t.CodeRubrique || '').trim()}`;
+                if (!keyStats.has(k)) keyStats.set(k, { hasT: false, hasPending: false });
+                const st = keyStats.get(k);
+                if (String(t.StatutTraitement || '').toUpperCase().trim() === 'T') st.hasT = true;
+                else st.hasPending = true;
+            }
+            for (const [k, st] of keyStats) {
+                if (st.hasT && !st.hasPending) fullyTransmittedKeys.add(k);
+            }
             filteredEvents = filteredEvents.filter(e => {
                 const k = `${e.OperatorCode}_${e.CodeLanctImprod}_${String(e.Phase || '').trim()}_${String(e.CodeRubrique || '').trim()}`;
-                return !transmittedSet.has(k);
+                return !fullyTransmittedKeys.has(k);
             });
         } catch (e) {
             console.warn('⚠️ Impossible de filtrer les opérations transmises pour les stats:', e.message);
@@ -1579,39 +1587,45 @@ async function getAdminOperations(date, page = 1, limit = 25, dateStart = null, 
             filteredEvents = allEvents.filter(event => String(event.DateCreation || '') === targetDate);
         }
 
-        // Exclure les opérations déjà transmises (StatutTraitement = 'T') pour
-        // ne pas les afficher dans le tableau admin. L'historique complet reste
-        // accessible via les endpoints de monitoring dédiés (ABTEMPS_OPERATEURS).
-        // Aligné avec les stats (cf. bloc équivalent dans getAdminStats).
+        // Exclure l'historique seulement quand TOUS les ABTEMPS du même
+        // opérateur+LT+phase+rubrique sont déjà transmis (T).
+        // Si un cycle reste NULL/O, garder l'historique (multi-cycles même jour).
         try {
-            let transmitted = [];
+            let abtempsRows = [];
             if (isRange) {
-                const transmittedRangeQuery = `
-                    SELECT OperatorCode, LancementCode, Phase, CodeRubrique
+                const abtempsRangeQuery = `
+                    SELECT OperatorCode, LancementCode, Phase, CodeRubrique, StatutTraitement
                     FROM [SEDI_APP_INDEPENDANTE].[dbo].[ABTEMPS_OPERATEURS] WITH (NOLOCK)
-                    WHERE StatutTraitement = 'T'
-                      AND DateCreation >= @dStart
+                    WHERE DateCreation >= @dStart
                       AND DateCreation <= @dEnd
                 `;
-                transmitted = await executeQuery(transmittedRangeQuery, { dStart, dEnd });
+                abtempsRows = await executeQuery(abtempsRangeQuery, { dStart, dEnd });
             } else {
-                const transmittedQuery = `
-                    SELECT OperatorCode, LancementCode, Phase, CodeRubrique
+                const abtempsQuery = `
+                    SELECT OperatorCode, LancementCode, Phase, CodeRubrique, StatutTraitement
                     FROM [SEDI_APP_INDEPENDANTE].[dbo].[ABTEMPS_OPERATEURS] WITH (NOLOCK)
-                    WHERE StatutTraitement = 'T'
-                      AND DateCreation = @date
+                    WHERE DateCreation = @date
                 `;
-                transmitted = await executeQuery(transmittedQuery, { date: targetDate });
+                abtempsRows = await executeQuery(abtempsQuery, { date: targetDate });
             }
-            const transmittedSet = new Set(
-                transmitted.map(t => `${t.OperatorCode}_${t.LancementCode}_${String(t.Phase || '').trim()}_${String(t.CodeRubrique || '').trim()}`)
-            );
+            const fullyTransmittedKeys = new Set();
+            const keyStats = new Map();
+            for (const t of abtempsRows) {
+                const k = `${t.OperatorCode}_${t.LancementCode}_${String(t.Phase || '').trim()}_${String(t.CodeRubrique || '').trim()}`;
+                if (!keyStats.has(k)) keyStats.set(k, { hasT: false, hasPending: false });
+                const st = keyStats.get(k);
+                if (String(t.StatutTraitement || '').toUpperCase().trim() === 'T') st.hasT = true;
+                else st.hasPending = true;
+            }
+            for (const [k, st] of keyStats) {
+                if (st.hasT && !st.hasPending) fullyTransmittedKeys.add(k);
+            }
             const beforeFilter = filteredEvents.length;
             filteredEvents = filteredEvents.filter(e => {
                 const k = `${e.OperatorCode}_${e.CodeLanctImprod}_${String(e.Phase || '').trim()}_${String(e.CodeRubrique || '').trim()}`;
-                return !transmittedSet.has(k);
+                return !fullyTransmittedKeys.has(k);
             });
-            console.log(`🔒 Filtre transmitted (T): ${beforeFilter - filteredEvents.length} événements masqués (${filteredEvents.length} restants)`);
+            console.log(`🔒 Filtre transmitted (T complet): ${beforeFilter - filteredEvents.length} événements masqués (${filteredEvents.length} restants)`);
         } catch (e) {
             console.warn('⚠️ Impossible de filtrer les opérations transmises:', e.message);
         }
