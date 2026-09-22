@@ -128,6 +128,67 @@ describe('processLancementEventsWithPauses pause rows', () => {
     expect(pauseRows[0].statusCode).toBe('PAUSE_TERMINEE');
     expect(pauseRows[0].editable).toBe(false);
   });
+
+  it('dedupes duplicated NoEnreg from multi-ABTEMPS JOIN (no fake EN_COURS)', () => {
+    // Simule le bug Mon Historique : 2 ABTEMPS le même jour → chaque événement HIST x2
+    const duplicated = [
+      {
+        NoEnreg: 1546,
+        Ident: 'DEBUT',
+        OperatorCode: '009',
+        CodeLanctImprod: 'LT2601054',
+        Phase: '010',
+        CodeRubrique: 'CONNECT',
+        HeureDebut: '13:51:00',
+        DateCreation: '2026-09-22',
+        CreatedAt: '2026-09-22T13:51:00.000Z',
+        Article: 'Patchcord'
+      },
+      {
+        NoEnreg: 1546,
+        Ident: 'DEBUT',
+        OperatorCode: '009',
+        CodeLanctImprod: 'LT2601054',
+        Phase: '010',
+        CodeRubrique: 'CONNECT',
+        HeureDebut: '13:51:00',
+        DateCreation: '2026-09-22',
+        CreatedAt: '2026-09-22T13:51:00.000Z',
+        Article: 'Patchcord'
+      },
+      {
+        NoEnreg: 1547,
+        Ident: 'FIN',
+        OperatorCode: '009',
+        CodeLanctImprod: 'LT2601054',
+        Phase: '010',
+        CodeRubrique: 'CONNECT',
+        HeureFin: '13:55:00',
+        DateCreation: '2026-09-22',
+        CreatedAt: '2026-09-22T13:55:00.000Z',
+        Article: 'Patchcord'
+      },
+      {
+        NoEnreg: 1547,
+        Ident: 'FIN',
+        OperatorCode: '009',
+        CodeLanctImprod: 'LT2601054',
+        Phase: '010',
+        CodeRubrique: 'CONNECT',
+        HeureFin: '13:55:00',
+        DateCreation: '2026-09-22',
+        CreatedAt: '2026-09-22T13:55:00.000Z',
+        Article: 'Patchcord'
+      }
+    ];
+
+    const items = processLancementEventsWithPauses(duplicated);
+    expect(items).toHaveLength(1);
+    expect(items[0].statusCode).toBe('TERMINE');
+    expect(items[0].startTime).toMatch(/13:51/);
+    expect(items[0].endTime).toMatch(/13:55/);
+    expect(items.filter((i) => i.statusCode === 'EN_COURS')).toHaveLength(0);
+  });
 });
 
 describe('processLancementEventsWithPauses work segments (SILOG)', () => {

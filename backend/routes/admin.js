@@ -760,13 +760,30 @@ function createPauseRowItem(pauseEvent, repriseEvent, referenceEvent) {
     };
 }
 
+function dedupeHistoriqueEvents(events) {
+    // Garde-fou : un JOIN ABTEMPS multi-cycles peut renvoyer le même NoEnreg N fois.
+    // Sans dédoublonnage, chaque DEBUT dupliqué crée un faux cycle "EN COURS".
+    const seen = new Set();
+    const unique = [];
+    for (const event of events || []) {
+        const id = event?.NoEnreg;
+        const key = id == null
+            ? `${event?.Ident}|${event?.OperatorCode}|${event?.CodeLanctImprod}|${event?.CreatedAt || event?.DateCreation}|${event?.HeureDebut}|${event?.HeureFin}`
+            : String(id);
+        if (seen.has(key)) continue;
+        seen.add(key);
+        unique.push(event);
+    }
+    return unique;
+}
+
 function processLancementEventsWithPauses(events, { includePauseRows = false, includeWorkSegments = false } = {}) {
     const lancementGroups = {};
     
     // 🔒 ISOLATION STRICTE : Regrouper par CodeLanctImprod + OperatorCode + Phase + CodeRubrique
     // Chaque opérateur a son propre historique pour chaque lancement
     // Un même lancement peut avoir plusieurs historiques (un par opérateur)
-    events.forEach(event => {
+    dedupeHistoriqueEvents(events).forEach(event => {
         const phase = (event.Phase || '').toString().trim();
         const rubrique = (event.CodeRubrique || '').toString().trim();
         // Clé unique = Lancement + Opérateur + Étape (garantit l'isolation par fabrication)
@@ -3141,14 +3158,19 @@ router.get('/operators/:operatorCode/operations', async (req, res) => {
             FROM [SEDI_APP_INDEPENDANTE].[dbo].[ABHISTORIQUE_OPERATEURS] h
             LEFT JOIN [SEDI_ERP].[dbo].[RESSOURC] r ON h.OperatorCode = r.Coderessource
             LEFT JOIN [SEDI_ERP].[dbo].[LCTE] l ON l.CodeLancement = h.CodeLanctImprod
-            LEFT JOIN [SEDI_APP_INDEPENDANTE].[dbo].[ABTEMPS_OPERATEURS] t 
-                ON t.OperatorCode = h.OperatorCode 
-                AND t.LancementCode = h.CodeLanctImprod
-                -- t.Phase/t.CodeRubrique NULL = clés ERP non résolues : rattachement lancement + date
-                AND (t.Phase IS NULL OR ISNULL(t.Phase, '') = ISNULL(h.Phase, ''))
-                AND (t.CodeRubrique IS NULL OR ISNULL(t.CodeRubrique, '') = ISNULL(h.CodeRubrique, ''))
-                AND CAST(t.DateCreation AS DATE) = CAST(h.DateCreation AS DATE)
-            -- ⚡ OPTIMISATION : Utiliser h.Phase directement (plus simple et fiable)
+            -- OUTER APPLY TOP 1 : évite de dupliquer chaque événement HIST
+            -- quand plusieurs ABTEMPS existent le même jour pour le même LT/étape.
+            OUTER APPLY (
+                SELECT TOP 1 t.StatutTraitement
+                FROM [SEDI_APP_INDEPENDANTE].[dbo].[ABTEMPS_OPERATEURS] t
+                WHERE t.OperatorCode = h.OperatorCode
+                  AND t.LancementCode = h.CodeLanctImprod
+                  AND CAST(t.DateCreation AS DATE) = CAST(h.DateCreation AS DATE)
+                  -- t.Phase/t.CodeRubrique NULL = clés ERP non résolues : rattachement lancement + date
+                  AND (t.Phase IS NULL OR ISNULL(t.Phase, '') = ISNULL(h.Phase, ''))
+                  AND (t.CodeRubrique IS NULL OR ISNULL(t.CodeRubrique, '') = ISNULL(h.CodeRubrique, ''))
+                ORDER BY CASE WHEN t.StatutTraitement = 'T' THEN 1 ELSE 0 END, t.TempsId DESC
+            ) t
             WHERE h.OperatorCode = @operatorCode
             ORDER BY h.DateCreation DESC
         `;
