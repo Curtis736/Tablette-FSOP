@@ -262,29 +262,36 @@ class AdminPage {
     }
 
     /**
-     * SILOG : si des segments productifs (historique) existent pour opérateur+LT+jour,
-     * masquer la ligne consolidée ABTEMPS qui couvre toute la journée (évite le doublon).
+     * Clé créneau (opérateur + LT + jour + heure début) pour aligner
+     * une ligne ABTEMPS et un segment historique du même cycle.
+     */
+    _getAdminStartSlotKey(op) {
+        const oc = String(op?.OperatorCode || op?.operatorCode || op?.operatorId || '').trim();
+        const lc = String(op?.LancementCode || op?.lancementCode || '').trim().toUpperCase();
+        const ymd = this._parseOpDateCreationLocalYmd(op?.DateCreation) || '';
+        const st = this.formatDateTime(op?.StartTime ?? op?.startTime);
+        const startNorm = st === '-' ? '' : st;
+        return `${oc}|${lc}|${ymd}|${startNorm}`;
+    }
+
+    /**
+     * Multi-cycles : préférer la ligne ABTEMPS (TempsId) au segment historique
+     * du même créneau. Ne plus masquer toute la journée dès qu'un segment existe.
      */
     _preferWorkSegmentsOverConsolidated(ops) {
         if (!ops?.length) return ops;
-        const daysWithSegments = new Set();
+        const consolidatedSlots = new Set();
         for (const op of ops) {
-            if (op?._isWorkSegment || (op?._isUnconsolidated && op?.EventId && !op?._isPauseRow)) {
-                const ymd = this._parseOpDateCreationLocalYmd(op?.DateCreation);
-                if (!ymd) continue;
-                const lc = String(op?.LancementCode || op?.lancementCode || '').trim().toUpperCase();
-                const oc = String(op?.OperatorCode || op?.operatorCode || op?.operatorId || '').trim();
-                daysWithSegments.add(`${oc}|${lc}|${ymd}`);
-            }
+            if (op?.TempsId == null || String(op.TempsId).trim() === '') continue;
+            if (op?._isPauseRow) continue;
+            consolidatedSlots.add(this._getAdminStartSlotKey(op));
         }
-        if (daysWithSegments.size === 0) return ops;
+        if (consolidatedSlots.size === 0) return ops;
         return ops.filter((op) => {
-            if (op?.TempsId == null || String(op.TempsId).trim() === '') return true;
-            const ymd = this._parseOpDateCreationLocalYmd(op?.DateCreation);
-            if (!ymd) return true;
-            const lc = String(op?.LancementCode || op?.lancementCode || '').trim().toUpperCase();
-            const oc = String(op?.OperatorCode || op?.operatorCode || op?.operatorId || '').trim();
-            return !daysWithSegments.has(`${oc}|${lc}|${ymd}`);
+            if (op?._isPauseRow) return true;
+            if (op?.TempsId != null && String(op.TempsId).trim() !== '') return true;
+            if (!op?._isWorkSegment && !op?._isUnconsolidated) return true;
+            return !consolidatedSlots.has(this._getAdminStartSlotKey(op));
         });
     }
 
@@ -1771,8 +1778,8 @@ class AdminPage {
         }
 
         // Transmis (T) : visibles et grisés. On masque seulement les overlays
-        // historiques (segments / non consolidés) du même opérateur+LT+jour,
-        // pour éviter les doublons à côté de la ligne consolidée déjà basculée.
+        // historiques (segments / non consolidés) du même opérateur+LT+jour —
+        // jamais les autres TempsId (autres cycles encore NULL/O).
         const transmittedKeys = new Set();
         for (const op of this.operations || []) {
             if (String(op?.StatutTraitement ?? '').toUpperCase().trim() !== 'T') continue;
@@ -1785,6 +1792,8 @@ class AdminPage {
             if (!this.shouldShowAdminDashboardRow(op)) return false;
             const isT = String(op?.StatutTraitement ?? '').toUpperCase().trim() === 'T';
             if (isT) return true;
+            // Autre cycle ABTEMPS (NULL/O/A) : toujours visible même si un frère est T
+            if (op?.TempsId != null && String(op.TempsId).trim() !== '') return true;
             if (transmittedKeys.size === 0) return true;
             const oc = String(op?.OperatorCode || op?.operatorCode || op?.operatorId || '').trim();
             const lc = String(op?.LancementCode || op?.lancementCode || '').trim().toUpperCase();
