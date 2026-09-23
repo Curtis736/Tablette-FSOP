@@ -5,19 +5,289 @@
 
 const { executeQuery, executeNonQuery } = require('../config/database');
 
+/** Statut ABTEMPS : cycle fusionné dans un frère pour contourner l'anti-doublon SILOG jour/LT/poste. */
+const STATUT_MERGED = 'M';
+
 class MonitoringService {
     static _toDateOnly(value) {
         if (!value) return null;
         // SQL DATE often comes back as JS Date via mssql
         if (value instanceof Date) {
             if (Number.isNaN(value.getTime())) return null;
-            return value.toISOString().slice(0, 10); // YYYY-MM-DD
+            // Prefer local calendar day for Date objects that are midnight local
+            const y = value.getFullYear();
+            const m = String(value.getMonth() + 1).padStart(2, '0');
+            const d = String(value.getDate()).padStart(2, '0');
+            // If ISO UTC midnight shifts day, still use the SQL-ish YYYY-MM-DD from ISO when available
+            const iso = value.toISOString().slice(0, 10);
+            return iso || `${y}-${m}-${d}`;
         }
         const s = String(value).trim();
         // Common formats: "2026-01-21", "2026-01-21T00:00:00.000Z"
         const m = s.match(/^(\d{4}-\d{2}-\d{2})/);
         if (m) return m[1];
         return null;
+    }
+
+    static _silogBusinessKey(row) {
+        const dateKey = this._toDateOnly(row.DateCreation || row.DateTravail);
+        const op = String(row.OperatorCode || row.CodeOperateur || '').trim();
+        const lt = String(row.LancementCode || row.CodeLanctimprod || '').trim().toUpperCase();
+        const phase = String(row.Phase || '').trim();
+        const poste = String(row.CodeRubrique || row.CodePoste || '').trim();
+        return `${dateKey}|${op}|${lt}|${phase}|${poste}`;
+    }
+
+    /**
+     * SILOG EDI anti-doublon = DateTravail+LT+Phase+Poste+Opérateur (1 ligne/jour).
+     * Avant validation O : fusionne les cycles FSOP du même créneau métier en 1 ligne
+     * (durée cumulée). Si ETEMPS existe déjà → met à jour la durée SILOG et ne renvoie plus en O.
+     *
+     * @param {number[]} tempsIds
+     * @returns {Promise<{ primaryIds: number[], mergedAwayIds: number[], etempsRepaired: number[], details: object[] }>}
+     */
+    static async reconcileSameKeyCyclesForSilog(tempsIds) {
+        const { executeQuery, executeNonQuery } = require('../config/database');
+        const empty = { primaryIds: [], mergedAwayIds: [], etempsRepaired: [], details: [] };
+        const ids = [...new Set((tempsIds || []).map(Number).filter((n) => Number.isFinite(n) && n > 0))];
+        if (ids.length === 0) return empty;
+
+        const placeholders = ids.map((_, i) => `@id${i}`).join(', ');
+        const idParams = {};
+        ids.forEach((id, i) => { idParams[`id${i}`] = id; });
+
+        const seeds = await executeQuery(
+            `
+            SELECT TempsId, OperatorCode, LancementCode, Phase, CodeRubrique,
+                   StartTime, EndTime, DateCreation, StatutTraitement,
+                   TotalDuration, PauseDuration, ProductiveDuration, EventsCount
+            FROM [SEDI_APP_INDEPENDANTE].[dbo].[ABTEMPS_OPERATEURS]
+            WHERE TempsId IN (${placeholders})
+            `,
+            idParams
+        );
+        if (!seeds.length) return empty;
+
+        // Charger tous les frères du même jour/LT/phase/poste/opérateur (hors D)
+        const siblingParts = [];
+        const siblingParams = {};
+        seeds.forEach((s, i) => {
+            siblingParts.push(`(
+                t.OperatorCode = @op${i}
+                AND t.LancementCode = @lt${i}
+                AND ISNULL(LTRIM(RTRIM(t.Phase)), '') = @ph${i}
+                AND ISNULL(LTRIM(RTRIM(t.CodeRubrique)), '') = @rb${i}
+                AND CAST(t.DateCreation AS DATE) = @dt${i}
+            )`);
+            siblingParams[`op${i}`] = s.OperatorCode;
+            siblingParams[`lt${i}`] = s.LancementCode;
+            siblingParams[`ph${i}`] = String(s.Phase || '').trim();
+            siblingParams[`rb${i}`] = String(s.CodeRubrique || '').trim();
+            siblingParams[`dt${i}`] = this._toDateOnly(s.DateCreation);
+        });
+
+        const siblings = await executeQuery(
+            `
+            SELECT TempsId, OperatorCode, LancementCode, Phase, CodeRubrique,
+                   StartTime, EndTime, DateCreation, StatutTraitement,
+                   TotalDuration, PauseDuration, ProductiveDuration, EventsCount
+            FROM [SEDI_APP_INDEPENDANTE].[dbo].[ABTEMPS_OPERATEURS] t
+            WHERE (${siblingParts.join(' OR ')})
+              AND (t.StatutTraitement IS NULL OR LTRIM(RTRIM(t.StatutTraitement)) NOT IN ('D'))
+              AND ISNULL(t.ProductiveDuration, 0) > 0
+            ORDER BY t.StartTime ASC, t.TempsId ASC
+            `,
+            siblingParams
+        );
+
+        const byKey = new Map();
+        for (const row of siblings) {
+            const k = this._silogBusinessKey(row);
+            if (!byKey.has(k)) byKey.set(k, []);
+            byKey.get(k).push(row);
+        }
+
+        const primaryIds = [];
+        const mergedAwayIds = [];
+        const etempsRepaired = [];
+        const details = [];
+        const seedSet = new Set(ids);
+
+        for (const [key, rows] of byKey) {
+            if (!rows.some((r) => seedSet.has(Number(r.TempsId)))) continue;
+
+            const sumProd = rows.reduce((s, r) => s + (Number(r.ProductiveDuration) || 0), 0);
+            const sumTotal = rows.reduce((s, r) => s + (Number(r.TotalDuration) || 0), 0);
+            const sumPause = rows.reduce((s, r) => s + (Number(r.PauseDuration) || 0), 0);
+            const sumEvents = rows.reduce((s, r) => s + (Number(r.EventsCount) || 0), 0);
+            const minStart = rows.reduce((a, r) => (!a || new Date(r.StartTime) < new Date(a) ? r.StartTime : a), null);
+            const maxEnd = rows.reduce((a, r) => (!a || new Date(r.EndTime) > new Date(a) ? r.EndTime : a), null);
+
+            const sample = rows[0];
+            const dateKey = this._toDateOnly(sample.DateCreation);
+            const etemps = await executeQuery(
+                `
+                SELECT TOP 1 NoEnregistrement, DureeExecution, MinutesExecuto, VarNumUtil2,
+                       HeureDebutExecuto, MinuteDebutExecuto, HeureFinExecuto, MinuteFinExecuto
+                FROM [SEDI_ERP].[dbo].[ETEMPS]
+                WHERE CAST(DateTravail AS DATE) = @dateKey
+                  AND LTRIM(RTRIM(CodeLanctimprod)) = @lt
+                  AND LTRIM(RTRIM(Phase)) = @phase
+                  AND LTRIM(RTRIM(CodePoste)) = @poste
+                  AND LTRIM(RTRIM(CodeOperateur)) = @op
+                ORDER BY NoEnregistrement ASC
+                `,
+                {
+                    dateKey,
+                    lt: String(sample.LancementCode || '').trim(),
+                    phase: String(sample.Phase || '').trim(),
+                    poste: String(sample.CodeRubrique || '').trim(),
+                    op: String(sample.OperatorCode || '').trim()
+                }
+            );
+
+            const sumHours = Math.round((sumProd / 60) * 1e8) / 1e8;
+            const startParts = this._parseTimeParts(
+                minStart instanceof Date
+                    ? `${String(minStart.getHours()).padStart(2, '0')}:${String(minStart.getMinutes()).padStart(2, '0')}:${String(minStart.getSeconds()).padStart(2, '0')}`
+                    : String(minStart || '').slice(11, 19) || String(minStart)
+            );
+            const endParts = this._parseTimeParts(
+                maxEnd instanceof Date
+                    ? `${String(maxEnd.getHours()).padStart(2, '0')}:${String(maxEnd.getMinutes()).padStart(2, '0')}:${String(maxEnd.getSeconds()).padStart(2, '0')}`
+                    : String(maxEnd || '').slice(11, 19) || String(maxEnd)
+            );
+
+            if (etemps.length > 0) {
+                const et = etemps[0];
+                const currentMin = Number(et.MinutesExecuto) || Math.round((Number(et.DureeExecution) || 0) * 60);
+                if (Math.abs(currentMin - sumProd) > 0) {
+                    await executeNonQuery(
+                        `
+                        UPDATE [SEDI_ERP].[dbo].[ETEMPS]
+                        SET DureeExecution = @dureeH,
+                            MinutesExecuto = @minutes,
+                            HeuresExecuto = @heures,
+                            HeureDebutExecuto = @hd,
+                            MinuteDebutExecuto = @md,
+                            HeureFinExecuto = @hf,
+                            MinuteFinExecuto = @mf,
+                            DateModification = CAST(GETDATE() AS DATE)
+                        WHERE NoEnregistrement = @no
+                        `,
+                        {
+                            no: et.NoEnregistrement,
+                            dureeH: sumHours,
+                            // Convention observée : MinutesExecuto = durée totale en minutes (ex. 4 pour 0,07 h)
+                            minutes: sumProd,
+                            heures: 0,
+                            hd: startParts ? startParts.hh : (et.HeureDebutExecuto || 0),
+                            md: startParts ? startParts.mm : (et.MinuteDebutExecuto || 0),
+                            hf: endParts ? endParts.hh : (et.HeureFinExecuto || 0),
+                            mf: endParts ? endParts.mm : (et.MinuteFinExecuto || 0)
+                        }
+                    );
+                    etempsRepaired.push(et.NoEnregistrement);
+                }
+
+                // Plus rien à exposer en O : durée déjà dans SILOG
+                const pending = rows.filter((r) => {
+                    const st = r.StatutTraitement == null ? null : String(r.StatutTraitement).trim().toUpperCase();
+                    return st === null || st === '' || st === 'O' || st === 'A';
+                });
+                if (pending.length) {
+                    const pPh = pending.map((_, i) => `@p${i}`).join(', ');
+                    const pParams = {};
+                    pending.forEach((r, i) => { pParams[`p${i}`] = r.TempsId; });
+                    await executeNonQuery(
+                        `
+                        UPDATE [SEDI_APP_INDEPENDANTE].[dbo].[ABTEMPS_OPERATEURS]
+                        SET StatutTraitement = 'T'
+                        WHERE TempsId IN (${pPh})
+                        `,
+                        pParams
+                    );
+                    mergedAwayIds.push(...pending.map((r) => r.TempsId));
+                }
+                details.push({
+                    key,
+                    mode: 'etemps-update',
+                    sumProd,
+                    etempsNo: et.NoEnregistrement,
+                    tempsIds: rows.map((r) => r.TempsId)
+                });
+                continue;
+            }
+
+            // Pas encore dans ETEMPS : 1 ligne O avec durée cumulée
+            const pending = rows.filter((r) => {
+                const st = r.StatutTraitement == null ? null : String(r.StatutTraitement).trim().toUpperCase();
+                return st === null || st === '' || st === 'O' || st === 'A' || st === STATUT_MERGED;
+            });
+            if (pending.length === 0) continue;
+
+            const primary = pending[0];
+            const others = pending.slice(1);
+
+            if (pending.length === 1 && Number(primary.ProductiveDuration) === sumProd) {
+                primaryIds.push(primary.TempsId);
+                details.push({ key, mode: 'single', primaryId: primary.TempsId, sumProd });
+                continue;
+            }
+
+            await executeNonQuery(
+                `
+                UPDATE [SEDI_APP_INDEPENDANTE].[dbo].[ABTEMPS_OPERATEURS]
+                SET StartTime = @startTime,
+                    EndTime = @endTime,
+                    TotalDuration = @total,
+                    PauseDuration = @pause,
+                    ProductiveDuration = @prod,
+                    EventsCount = @events
+                WHERE TempsId = @tempsId
+                `,
+                {
+                    tempsId: primary.TempsId,
+                    startTime: minStart,
+                    endTime: maxEnd,
+                    total: sumTotal,
+                    pause: sumPause,
+                    prod: sumProd,
+                    events: sumEvents || pending.length
+                }
+            );
+
+            if (others.length) {
+                const oPh = others.map((_, i) => `@o${i}`).join(', ');
+                const oParams = {};
+                others.forEach((r, i) => { oParams[`o${i}`] = r.TempsId; });
+                await executeNonQuery(
+                    `
+                    UPDATE [SEDI_APP_INDEPENDANTE].[dbo].[ABTEMPS_OPERATEURS]
+                    SET StatutTraitement = '${STATUT_MERGED}'
+                    WHERE TempsId IN (${oPh})
+                    `,
+                    oParams
+                );
+                mergedAwayIds.push(...others.map((r) => r.TempsId));
+            }
+
+            primaryIds.push(primary.TempsId);
+            details.push({
+                key,
+                mode: 'merge-pending',
+                primaryId: primary.TempsId,
+                mergedIds: others.map((r) => r.TempsId),
+                sumProd
+            });
+        }
+
+        return {
+            primaryIds: [...new Set(primaryIds)],
+            mergedAwayIds: [...new Set(mergedAwayIds)],
+            etempsRepaired: [...new Set(etempsRepaired)],
+            details
+        };
     }
 
     static _normalizeTimeString(input) {
@@ -954,17 +1224,61 @@ class MonitoringService {
             if (invalidIds.length > 0) {
                 console.warn(`⚠️ ${invalidIds.length} enregistrement(s) invalide(s) ignoré(s)`);
             }
+
+            // Anti-doublon SILOG (1 ligne / jour / LT / poste / op) :
+            // fusionne les cycles FSOP + répare ETEMPS si une ligne existe déjà.
+            const recon = await this.reconcileSameKeyCyclesForSilog(validIds);
+            if (recon.details.length) {
+                console.log('🔗 reconcileSameKeyCyclesForSilog:', JSON.stringify(recon.details));
+            }
+
+            const mergedAway = new Set(recon.mergedAwayIds.map(Number));
+            let idsForO = (recon.primaryIds.length ? recon.primaryIds : validIds)
+                .map(Number)
+                .filter((id) => !mergedAway.has(id));
+
+            // Re-vérifier le statut après reconcile (T / M ne doivent plus passer en O)
+            if (idsForO.length > 0) {
+                const ph = idsForO.map((_, i) => `@v${i}`).join(', ');
+                const vp = {};
+                idsForO.forEach((id, i) => { vp[`v${i}`] = id; });
+                const stillOpen = await executeQuery(
+                    `
+                    SELECT TempsId FROM [SEDI_APP_INDEPENDANTE].[dbo].[ABTEMPS_OPERATEURS]
+                    WHERE TempsId IN (${ph})
+                      AND (StatutTraitement IS NULL OR LTRIM(RTRIM(StatutTraitement)) IN ('O', 'A'))
+                    `,
+                    vp
+                );
+                idsForO = stillOpen.map((r) => r.TempsId);
+            }
+
+            if (idsForO.length === 0) {
+                return {
+                    success: true,
+                    message: recon.etempsRepaired.length
+                        ? `Durée SILOG mise à jour (${recon.etempsRepaired.length} ETEMPS) — rien à revalider en O`
+                        : 'Cycles fusionnés / déjà couverts — rien à revalider en O',
+                    count: 0,
+                    validatedIds: [],
+                    mergedAwayIds: recon.mergedAwayIds,
+                    etempsRepaired: recon.etempsRepaired,
+                    fixedCount: fixedIds.length,
+                    invalidCount: invalidIds.length,
+                    invalidIds
+                };
+            }
             
-            // 3. Valider tous les enregistrements valides (StatutTraitement = 'O')
+            // 3. Valider les lignes primaires (StatutTraitement = 'O')
             // ⚠️ Ne pas marquer 'T' ici: l'EDI_JOB doit d'abord consommer les lignes validées via V_REMONTE_TEMPS.
             const validateQuery = `
                 UPDATE [SEDI_APP_INDEPENDANTE].[dbo].[ABTEMPS_OPERATEURS]
                 SET StatutTraitement = 'O'
-                WHERE TempsId IN (${validIds.map((_, i) => `@id${i}`).join(', ')})
+                WHERE TempsId IN (${idsForO.map((_, i) => `@id${i}`).join(', ')})
             `;
             
             const validateParams = {};
-            validIds.forEach((id, i) => {
+            idsForO.forEach((id, i) => {
                 validateParams[`id${i}`] = id;
             });
             
@@ -972,9 +1286,13 @@ class MonitoringService {
             
             return {
                 success: true,
-                message: `${validIds.length} enregistrements validés`,
-                count: validIds.length,
-                validatedIds: validIds,
+                message: `${idsForO.length} enregistrements validés` +
+                    (recon.mergedAwayIds.length ? ` (${recon.mergedAwayIds.length} cycle(s) fusionné(s))` : '') +
+                    (recon.etempsRepaired.length ? ` (${recon.etempsRepaired.length} ETEMPS réparé(s))` : ''),
+                count: idsForO.length,
+                validatedIds: idsForO,
+                mergedAwayIds: recon.mergedAwayIds,
+                etempsRepaired: recon.etempsRepaired,
                 fixedCount: fixedIds.length,
                 invalidCount: invalidIds.length,
                 invalidIds
@@ -1106,6 +1424,21 @@ class MonitoringService {
                 params.beforeDate = beforeDate;
             }
 
+            const pendingForMerge = await executeQuery(
+                `
+                SELECT t.TempsId
+                FROM [SEDI_APP_INDEPENDANTE].[dbo].[ABTEMPS_OPERATEURS] t
+                WHERE t.StatutTraitement IS NULL
+                  AND t.ProductiveDuration > 0
+                  AND t.EndTime IS NOT NULL
+                  AND ${dateCond}
+                `,
+                params
+            );
+            if (pendingForMerge.length) {
+                await this.reconcileSameKeyCyclesForSilog(pendingForMerge.map((r) => r.TempsId));
+            }
+
             const incoherentRows = await executeQuery(
                 `
                 SELECT COUNT(*) AS cnt
@@ -1148,9 +1481,21 @@ class MonitoringService {
             return { success: false, error: 'Aucun TempsId valide', validated: 0 };
         }
 
+        await this.reconcileSameKeyCyclesForSilog(ids);
+
         const validIds = [];
         const invalidIds = [];
         for (const tempsId of ids) {
+            const stRows = await executeQuery(
+                `SELECT StatutTraitement FROM [SEDI_APP_INDEPENDANTE].[dbo].[ABTEMPS_OPERATEURS] WHERE TempsId = @tempsId`,
+                { tempsId }
+            );
+            const st = stRows[0]?.StatutTraitement == null
+                ? null
+                : String(stRows[0].StatutTraitement).trim().toUpperCase();
+            if (st === 'T' || st === 'M' || st === 'D') {
+                continue;
+            }
             const validation = await OperationValidationService.validateForSilogValidation(tempsId);
             if (validation.valid) {
                 validIds.push(tempsId);
@@ -1228,12 +1573,31 @@ class MonitoringService {
      * encore en NULL / A. En mode SILOG planifié, ne pas marquer 'T' ici (SEDI_ETDIFF ~17h15 le fait).
      */
     static async runMidnightDashboardTransmit() {
-        const { executeNonQuery } = require('../config/database');
+        const { executeNonQuery, executeQuery } = require('../config/database');
         const remoteMode = String(process.env.SILOG_REMOTE_MODE || '').trim().toLowerCase();
         const isScheduledMode = ['scheduled', 'disable', 'disabled', 'none'].includes(remoteMode);
         const OperationValidationService = require('./OperationValidationService');
         const lctcClause = OperationValidationService.getLctcExistsClause('t');
         try {
+            // Fusion multi-cycles avant passage en O (anti-doublon SILOG jour/LT/poste)
+            const pendingRows = await executeQuery(
+                `
+                SELECT t.TempsId
+                FROM [SEDI_APP_INDEPENDANTE].[dbo].[ABTEMPS_OPERATEURS] t
+                WHERE CAST(t.DateCreation AS DATE) < CAST(GETDATE() AS DATE)
+                  AND t.EndTime IS NOT NULL
+                  AND t.ProductiveDuration > 0
+                  AND (
+                      t.StatutTraitement IS NULL
+                      OR t.StatutTraitement = 'A'
+                      OR t.StatutTraitement = 'O'
+                  )
+                `
+            );
+            if (pendingRows.length) {
+                await this.reconcileSameKeyCyclesForSilog(pendingRows.map((r) => r.TempsId));
+            }
+
             const validatePending = `
                 UPDATE t
                 SET StatutTraitement = 'O'
@@ -1247,7 +1611,8 @@ class MonitoringService {
                   AND (
                       t.StatutTraitement IS NULL
                       OR t.StatutTraitement = 'A'
-                      OR (t.StatutTraitement IS NOT NULL AND t.StatutTraitement <> 'O' AND t.StatutTraitement <> 'T')
+                      OR (t.StatutTraitement IS NOT NULL AND t.StatutTraitement <> 'O' AND t.StatutTraitement <> 'T'
+                          AND t.StatutTraitement <> 'M' AND t.StatutTraitement <> 'D')
                   )
             `;
             const r1 = await executeNonQuery(validatePending);
