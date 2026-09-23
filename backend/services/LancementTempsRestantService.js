@@ -111,7 +111,7 @@ class LancementTempsRestantService {
                   AND LTRIM(RTRIM(ISNULL(A.CodeRubrique, ''))) = LTRIM(RTRIM(C.CodeRubrique))
                   AND (
                         A.StatutTraitement IS NULL
-                     OR LTRIM(RTRIM(A.StatutTraitement)) NOT IN ('T', 'D')
+                     OR LTRIM(RTRIM(A.StatutTraitement)) NOT IN ('T', 'D', 'M')
                   )
             ) P
             WHERE C.CodeLancement = @lancementCode

@@ -2121,7 +2121,9 @@ class AdminPage {
             'NULL': 'NON TRAITÉ',
             'O': 'VALIDÉ',
             'A': 'EN ATTENTE',
-            'T': 'TRANSMIS'
+            'T': 'TRANSMIS',
+            'M': 'FUSIONNÉ',
+            'D': 'ÉCARTÉ'
         };
         return map[code] || code;
     }

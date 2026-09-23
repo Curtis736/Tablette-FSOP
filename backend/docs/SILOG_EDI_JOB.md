@@ -45,6 +45,27 @@ Historiquement, l’identifiant `TempsID` de `ABTEMPS_OPERATEURS` était recopi�
 
 Le backend FSOP continue d’écrire `TempsID` (identité technique SQL) ; **ne pas s’appuyer sur une égalité stricte TempsID ↔ SILOG** pour diagnostiquer les doublons ou les « manquants ».
 
+### Multi-cycles même jour (blocage EDI — 22/09/2026)
+
+**Constat prod `LT2601054` / opérateur 009** : FSOP a 3 lignes ABTEMPS (TempsId **444** = 4 min, **445** = 18 min, **446** = 56 min → **78 min = 1,30 h**), toutes passées en `T`.  
+Dans `SEDI_ERP.dbo.ETEMPS` : **1 seule ligne** (`VarNumUtil2=444`, `DureeExecution≈0,07`, `MinutesExecuto=4`). Le rapport SILOG « Temps Passés par Lancement » n’affiche donc que **0,07** (productivité absurde vs temps nécessaire 16,60).
+
+**Cause** : l’anti-doublon EDI ci-dessus traite les 3 cycles comme la même clé métier (même jour / LT / phase / poste / opérateur) → seule la 1ʳᵉ ligne est intégrée ; les suivantes sont ignorées (tout en pouvant quand même basculer en `T` côté app).
+
+**Action SILOG (Franck — hors repo FSOP)** : enrichir la clé d’existence pour accepter **plusieurs exécutions le même jour**, par ex. :
+
+- `DateTravail` + `CodeLancement` + `Phase` + `CodePoste` + `CodeOperateur` + **`HeureDebut`/`MinuteDebut`** (ou plage début–fin), **ou**
+- revenir à une idempotence fiable sur **`VarNumUtil2` = TempsId** (1 ligne ETEMPS par TempsId).
+
+Tant que cette règle n’est pas changée, la tablette peut bien exposer 1 ligne / cycle, mais SILOG n’en gardera qu’**une** par jour et poste.
+
+**Contournement FSOP (22/09/2026)** : avant validation `→ O`, `MonitoringService.reconcileSameKeyCyclesForSilog()` :
+
+1. Si une ligne `ETEMPS` existe déjà pour la clé métier → **met à jour** `DureeExecution` / `MinutesExecuto` avec la **somme** des cycles ABTEMPS, et passe les pending en `T` (plus de re-soumission O).
+2. Sinon → **fusionne** les cycles pending du même créneau dans 1 TempsId primaire (durée cumulée, Start=min, End=max) ; les frères passent en `StatutTraitement='M'` (exclus de `V_REMONTE_TEMPS`).
+
+L’admin continue d’afficher les TempsId individuels ; SILOG reçoit la bonne durée totale.
+
 ### Fréquence d’exécution EDI
 
 - Ancienne observation (mars 2026) : exécutions très fréquentes sur `SVC_SILOG`.
@@ -52,11 +73,17 @@ Le backend FSOP continue d’écrire `TempsID` (identité technique SQL) ; **ne 
 - **Besoin métier (SEDI, juillet 2026)** : visibilité des temps **à tout moment dans SILOG** → faire tourner **SEDI_ETDIFF en continu** sur `SVC_SILOG` (action Franck / infra).
 - La validation `NULL` → `'O'` reste manuelle via **Transfert admin** (évite les doublons côté SILOG). Filet auto à **20h**.
 
-### Lancements soldés et lignes non validées
+### Lancements soldés et remontée tablette (règle à assouplir)
 
-- Des enregistrements **validés** (`StatutTraitement = 'O'`) peuvent **ne pas être intégrés** s’ils concernent un **lancement soldé** côté ERP — comportement attendu côté SILOG / LCTE.
-- Exemple cité : **LT2600188** soldé → la ligne associée ne pourra pas être intégrée après validation ; traitement manuel ou correction ERP (désolde / autre procédure) selon la gouvernance SEDI.
-- Les enregistrements encore en **`NULL`** (non validés) ne sortent pas dans `V_REMONTE_TEMPS` tant qu’ils ne passent pas en `'O'`.
+**Constat prod (21/09/2026, Intérimaire 8)** : FSOP a bien mis en `O` / `V_REMONTE_TEMPS` les TempsId **437** (LT2600479 Magasin) et **438** (LT2600388 ConnectS). Seul **439** (LT2600874, `LancementSolde='N'`) a été intégré en `ETEMPS` puis passé en `T`. Les deux autres LT étaient **soldés** (`LCTE.LancementSolde='O'`) → `SEDI_ETDIFF` les a ignorés.
+
+**Décision métier (SEDI / tablette)** : la remontée des temps **tablette** doit être acceptée **même si le lancement est soldé**. Un opérateur peut pointer sur un LT déjà soldé ; ces temps restent des temps réels à remonter.
+
+**Action SILOG (Franck MAILLARD — hors repo FSOP)** : dans la tâche EDI `SEDI_ETDIFF`, **retirer (ou contourner) le filtre** qui exclut les lignes dont le `CodeLancement` a `LCTE.LancementSolde <> 'N'`. La source reste `V_REMONTE_TEMPS` (`StatutTraitement='O'` + `ProductiveDuration > 0`). Après modification, relancer `SEDI_ETDIFF` pour consommer les `O` en attente (ex. TempsId 437, 438).
+
+**Côté FSOP** : rien à filtrer sur soldé pour la validation Transfert → `O` ; `V_REMONTE_TEMPS` expose déjà ces lignes. Le watchdog peut continuer à signaler les `O` stale sur LT soldés comme **bloqués EDI** tant que la règle SILOG n’est pas assouplie.
+
+Ancien comportement documenté (avant assouplissement) : intégration refusée sur LT soldé — à ne plus considérer comme attendu pour la tablette.
 
 ## Infrastructure
 
