@@ -168,6 +168,79 @@ class DurationCalculationService {
             eventsCount: sortedEvents.length
         };
     }
+
+    /**
+     * Apparie PAUSE → REPRISE (première reprise non utilisée à partir de la pause).
+     */
+    static pairPauseRepriseEvents(pauseEvents, repriseEvents) {
+        const pairs = [];
+        const usedRepriseIds = new Set();
+        (pauseEvents || []).forEach((pauseEvent) => {
+            const pauseTs = new Date(pauseEvent.CreatedAt || pauseEvent.DateCreation).getTime();
+            const repriseEvent = (repriseEvents || []).find((reprise) => {
+                const rid = reprise.NoEnreg ?? reprise.CreatedAt ?? reprise.DateCreation;
+                if (usedRepriseIds.has(rid)) return false;
+                const repriseTs = new Date(reprise.CreatedAt || reprise.DateCreation).getTime();
+                return repriseTs >= pauseTs;
+            });
+            if (repriseEvent) {
+                const rid = repriseEvent.NoEnreg ?? repriseEvent.CreatedAt ?? repriseEvent.DateCreation;
+                usedRepriseIds.add(rid);
+            }
+            pairs.push({ pauseEvent, repriseEvent: repriseEvent || null });
+        });
+        return pairs;
+    }
+
+    /**
+     * Découpe un cycle DEBUT→FIN en créneaux productifs (pause = fin de ligne, reprise = début suivante).
+     * Uniquement les segments fermés (avec fin) — pour consolidation ABTEMPS / transfert SILOG.
+     * @returns {Array<{ startEvent: Object, endEvent: Object, endIsFin: boolean }>}
+     */
+    static buildClosedWorkSegments(events) {
+        if (!events || events.length === 0) return [];
+
+        const sortedEvents = [...events].sort((a, b) => {
+            const dateA = new Date(a.CreatedAt || a.DateCreation).getTime();
+            const dateB = new Date(b.CreatedAt || b.DateCreation).getTime();
+            if (dateA !== dateB) return dateA - dateB;
+            return (a.NoEnreg || 0) - (b.NoEnreg || 0);
+        });
+
+        const debutEvent = sortedEvents.find((e) => String(e.Ident || '').toUpperCase() === 'DEBUT');
+        const finEvent = sortedEvents.find((e) => String(e.Ident || '').toUpperCase() === 'FIN');
+        if (!debutEvent || !finEvent) return [];
+
+        const pauseEvents = sortedEvents.filter((e) => String(e.Ident || '').toUpperCase() === 'PAUSE');
+        const repriseEvents = sortedEvents.filter((e) => String(e.Ident || '').toUpperCase() === 'REPRISE');
+
+        if (pauseEvents.length === 0) {
+            return [{ startEvent: debutEvent, endEvent: finEvent, endIsFin: true }];
+        }
+
+        const segments = [];
+        let workStartEvent = debutEvent;
+        const pairs = this.pairPauseRepriseEvents(pauseEvents, repriseEvents);
+
+        pairs.forEach(({ pauseEvent, repriseEvent }) => {
+            segments.push({ startEvent: workStartEvent, endEvent: pauseEvent, endIsFin: false });
+            if (repriseEvent) {
+                workStartEvent = repriseEvent;
+            }
+        });
+
+        // Dernier créneau jusqu'au FIN (même si dernière pause sans reprise : le temps post-pause
+        // est déjà hors productif ; on ne crée un segment après reprise que s'il y a eu reprise).
+        const lastPair = pairs[pairs.length - 1];
+        if (lastPair?.repriseEvent || pauseEvents.length === 0) {
+            segments.push({ startEvent: workStartEvent, endEvent: finEvent, endIsFin: true });
+        } else if (!lastPair?.repriseEvent) {
+            // Cycle terminé pendant une pause : le dernier segment productif s'arrête à la pause
+            // (déjà poussé). Pas de segment DEBUT-après-pause → FIN.
+        }
+
+        return segments;
+    }
     
     /**
      * Calculer les durées depuis la base de données (requête SQL)

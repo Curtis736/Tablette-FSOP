@@ -57,14 +57,35 @@ Dans `SEDI_ERP.dbo.ETEMPS` : **1 seule ligne** (`VarNumUtil2=444`, `DureeExecuti
 - `DateTravail` + `CodeLancement` + `Phase` + `CodePoste` + `CodeOperateur` + **`HeureDebut`/`MinuteDebut`** (ou plage début–fin), **ou**
 - revenir à une idempotence fiable sur **`VarNumUtil2` = TempsId** (1 ligne ETEMPS par TempsId).
 
-Tant que cette règle n’est pas changée, la tablette peut bien exposer 1 ligne / cycle, mais SILOG n’en gardera qu’**une** par jour et poste.
+**Statut (23/09/2026)** : restriction `SEDI_ETDIFF` levée par Franck ; 445 et 446 intégrés comme lignes distinctes. La tablette n’agrège plus les cycles.
 
-**Contournement FSOP (22/09/2026)** : avant validation `→ O`, `MonitoringService.reconcileSameKeyCyclesForSilog()` :
+**Retour Franck MAILLARD (23/09/2026)** : une restriction historique dans `SEDI_ETDIFF` (époque où le booléen `StatutTraitement` n’était pas bien géré) n’avait pas été levée. **C’est maintenant fait.** Les TempsId **445** et **446** ont été intégrés manuellement dans SILOG.
 
-1. Si une ligne `ETEMPS` existe déjà pour la clé métier → **met à jour** `DureeExecution` / `MinutesExecuto` avec la **somme** des cycles ABTEMPS, et passe les pending en `T` (plus de re-soumission O).
-2. Sinon → **fusionne** les cycles pending du même créneau dans 1 TempsId primaire (durée cumulée, Start=min, End=max) ; les frères passent en `StatutTraitement='M'` (exclus de `V_REMONTE_TEMPS`).
+Les heures de début / fin d’exécution sont exposées en **numérique** pour l’écran ERP « Suivi de Production » (variables déjà utilisées par la saisie SILOG native). Accord Franck MAILLARD (23/09/2026) : conserver ce mappage.
 
-L’admin continue d’afficher les TempsId individuels ; SILOG reçoit la bonne durée totale.
+Côté FSOP, `V_REMONTE_TEMPS` expose donc :
+
+| Colonne vue | Type | Exemple | Usage SILOG |
+|-------------|------|---------|-------------|
+| `HeureDebut` | `INT` (0–23) | `9` | `VarNumUtil8` |
+| `MinutesDebut` | `INT` (0–59) | `15` | `VarNumUtil9` |
+| `HeureFin` | `INT` (0–23) | `9` | `VarNumUtil10` |
+| `MinutesFin` | `INT` (0–59) | `48` | `VarNumUtil11` |
+| `CommentaireHeureDebut` | `VARCHAR(8)` | `09:15:17` | Info uniquement (plus le mappage horaire) |
+| `CommentaireHeureFin` | `VARCHAR(8)` | `09:48:23` | Info uniquement |
+| `CommentaireHoraires` | `VARCHAR(50)` | `09:15:17 - 09:48:23` | Info uniquement |
+
+Les secondes sont ignorées, comme sur l’écran ERP. Si `StartTime` / `EndTime` est absent, la colonne numérique reste `NULL` (`0` signifierait minuit).
+
+`StartTime` / `EndTime` restent en `DATETIME2` pour le diagnostic FSOP ; SILOG n’a pas besoin de les consommer.
+
+**Action SILOG (Franck — `EDI_JOB` / `SEDI_ETDIFF`)** : mapper `HeureDebut` → `VarNumUtil8`, `MinutesDebut` → `VarNumUtil9`, `HeureFin` → `VarNumUtil10`, `MinutesFin` → `VarNumUtil11`. La vue FSOP est la source ; ne pas recréer ces colonnes côté SILOG.
+
+**Règle FSOP (23/09/2026)** : **1 TempsId = 1 ligne SILOG**. `reconcileSameKeyCyclesForSilog()` est un pass-through (plus de fusion, plus d’UPDATE `ETEMPS` cumulé). Les TempsId 444 / 445 / 446 restent trois lignes distinctes.
+
+**Interdit** : cumuler / basculer les minutes d’un opérateur sur un autre, même s’ils pointent le même LT.
+
+**Ne plus exécuter** l’ancien UPDATE qui cumule 4+18+56 = 78 min sur `NoEnregistrement = 248150` : cela recollerait les 3 cycles. Attendu désormais : **3 lignes ETEMPS** (444 = 4 min, 445 = 18 min, 446 = 56 min).
 
 ### Fréquence d’exécution EDI
 
@@ -163,7 +184,11 @@ FROM [SEDI_APP_INDEPENDANTE].[dbo].[ABTEMPS_OPERATEURS]
 GROUP BY StatutTraitement;
 
 -- V_REMONTE_TEMPS retourne-t-elle des lignes ?
-SELECT TOP 10 * FROM [SEDI_APP_INDEPENDANTE].[dbo].[V_REMONTE_TEMPS];
+SELECT TOP 10
+    TempsId, LancementCode, OperatorCode, DureeExecution,
+    HeureDebut, MinutesDebut, HeureFin, MinutesFin,
+    CommentaireHeureDebut, CommentaireHeureFin, CommentaireHoraires
+FROM [SEDI_APP_INDEPENDANTE].[dbo].[V_REMONTE_TEMPS];
 
 -- Enregistrements 'O' non consommés depuis plus de 24h (SEDI_ETDIFF bloquée ?)
 SELECT * FROM [SEDI_APP_INDEPENDANTE].[dbo].[ABTEMPS_OPERATEURS]

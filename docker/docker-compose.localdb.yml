@@ -1,0 +1,26 @@
+# SQL Server local jetable pour tester sans toucher SERVEURERP.
+#   docker compose -f docker/docker-compose.localdb.yml up -d
+#   cd backend && node scripts/clone-to-local-db.js
+# Voir backend/.env.localdb.example.
+
+name: sedi-localdb
+
+services:
+  sqlserver:
+    image: mcr.microsoft.com/mssql/server:2019-latest
+    container_name: sedi-localdb
+    environment:
+      - ACCEPT_EULA=Y
+      - MSSQL_SA_PASSWORD=${LOCALDB_SA_PASSWORD:-Sedi_Local_Test_2026!}
+      - MSSQL_COLLATION=French_CI_AS
+      - TZ=Europe/Paris
+    ports:
+      - "127.0.0.1:${LOCALDB_PORT:-14330}:1433"
+    volumes:
+      - sedi-localdb-data:/var/opt/mssql
+    restart: "no"
+    mem_limit: 2g
+
+volumes:
+  sedi-localdb-data:
+    name: sedi-localdb-data

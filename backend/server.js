@@ -13,6 +13,8 @@ const lancementRoutes = require('./routes/lancements');
 const operationRoutes = require('./routes/operations');
 const adminRoutes = require('./routes/admin');
 const authRoutes = require('./routes/auth');
+const rhRoutes = require('./routes/rh');
+const { isRhEnabled } = require('./services/adminAuthService');
 const commentRoutes = require('./routes/comments');
 const fsopRoutes = require('./routes/fsop');
 const heartbeatRoutes = require('./routes/heartbeat');
@@ -65,7 +67,18 @@ app.use(cors({
     },
     credentials: true,
     methods: ['GET', 'HEAD', 'PUT', 'PATCH', 'POST', 'DELETE', 'OPTIONS'],
-    allowedHeaders: ['Origin', 'X-Requested-With', 'Content-Type', 'Accept', 'Authorization'],
+    allowedHeaders: [
+        'Origin',
+        'X-Requested-With',
+        'Content-Type',
+        'Accept',
+        'Authorization',
+        'x-device-id',
+        'x-operator-code',
+        'x-operator-session-id',
+        'X-Admin-Token',
+        'x-admin-token'
+    ],
     exposedHeaders: ['Content-Length', 'Content-Disposition', 'X-Foo', 'X-Bar'],
     preflightContinue: false,
     optionsSuccessStatus: 204
@@ -176,6 +189,7 @@ const adminLoginLimiter = rateLimit({
 
 // Routes
 app.use('/api/auth/login', adminLoginLimiter);
+app.use('/api/auth/rh/login', adminLoginLimiter);
 app.use('/api/auth', authRoutes);
 app.use('/api/operators', operatorRoutes);
 app.use('/api/lancements', lancementRoutes);
@@ -184,6 +198,11 @@ app.use('/api/comments', commentRoutes);
 app.use('/api/fsop', fsopRoutes);
 app.use('/api/heartbeat', heartbeatRoutes);
 app.use('/api/admin', adminLimiter, adminRoutes);
+if (isRhEnabled()) {
+    app.use('/api/rh', adminLimiter, rhRoutes);
+} else {
+    app.use('/api/rh', (_req, res) => res.status(404).json({ success: false, error: 'RH_DISABLED' }));
+}
 
 // Route de santé
 app.get('/api/health', (req, res) => {
@@ -399,7 +418,7 @@ function startPeriodicCleanup() {
     }, 60 * 60 * 1000); // Toutes les heures
 }
 
-// Planification quotidienne de la clôture automatique des opérations (par défaut à 19h heure serveur)
+// Planification quotidienne de la clôture automatique des opérations (par défaut à 20h heure serveur)
 function scheduleDailyAutoCloseOperations() {
     const enabled = String(process.env.ENABLE_AUTO_CLOSE_OPS || 'true').toLowerCase() === 'true';
     if (!enabled) {
@@ -407,15 +426,16 @@ function scheduleDailyAutoCloseOperations() {
         return;
     }
 
+    const parsedHour = Number.parseInt(process.env.AUTO_CLOSE_OPS_HOUR || '20', 10);
+    const targetHour = Number.isFinite(parsedHour) && parsedHour >= 0 && parsedHour <= 23 ? parsedHour : 20;
+
     const maintenance = new MaintenanceManager();
 
     const scheduleNextRun = () => {
         const now = new Date();
         const next = new Date(now);
-        // Heure cible: 19h00:00 heure serveur
-        next.setHours(19, 0, 0, 0);
+        next.setHours(targetHour, 0, 0, 0);
         if (next <= now) {
-            // Si on a déjà dépassé 19h aujourd'hui, programmer pour demain
             next.setDate(next.getDate() + 1);
         }
         const delay = next.getTime() - now.getTime();

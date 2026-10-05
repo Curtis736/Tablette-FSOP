@@ -6,6 +6,7 @@
   "scripts": {
     "start": "node server.js",
     "dev": "nodemon server.js",
+    "dev:sandbox": "node -r dotenv/config server.js dotenv_config_path=.env.localdb",
     "test:email": "node test-email-production.js",
     "test": "node tests/native-tests.js",
     "test:complete": "node tests/complete-tests.js",

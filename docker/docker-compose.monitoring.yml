@@ -1,5 +1,4 @@
 services:
-  # Prometheus - Collecte et stockage des métriques
   prometheus:
     image: prom/prometheus:latest
     container_name: sedi-prometheus
@@ -8,6 +7,7 @@ services:
     volumes:
       - prometheus_data:/prometheus
       - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./prometheus/alerts.yml:/etc/prometheus/alerts.yml:ro
     command:
       - '--config.file=/etc/prometheus/prometheus.yml'
       - '--storage.tsdb.path=/prometheus'
@@ -23,12 +23,26 @@ services:
       retries: 3
       start_period: 40s
 
-  # Grafana - Visualisation des métriques
+  alertmanager:
+    image: prom/alertmanager:v0.28.1
+    container_name: sedi-alertmanager
+    volumes:
+      - ./alertmanager/alertmanager.generated.yml:/etc/alertmanager/alertmanager.yml:ro
+    command:
+      - '--config.file=/etc/alertmanager/alertmanager.yml'
+      - '--storage.path=/alertmanager'
+    networks:
+      - sedi-tablette-network
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:9093:9093"
+
   grafana:
     image: grafana/grafana:latest
     container_name: sedi-grafana
     ports:
-      - "127.0.0.1:3002:3000"
+      # Réseau interne (comme Prometheus :9091) — pas accessible sans être sur le LAN
+      - "3002:3000"
     volumes:
       - grafana_data:/var/lib/grafana
       - ./grafana/provisioning:/etc/grafana/provisioning:ro
@@ -42,6 +56,7 @@ services:
       - GF_AUTH_ANONYMOUS_ENABLED=false
       - GF_AUTH_BASIC_ENABLED=true
       - GF_AUTH_DISABLE_LOGIN_FORM=false
+      - GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH=/var/lib/grafana/dashboards/sedi-dashboard.json
     networks:
       - sedi-tablette-network
     restart: unless-stopped
@@ -54,6 +69,46 @@ services:
       retries: 3
       start_period: 40s
 
+  node_exporter:
+    image: prom/node-exporter:v1.8.2
+    container_name: sedi-node-exporter
+    command:
+      - '--path.procfs=/host/proc'
+      - '--path.sysfs=/host/sys'
+      - '--path.rootfs=/rootfs'
+      - '--collector.filesystem.mount-points-exclude=^/(sys|proc|dev|host|etc)($$|/)'
+    volumes:
+      - /proc:/host/proc:ro
+      - /sys:/host/sys:ro
+      - /:/rootfs:ro
+    networks:
+      - sedi-tablette-network
+    restart: unless-stopped
+
+  redis_exporter:
+    image: oliver006/redis_exporter:v1.66.0
+    container_name: sedi-redis-exporter
+    environment:
+      - REDIS_ADDR=redis://sedi-tablette-redis:6379
+      - REDIS_PASSWORD=${REDIS_PASSWORD:-}
+    networks:
+      - sedi-tablette-network
+    restart: unless-stopped
+
+  cadvisor:
+    image: gcr.io/cadvisor/cadvisor:v0.49.1
+    container_name: sedi-cadvisor
+    privileged: true
+    volumes:
+      - /:/rootfs:ro
+      - /var/run:/var/run:ro
+      - /sys:/sys:ro
+      - /var/lib/docker/:/var/lib/docker:ro
+      - /dev/disk/:/dev/disk:ro
+    networks:
+      - sedi-tablette-network
+    restart: unless-stopped
+
 networks:
   sedi-tablette-network:
     external: true
@@ -61,6 +116,5 @@ networks:
 volumes:
   prometheus_data:
     driver: local
-  
   grafana_data:
     driver: local

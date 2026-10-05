@@ -170,3 +170,7 @@ terraform/.terraform/
 *.tfstate
 *.tfstate.*
 ansible/inventories/generated/fsop.yml
+backend/.env.localdb
+
+# Généré par apply-monitoring.sh (contient le webhook Teams)
+docker/prometheus-msteams.generated.yml

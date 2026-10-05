@@ -247,7 +247,7 @@ describe('processLancementEventsWithPauses work segments (SILOG)', () => {
     }
   ];
 
-  it('emits productive segments instead of full cycle + pause rows', () => {
+  it('emits productive segments only (pause = fin de ligne, reprise = début suivante)', () => {
     const items = processLancementEventsWithPauses(baseEvents, { includeWorkSegments: true });
     expect(items.filter((i) => i._isPauseRow)).toHaveLength(0);
     expect(items.filter((i) => i._isWorkSegment)).toHaveLength(2);
@@ -277,5 +277,45 @@ describe('processLancementEventsWithPauses work segments (SILOG)', () => {
     expect(items[0].endTime).toBe('12:00');
     expect(items[0].statusCode).toBe('EN_PAUSE');
     expect(items[0].status).toBe('En pause');
+  });
+});
+
+describe('DurationCalculationService.buildClosedWorkSegments', () => {
+  it('returns one segment without pauses', () => {
+    const events = [
+      { Ident: 'DEBUT', CreatedAt: '2026-09-30T08:00:00', DateCreation: '2026-09-30', NoEnreg: 1 },
+      { Ident: 'FIN', CreatedAt: '2026-09-30T10:00:00', DateCreation: '2026-09-30', NoEnreg: 2 }
+    ];
+    const segs = DurationCalculationService.buildClosedWorkSegments(events);
+    expect(segs).toHaveLength(1);
+    expect(segs[0].endIsFin).toBe(true);
+  });
+
+  it('splits at pause/reprise for SILOG transfer', () => {
+    const events = [
+      { Ident: 'DEBUT', CreatedAt: '2026-09-30T08:14:00', DateCreation: '2026-09-30', NoEnreg: 1 },
+      { Ident: 'PAUSE', CreatedAt: '2026-09-30T10:01:00', DateCreation: '2026-09-30', NoEnreg: 2 },
+      { Ident: 'REPRISE', CreatedAt: '2026-09-30T10:16:00', DateCreation: '2026-09-30', NoEnreg: 3 },
+      { Ident: 'FIN', CreatedAt: '2026-09-30T12:57:00', DateCreation: '2026-09-30', NoEnreg: 4 }
+    ];
+    const segs = DurationCalculationService.buildClosedWorkSegments(events);
+    expect(segs).toHaveLength(2);
+    expect(segs[0].startEvent.Ident).toBe('DEBUT');
+    expect(segs[0].endEvent.Ident).toBe('PAUSE');
+    expect(segs[0].endIsFin).toBe(false);
+    expect(segs[1].startEvent.Ident).toBe('REPRISE');
+    expect(segs[1].endEvent.Ident).toBe('FIN');
+    expect(segs[1].endIsFin).toBe(true);
+  });
+
+  it('does not emit a post-pause segment when FIN arrives during pause', () => {
+    const events = [
+      { Ident: 'DEBUT', CreatedAt: '2026-09-30T08:00:00', DateCreation: '2026-09-30', NoEnreg: 1 },
+      { Ident: 'PAUSE', CreatedAt: '2026-09-30T09:00:00', DateCreation: '2026-09-30', NoEnreg: 2 },
+      { Ident: 'FIN', CreatedAt: '2026-09-30T10:00:00', DateCreation: '2026-09-30', NoEnreg: 3 }
+    ];
+    const segs = DurationCalculationService.buildClosedWorkSegments(events);
+    expect(segs).toHaveLength(1);
+    expect(segs[0].endEvent.Ident).toBe('PAUSE');
   });
 });

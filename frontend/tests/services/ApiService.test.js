@@ -32,10 +32,10 @@ describe('ApiService', () => {
   });
 
   describe('constructor', () => {
-    it('should initialize with local dev URL (default backend port 3001)', () => {
+    it('should initialize with local dev URL (default backend port 3033)', () => {
       window.location.port = '5173';
       service = new ApiService();
-      expect(service.baseUrl).toBe('http://localhost:3001/api');
+      expect(service.baseUrl).toBe('http://localhost:3033/api');
     });
 
     it('should initialize with production URL', () => {
@@ -48,18 +48,18 @@ describe('ApiService', () => {
     it('should handle force local backend', () => {
       window.location.search = '?directBackend';
       service = new ApiService();
-      expect(service.baseUrl).toBe('http://localhost:3001/api');
+      expect(service.baseUrl).toBe('http://localhost:3033/api');
     });
 
-    it('should use port 3033 when sedi_dev_backend_port is set', () => {
+    it('should use port 3001 when sedi_dev_backend_port is set', () => {
       global.localStorage = {
-        getItem: vi.fn((key) => (key === 'sedi_dev_backend_port' ? '3033' : null)),
+        getItem: vi.fn((key) => (key === 'sedi_dev_backend_port' ? '3001' : null)),
         setItem: vi.fn(),
         removeItem: vi.fn()
       };
       window.location.port = '5173';
       service = new ApiService();
-      expect(service.baseUrl).toBe('http://localhost:3033/api');
+      expect(service.baseUrl).toBe('http://localhost:3001/api');
     });
   });
 

@@ -22,7 +22,14 @@ function installMemoryLocalStorage() {
 describe('OfflineApiCache', () => {
   beforeEach(() => {
     installMemoryLocalStorage();
+    localStorage.setItem('sedi_force_offline_cache', '1');
     clearOfflineApiCache();
+  });
+
+  it('is disabled on local dev hosts unless forced', () => {
+    localStorage.removeItem('sedi_force_offline_cache');
+    writeOfflineCache('GET:/a', { a: 1 });
+    expect(readOfflineCache('GET:/a')).toBeNull();
   });
 
   it('builds stable cache keys', () => {

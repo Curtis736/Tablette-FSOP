@@ -1,48 +1,196 @@
-﻿{
-  "annotations": {"list": []},
-  "description": "Dashboard principal pour surveiller l application SEDI Tablette",
+{
+  "annotations": { "list": [] },
+  "description": "Supervision FSOP prod (backend, VM, Redis, conteneurs)",
   "editable": true,
-  "graphTooltip": 0,
+  "graphTooltip": 1,
   "id": null,
   "links": [],
   "panels": [
     {
-      "datasource": {"type": "prometheus", "uid": "prometheus"},
-      "fieldConfig": {
-        "defaults": {
-          "color": {"mode": "palette-classic"},
-          "custom": {"hide": {"legend": false}},
-          "mappings": [],
-          "unit": "reqps"
-        },
-        "overrides": []
-      },
-      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 0},
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "reqps" }, "overrides": [] },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 0 },
       "id": 1,
-      "options": {
-        "legend": {"displayMode": "table", "placement": "bottom"},
-        "tooltip": {"mode": "multi"}
-      },
+      "options": { "legend": { "displayMode": "table", "placement": "bottom" } },
       "targets": [
         {
-          "datasource": {"type": "prometheus", "uid": "prometheus"},
-          "expr": "rate(sedi_http_requests_total[5m])",
+          "expr": "sum(rate(sedi_http_requests_total{job=\"sedi-tablette-backend\"}[5m])) by (method, route)",
           "legendFormat": "{{method}} {{route}}",
           "refId": "A"
         }
       ],
-      "title": "Taux de requÃªtes HTTP (par seconde)",
+      "title": "Backend prod — requêtes / s",
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "reqps", "color": { "mode": "fixed", "fixedColor": "red" } }, "overrides": [] },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 0 },
+      "id": 2,
+      "targets": [
+        {
+          "expr": "sum(rate(sedi_http_errors_total{job=\"sedi-tablette-backend\"}[5m])) by (route, status)",
+          "legendFormat": "{{route}} {{status}}",
+          "refId": "A"
+        }
+      ],
+      "title": "Backend prod — erreurs HTTP / s",
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "s" }, "overrides": [] },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 8 },
+      "id": 3,
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.95, sum(rate(sedi_http_request_duration_seconds_bucket{job=\"sedi-tablette-backend\"}[5m])) by (le, route))",
+          "legendFormat": "p95 {{route}}",
+          "refId": "A"
+        }
+      ],
+      "title": "Backend prod — latence p95",
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "bytes" }, "overrides": [] },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 8 },
+      "id": 4,
+      "targets": [
+        {
+          "expr": "sedi_app_process_resident_memory_bytes{job=\"sedi-tablette-backend\"}",
+          "legendFormat": "RSS",
+          "refId": "A"
+        },
+        {
+          "expr": "sedi_app_nodejs_heap_size_used_bytes{job=\"sedi-tablette-backend\"}",
+          "legendFormat": "heap used",
+          "refId": "B"
+        }
+      ],
+      "title": "Backend prod — mémoire Node",
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "percent", "min": 0, "max": 100 }, "overrides": [] },
+      "gridPos": { "h": 8, "w": 8, "x": 0, "y": 16 },
+      "id": 5,
+      "targets": [
+        {
+          "expr": "100 - (avg(rate(node_cpu_seconds_total{job=\"node\",mode=\"idle\"}[5m])) * 100)",
+          "legendFormat": "CPU VM",
+          "refId": "A"
+        }
+      ],
+      "title": "VM — CPU %",
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "percentunit", "min": 0, "max": 1 }, "overrides": [] },
+      "gridPos": { "h": 8, "w": 8, "x": 8, "y": 16 },
+      "id": 6,
+      "targets": [
+        {
+          "expr": "1 - (node_memory_MemAvailable_bytes{job=\"node\"} / node_memory_MemTotal_bytes{job=\"node\"})",
+          "legendFormat": "RAM utilisée",
+          "refId": "A"
+        }
+      ],
+      "title": "VM — RAM utilisée",
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "percentunit", "min": 0, "max": 1 }, "overrides": [] },
+      "gridPos": { "h": 8, "w": 8, "x": 16, "y": 16 },
+      "id": 7,
+      "targets": [
+        {
+          "expr": "1 - (node_filesystem_avail_bytes{job=\"node\",mountpoint=\"/\",fstype!=\"rootfs\"} / node_filesystem_size_bytes{job=\"node\",mountpoint=\"/\",fstype!=\"rootfs\"})",
+          "legendFormat": "disque /",
+          "refId": "A"
+        }
+      ],
+      "title": "VM — disque /",
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 24 },
+      "id": 8,
+      "targets": [
+        {
+          "expr": "redis_connected_clients{job=\"redis\"}",
+          "legendFormat": "clients",
+          "refId": "A"
+        },
+        {
+          "expr": "redis_db_keys{job=\"redis\"}",
+          "legendFormat": "keys db{{db}}",
+          "refId": "B"
+        }
+      ],
+      "title": "Redis prod — clients / clés",
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "bytes" }, "overrides": [] },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 24 },
+      "id": 9,
+      "targets": [
+        {
+          "expr": "redis_memory_used_bytes{job=\"redis\"}",
+          "legendFormat": "memory",
+          "refId": "A"
+        }
+      ],
+      "title": "Redis prod — mémoire",
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "percentunit" }, "overrides": [] },
+      "gridPos": { "h": 10, "w": 24, "x": 0, "y": 32 },
+      "id": 10,
+      "targets": [
+        {
+          "expr": "sum by (container_label_com_docker_compose_service) (rate(container_cpu_usage_seconds_total{job=\"cadvisor\", container_label_com_docker_compose_service=~\"backend|frontend|redis|grafana|prometheus|node_exporter|redis_exporter|cadvisor|alertmanager\"}[5m]))",
+          "legendFormat": "{{container_label_com_docker_compose_service}}",
+          "refId": "A"
+        }
+      ],
+      "title": "Conteneurs FSOP — CPU (cadvisor)",
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "bytes" }, "overrides": [] },
+      "gridPos": { "h": 10, "w": 24, "x": 0, "y": 42 },
+      "id": 11,
+      "targets": [
+        {
+          "expr": "sum by (container_label_com_docker_compose_service) (container_memory_working_set_bytes{job=\"cadvisor\", container_label_com_docker_compose_service=~\"backend|frontend|redis|grafana|prometheus|node_exporter|redis_exporter|cadvisor|alertmanager\"})",
+          "legendFormat": "{{container_label_com_docker_compose_service}}",
+          "refId": "A"
+        }
+      ],
+      "title": "Conteneurs FSOP — RAM (cadvisor)",
       "type": "timeseries"
     }
   ],
   "schemaVersion": 38,
   "style": "dark",
-  "tags": ["sedi", "tablette", "backend"],
-  "templating": {"list": []},
-  "time": {"from": "now-1h", "to": "now"},
+  "tags": ["sedi", "tablette", "production"],
+  "templating": { "list": [] },
+  "time": { "from": "now-6h", "to": "now" },
   "timepicker": {},
-  "timezone": "",
-  "title": "SEDI Tablette - MÃ©triques Application",
-  "uid": "sedi-tablette",
-  "version": 0
+  "timezone": "browser",
+  "title": "SEDI Tablette — Prod",
+  "uid": "sedi-tablette-prod",
+  "version": 1
 }

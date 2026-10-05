@@ -1,0 +1,4 @@
+# Généré par scripts/apply-monitoring.sh depuis TEAMS_WEBHOOK_URL (ne pas committer le .generated.yml)
+connectors:
+  alertmanager:
+    webhook_url: "https://outlook.office.com/webhook/..."

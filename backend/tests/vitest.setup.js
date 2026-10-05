@@ -44,7 +44,12 @@ vi.mock('../server', () => ({
 vi.mock('../config/database', () => ({
   executeQuery: vi.fn(() => Promise.resolve([])),
   executeNonQuery: vi.fn(() => Promise.resolve({ rowsAffected: 1 })),
-  closeConnection: vi.fn(() => Promise.resolve())
+  closeConnection: vi.fn(() => Promise.resolve()),
+  appDb: '[SEDI_APP_DEV]',
+  appDatabaseName: 'SEDI_APP_DEV',
+  SHARED_APP_DATABASE: 'SEDI_APP_INDEPENDANTE',
+  isSharedAppDatabase: () => false,
+  assertRhWritesAllowed: () => {}
 }));
 
 // Mock des services email

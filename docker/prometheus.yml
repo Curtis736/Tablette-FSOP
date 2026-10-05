@@ -3,21 +3,53 @@ global:
   evaluation_interval: 15s
   external_labels:
     monitor: 'sedi-tablette-monitor'
+    env: 'production'
 
-# Configuration des endpoints à scraper
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets: ['sedi-alertmanager:9093']
+
+rule_files:
+  - /etc/prometheus/alerts.yml
+
+# Prod uniquement : pas de scrape sedi-tablette-test-*
 scrape_configs:
-  # Métriques de l'application SEDI Tablette
   - job_name: 'sedi-tablette-backend'
     static_configs:
       - targets: ['sedi-tablette-backend:3001']
         labels:
           service: 'sedi-tablette'
-          instance: 'backend'
+          instance: 'backend-prod'
+          env: 'production'
     metrics_path: '/metrics'
     scrape_interval: 15s
     scrape_timeout: 10s
 
-  # Métriques Prometheus lui-même
+  - job_name: 'node'
+    static_configs:
+      - targets: ['sedi-node-exporter:9100']
+        labels:
+          instance: 'vm-fsop'
+          env: 'production'
+
+  - job_name: 'redis'
+    static_configs:
+      - targets: ['sedi-redis-exporter:9121']
+        labels:
+          service: 'redis'
+          instance: 'sedi-tablette-redis'
+          env: 'production'
+
+  - job_name: 'cadvisor'
+    static_configs:
+      - targets: ['sedi-cadvisor:8080']
+        labels:
+          instance: 'vm-docker'
+          env: 'production'
+    metrics_path: '/metrics'
+    scrape_interval: 30s
+
   - job_name: 'prometheus'
     static_configs:
       - targets: ['localhost:9090']

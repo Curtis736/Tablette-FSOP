@@ -156,6 +156,9 @@ describe('OperateurInterface', () => {
         if (operInterface && operInterface.timerInterval) {
             clearInterval(operInterface.timerInterval);
         }
+        if (operInterface && operInterface.pauseWatchInterval) {
+            clearInterval(operInterface.pauseWatchInterval);
+        }
     });
 
     describe('constructor', () => {
@@ -458,10 +461,11 @@ describe('OperateurInterface', () => {
 
         it('devrait mettre en pause une opération', async () => {
             mockApiService.pauseOperation.mockResolvedValue({});
+            operInterface.loadOperatorCounters = vi.fn();
             
-            await operInterface.handlePause();
+            await operInterface.handlePause('P10', 'Pause 10 min');
             
-            expect(mockApiService.pauseOperation).toHaveBeenCalledWith('OP001', 'LT1234567', {});
+            expect(mockApiService.pauseOperation).toHaveBeenCalledWith('OP001', 'LT1234567', { pauseTypeCode: 'P10' });
             expect(operInterface.pauseTimer).toHaveBeenCalled();
             expect(operInterface.isPaused).toBe(true);
             expect(mockNotificationManager.info).toHaveBeenCalled();
@@ -530,9 +534,12 @@ describe('OperateurInterface', () => {
         });
 
         it('resumePausedOperation devrait garder le bouton Pause grisé et proposer Reprendre', () => {
+            const pauseStartedAt = new Date(Date.now() - 90 * 1000).toISOString();
             operInterface.resumePausedOperation({
                 lancementCode: 'LT1234567',
-                startedAt: new Date().toISOString()
+                startedAt: new Date().toISOString(),
+                pauseTypeCode: 'P10',
+                pauseStartedAt
             });
 
             expect(operInterface.isRunning).toBe(false);
@@ -541,7 +548,13 @@ describe('OperateurInterface', () => {
             expect(mockElements.startBtn.disabled).toBe(false);
             expect(mockElements.startBtn.innerHTML).toContain('Reprendre');
             expect(mockElements.stopBtn.disabled).toBe(false);
-            expect(mockElements.statusDisplay.textContent).toBe('En pause');
+            expect(mockElements.statusDisplay.textContent).toMatch(/En pause/);
+            expect(operInterface.currentPauseTypeCode).toBe('P10');
+            expect(operInterface.pauseWatchExpectedSec).toBe(600);
+            expect(operInterface.pauseWatchStartedAt).toBeInstanceOf(Date);
+            const elapsed = Date.now() - operInterface.pauseWatchStartedAt.getTime();
+            expect(elapsed).toBeGreaterThan(60 * 1000);
+            expect(elapsed).toBeLessThan(3 * 60 * 1000);
         });
     });
 
