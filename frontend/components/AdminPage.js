@@ -106,6 +106,14 @@ function compareAdminTimelineRows(a, b) {
     const tsA = getAdminRowSortTimestamp(a);
     const tsB = getAdminRowSortTimestamp(b);
     if (tsA !== tsB) return tsA - tsB;
+    // Même minute : créneau productif avant la pause
+    const rank = (x) => {
+        if (x?._isPauseRow || x?.type === 'pause') return 1;
+        if (x?._isWorkSegment) return 0;
+        return 2;
+    };
+    const r = rank(a) - rank(b);
+    if (r !== 0) return r;
     const idA = Number(a?.TempsId ?? a?.EventId ?? a?.id ?? 0) || 0;
     const idB = Number(b?.TempsId ?? b?.EventId ?? b?.id ?? 0) || 0;
     return idA - idB;
@@ -275,23 +283,66 @@ class AdminPage {
     }
 
     /**
-     * Multi-cycles : préférer la ligne ABTEMPS (TempsId) au segment historique
-     * du même créneau. Ne plus masquer toute la journée dès qu'un segment existe.
+     * Si des créneaux productifs (segments) existent pour opérateur+LT+jour,
+     * masquer la ligne ABTEMPS cumulée (DEBUT→FIN) — sinon on voit un seul bloc.
+     * La pause n'est pas une ligne : fin d'une ligne = pause, début suivante = reprise.
      */
     _preferWorkSegmentsOverConsolidated(ops) {
         if (!ops?.length) return ops;
-        const consolidatedSlots = new Set();
-        for (const op of ops) {
-            if (op?.TempsId == null || String(op.TempsId).trim() === '') continue;
-            if (op?._isPauseRow) continue;
-            consolidatedSlots.add(this._getAdminStartSlotKey(op));
+        const segments = ops.filter((op) => op?._isWorkSegment);
+        if (segments.length === 0) {
+            const consolidatedSlots = new Set();
+            for (const op of ops) {
+                if (op?.TempsId == null || String(op.TempsId).trim() === '') continue;
+                if (op?._isPauseRow) continue;
+                consolidatedSlots.add(this._getAdminStartSlotKey(op));
+            }
+            if (consolidatedSlots.size === 0) return ops;
+            return ops.filter((op) => {
+                if (op?._isPauseRow) return true;
+                if (op?.TempsId != null && String(op.TempsId).trim() !== '') return true;
+                if (!op?._isUnconsolidated) return true;
+                return !consolidatedSlots.has(this._getAdminStartSlotKey(op));
+            });
         }
-        if (consolidatedSlots.size === 0) return ops;
+
+        const dayKey = (op) => {
+            const oc = String(op?.OperatorCode || op?.operatorCode || op?.operatorId || '').trim();
+            const lc = String(op?.LancementCode || op?.lancementCode || '').trim().toUpperCase();
+            const ymd = this._parseOpDateCreationLocalYmd(op?.DateCreation) || '';
+            return `${oc}|${lc}|${ymd}`;
+        };
+
+        const segmentDays = new Set(segments.map(dayKey));
+
+        // Attacher les TempsId consolidés aux segments (même créneau) pour le transfert / sélection.
+        const consolidatedBySlot = new Map();
+        for (const op of ops) {
+            if (op?._isWorkSegment || op?._isPauseRow) continue;
+            const tid = op?.TempsId ?? op?.tempsId;
+            if (tid == null || String(tid).trim() === '') continue;
+            if (!segmentDays.has(dayKey(op))) continue;
+            const slot = this._getAdminStartSlotKey(op);
+            if (!slot || consolidatedBySlot.has(slot)) continue;
+            consolidatedBySlot.set(slot, op);
+        }
+        for (const seg of segments) {
+            const match = consolidatedBySlot.get(this._getAdminStartSlotKey(seg));
+            if (!match) continue;
+            seg.TempsId = match.TempsId ?? match.tempsId;
+            if (match.StatutTraitement != null) seg.StatutTraitement = match.StatutTraitement;
+            if (match.ProductiveDuration != null) seg.ProductiveDuration = match.ProductiveDuration;
+            seg._isUnconsolidated = false;
+        }
+
         return ops.filter((op) => {
             if (op?._isPauseRow) return true;
-            if (op?.TempsId != null && String(op.TempsId).trim() !== '') return true;
-            if (!op?._isWorkSegment && !op?._isUnconsolidated) return true;
-            return !consolidatedSlots.has(this._getAdminStartSlotKey(op));
+            if (op?._isWorkSegment) return true;
+            const tid = op?.TempsId ?? op?.tempsId;
+            if (tid != null && String(tid).trim() !== '' && segmentDays.has(dayKey(op))) {
+                return false;
+            }
+            return true;
         });
     }
 
@@ -1956,10 +2007,6 @@ class AdminPage {
 
             if (isPauseRow) {
                 row.classList.add('pause-row');
-                const pauseStatusCode = String(operation.StatusCode || operation.statusCode || '').toUpperCase();
-                if (pauseStatusCode === 'PAUSE_TERMINEE') {
-                    row.classList.add('pause-terminee');
-                }
             }
             if (isTransmitted) {
                 row.classList.add('row-transmitted');
@@ -2210,7 +2257,7 @@ class AdminPage {
     /**
      * Résout les opérations transférables en s'appuyant sur ABTEMPS (TempsId),
      * indépendamment de l'affichage SILOG qui masque parfois les lignes consolidées.
-     * Une ligne UI / un cycle = un TempsId : plusieurs cycles le même LT restent tous éligibles.
+     * Un créneau productif = un TempsId (pause = fin de ligne) ; multi-cycles le même LT OK.
      */
     async _resolveTransferEligibleOperations() {
         const filters = this._getAdminMonitoringFilters();
@@ -2245,9 +2292,19 @@ class AdminPage {
             // Consolider si aucun TempsId pour ce LT, ou si l'affichage a une ligne terminée sans TempsId
             // (nouveau cycle après un cycle déjà consolidé le même jour).
             const hasAbtemps = (tempsIdsByLancement.get(key)?.size || 0) > 0;
+            const abtempsCount = tempsIdsByLancement.get(key)?.size || 0;
             // Segments productifs affichés (_isWorkSegment) remplacent parfois la ligne ABTEMPS à l'écran
             // mais le TempsId est déjà dans monitoring — ne pas re-consolider pour ça.
             // En revanche une vraie ligne terminée sans TempsId (nouveau cycle) doit déclencher la consolidation.
+            // Si plus de créneaux affichés que de TempsId (ancien ABTEMPS cumulé DEBUT→FIN), forcer
+            // la reconsolidation en 1 TempsId / créneau pour le transfert SILOG.
+            const displaySegmentCount = (this.operations || []).filter((row) =>
+                row._isWorkSegment
+                && this._getLancementKey(row) === key
+                && this.isOperationTerminated(row)
+                && String(row.StatutTraitement ?? '').toUpperCase().trim() !== 'T'
+            ).length;
+            const needsSegmentSplit = displaySegmentCount > 1 && displaySegmentCount > abtempsCount;
             const hasUnconsolidatedTerminated = (this.operations || []).some((row) =>
                 !row._isPauseRow
                 && !row._isWorkSegment
@@ -2256,7 +2313,7 @@ class AdminPage {
                 && (row.TempsId == null || String(row.TempsId).trim() === '')
                 && String(row.StatutTraitement ?? '').toUpperCase().trim() !== 'T'
             );
-            if (hasAbtemps && !hasUnconsolidatedTerminated) continue;
+            if (hasAbtemps && !hasUnconsolidatedTerminated && !needsSegmentSplit) continue;
             toConsolidate.push({ OperatorCode: operatorCode, LancementCode: lancementCode });
         }
 

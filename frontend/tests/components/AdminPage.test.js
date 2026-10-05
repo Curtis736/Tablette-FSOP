@@ -420,6 +420,59 @@ describe('AdminPage', () => {
       expect(out).toHaveLength(1);
       expect(out[0].TempsId).toBe(10);
     });
+
+    it('masque ABTEMPS quand des segments productifs couvrent le même cycle (pas de chevauchement)', () => {
+      const ops = [
+        {
+          TempsId: 450,
+          OperatorCode: '865',
+          LancementCode: 'LT2600636',
+          DateCreation: '2026-09-30',
+          StartTime: '2026-09-30T08:14:11',
+          EndTime: '2026-09-30T14:52:51'
+        },
+        {
+          OperatorCode: '865',
+          LancementCode: 'LT2600636',
+          DateCreation: '2026-09-30',
+          StartTime: '08:14',
+          EndTime: '10:01',
+          _isWorkSegment: true,
+          _isUnconsolidated: true
+        },
+        {
+          OperatorCode: '865',
+          LancementCode: 'LT2600636',
+          DateCreation: '2026-09-30',
+          StartTime: '10:16',
+          EndTime: '12:57',
+          _isWorkSegment: true,
+          _isUnconsolidated: true
+        },
+        {
+          OperatorCode: '865',
+          LancementCode: 'LT2600636',
+          DateCreation: '2026-09-30',
+          StartTime: '13:49',
+          EndTime: '14:52',
+          _isWorkSegment: true,
+          _isUnconsolidated: true
+        },
+        {
+          TempsId: 451,
+          OperatorCode: '865',
+          LancementCode: 'LT2600632',
+          DateCreation: '2026-09-30',
+          StartTime: '2026-09-30T14:53:17',
+          EndTime: '2026-09-30T15:38:06'
+        }
+      ];
+      const out = adminPage._preferWorkSegmentsOverConsolidated(ops);
+      // Ligne ABTEMPS cumulée masquée ; TempsId éventuellement reporté sur le 1er segment
+      expect(out.find((o) => o.TempsId === 450 && !o._isWorkSegment)).toBeUndefined();
+      expect(out.filter((o) => o._isWorkSegment)).toHaveLength(3);
+      expect(out.find((o) => o.TempsId === 451)).toBeTruthy();
+    });
   });
 
   describe('résolution transfert (segments SILOG)', () => {
@@ -462,11 +515,60 @@ describe('AdminPage', () => {
           StatutTraitement: null
         }]
       });
+      mockApiService.consolidateMonitoringBatch.mockResolvedValue({
+        success: true,
+        results: { success: [], skipped: [], errors: [] }
+      });
 
       const result = await adminPage._resolveTransferEligibleOperations();
-      expect(result.eligible).toHaveLength(1);
-      expect(result.eligible[0].TempsId).toBe(501);
-      expect(mockApiService.consolidateMonitoringBatch).not.toHaveBeenCalled();
+      // 2 segments affichés / 1 TempsId cumulé → force reconsolidation segmentaire
+      expect(mockApiService.consolidateMonitoringBatch).toHaveBeenCalled();
+      expect(result.eligible.map((o) => o.TempsId)).toContain(501);
+    });
+
+    it('attache les TempsId segmentaires aux lignes affichées', () => {
+      const out = adminPage._preferWorkSegmentsOverConsolidated([
+        {
+          TempsId: 501,
+          OperatorCode: '865',
+          LancementCode: 'LT2600636',
+          DateCreation: '2026-09-30',
+          StartTime: '2026-09-30T08:14:00',
+          EndTime: '2026-09-30T10:01:00',
+          StatutTraitement: null
+        },
+        {
+          TempsId: 502,
+          OperatorCode: '865',
+          LancementCode: 'LT2600636',
+          DateCreation: '2026-09-30',
+          StartTime: '2026-09-30T10:16:00',
+          EndTime: '2026-09-30T12:57:00',
+          StatutTraitement: null
+        },
+        {
+          OperatorCode: '865',
+          LancementCode: 'LT2600636',
+          DateCreation: '2026-09-30',
+          StartTime: '08:14',
+          EndTime: '10:01',
+          _isWorkSegment: true,
+          _isUnconsolidated: true
+        },
+        {
+          OperatorCode: '865',
+          LancementCode: 'LT2600636',
+          DateCreation: '2026-09-30',
+          StartTime: '10:16',
+          EndTime: '12:57',
+          _isWorkSegment: true,
+          _isUnconsolidated: true
+        }
+      ]);
+      const segs = out.filter((o) => o._isWorkSegment);
+      expect(segs).toHaveLength(2);
+      expect(segs.map((s) => s.TempsId).sort()).toEqual([501, 502]);
+      expect(out.find((o) => !o._isWorkSegment && o.TempsId)).toBeUndefined();
     });
 
     it('conserve tous les TempsId multi-cycles du même LT (pas un seul par lancement)', async () => {

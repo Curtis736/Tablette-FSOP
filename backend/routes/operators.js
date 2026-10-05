@@ -13,6 +13,91 @@ const AuditService = require('../services/AuditService');
 const { generateRequestId } = require('../middleware/audit');
 const OperationStopService = require('../services/OperationStopService');
 const LancementTempsRestantService = require('../services/LancementTempsRestantService');
+const PauseTypeService = require('../services/PauseTypeService');
+const { PAUSE_TYPES, normalizePauseTypeCode } = require('../constants/pauseTypes');
+
+let _historiqueHasPauseTypeColumn = null;
+async function historiqueHasPauseTypeColumn() {
+    if (_historiqueHasPauseTypeColumn !== null) return _historiqueHasPauseTypeColumn;
+    try {
+        const rows = await executeQuery(
+            `SELECT COL_LENGTH('SEDI_APP_INDEPENDANTE.dbo.ABHISTORIQUE_OPERATEURS', 'PauseTypeCode') AS len`
+        );
+        _historiqueHasPauseTypeColumn = rows?.[0]?.len != null;
+    } catch (_) {
+        _historiqueHasPauseTypeColumn = false;
+    }
+    return _historiqueHasPauseTypeColumn;
+}
+
+// GET /api/operators/pause-types — catalogue des boutons de pause
+router.get('/pause-types', (_req, res) => {
+    res.json({ success: true, data: PAUSE_TYPES });
+});
+
+// GET /api/operators/:operatorCode/counters — compteurs semaine (jour par jour)
+router.get('/:operatorCode/counters',
+    dataIsolation.logAccessAttempt,
+    dataIsolation.validateDataAccess,
+    dataIsolation.filterDataByOperator,
+    authenticateOperator,
+    async (req, res) => {
+    try {
+        const { operatorCode } = req.params;
+        const weekStart = req.query.weekStart
+            ? String(req.query.weekStart).slice(0, 10)
+            : PauseTypeService.getMondayOfWeek(new Date());
+        const weekEnd = PauseTypeService.addDays(weekStart, 6);
+
+        const eventsQuery = `
+            SELECT
+                h.NoEnreg,
+                h.Ident,
+                h.CodeLanctImprod,
+                COALESCE(h.Phase, 'PRODUCTION') as Phase,
+                h.OperatorCode,
+                h.CodeRubrique,
+                h.Statut,
+                CONVERT(VARCHAR(8), h.HeureDebut, 108) AS HeureDebut,
+                CONVERT(VARCHAR(8), h.HeureFin, 108) AS HeureFin,
+                h.DateCreation,
+                h.CreatedAt,
+                h.PauseTypeCode
+            FROM [SEDI_APP_INDEPENDANTE].[dbo].[ABHISTORIQUE_OPERATEURS] AS h
+            WHERE h.OperatorCode = @operatorCode
+              AND CAST(h.DateCreation AS DATE) >= CAST(@weekStart AS DATE)
+              AND CAST(h.DateCreation AS DATE) <= CAST(@weekEnd AS DATE)
+            ORDER BY h.DateCreation ASC, h.NoEnreg ASC
+        `;
+        await PauseTypeService.ensureHistoriquePauseTypeColumn();
+        const events = await executeQuery(eventsQuery, { operatorCode, weekStart, weekEnd });
+        const pauseTypes = await PauseTypeService.getPauseTypesForOperator(operatorCode, weekStart, weekEnd);
+        const days = PauseTypeService.buildWeekCounters(events, pauseTypes, { weekStart, weekEnd });
+
+        const todayStr = PauseTypeService.todayKeyParis();
+        const todayRow = days.find((day) => day.date === todayStr) || null;
+
+        res.json({
+            success: true,
+            data: {
+                weekStart,
+                weekEnd,
+                today: todayRow,
+                days,
+                pauseTypes: PAUSE_TYPES
+            }
+        });
+    } catch (error) {
+        console.error('Erreur compteurs opérateur:', error);
+        if (isSqlTimeoutError(error)) {
+            return sendDbTimeout(res, 'operators.counters');
+        }
+        res.status(500).json({
+            success: false,
+            error: 'Erreur serveur lors du calcul des compteurs'
+        });
+    }
+});
 
 // ⚡ OPTIMISATION : Cache pour les validations de lancement (évite les requêtes répétées)
 const lancementCache = new Map();
@@ -960,9 +1045,15 @@ router.post('/start', validateOperatorSession, logSecurityAction, async (req, re
         const lastDate = String(last?.DateCreation || '').slice(0, 10);
         const lastHeure = String(last?.HeureDebut || '').slice(0, 8);
 
-        // Cas "fin de journée": si l'opérateur a laissé le lancement en PAUSE la veille,
-        // on clôture automatiquement la veille (FIN à l'heure de pause) puis on autorise un nouveau DEBUT aujourd'hui.
-        if ((lastIdent === 'PAUSE' || lastStatut === 'EN_PAUSE') && lastDate && lastDate !== String(currentDate)) {
+        // Cas "fin de journée": lancement laissé ouvert la veille (PAUSE / DEBUT / REPRISE)
+        // → clôturer automatiquement, puis autoriser un nouveau DEBUT aujourd'hui.
+        const lastLooksActive =
+            !!lastIdent &&
+            lastIdent !== 'FIN' &&
+            (lastStatut === 'EN_COURS' || lastStatut === 'EN_PAUSE' ||
+                lastIdent === 'DEBUT' || lastIdent === 'PAUSE' || lastIdent === 'REPRISE');
+        let closedOvernight = false;
+        if (lastLooksActive && lastDate && lastDate !== String(currentDate)) {
             try {
                 await executeNonQuery(
                     `
@@ -994,12 +1085,32 @@ router.post('/start', validateOperatorSession, logSecurityAction, async (req, re
                         requestId
                     }
                 );
-                console.log(`✅ Auto-FIN (veille) pour ${operatorId}/${lancementCode} à ${lastHeure || '23:59:00'} (${lastDate})`);
+                closedOvernight = true;
+                console.log(`✅ Auto-FIN (veille) pour ${operatorId}/${lancementCode} à ${lastHeure || '23:59:00'} (${lastDate}, était ${lastIdent})`);
             } catch (e) {
                 console.warn('⚠️ Auto-FIN (veille) non bloquant:', e?.message || e);
             }
         }
-        if (lastIdent && lastIdent !== 'FIN' && (lastStatut === 'EN_COURS' || lastStatut === 'EN_PAUSE' || lastIdent === 'DEBUT' || lastIdent === 'PAUSE' || lastIdent === 'REPRISE')) {
+
+        // Même jour / même étape déjà active → idempotent (évite doublon DEBUT + UI désynchro)
+        if (lastLooksActive && !closedOvernight) {
+            const sameDay = !lastDate || lastDate === String(currentDate);
+            if (sameDay && (lastIdent === 'DEBUT' || lastIdent === 'REPRISE' || lastStatut === 'EN_COURS')) {
+                console.log(`ℹ️ Start idempotent: ${operatorId}/${lancementCode} déjà actif (${lastIdent})`);
+                return res.json({
+                    success: true,
+                    message: 'Lancement déjà en cours',
+                    alreadyActive: true,
+                    data: {
+                        operatorId,
+                        lancementCode,
+                        action: lastIdent || 'DEBUT',
+                        sessionId: activeSession ? activeSession.SessionId : null,
+                        requestId,
+                        timestamp: new Date().toISOString()
+                    }
+                });
+            }
             return res.status(409).json({
                 success: false,
                 error: 'OPERATION_ALREADY_ACTIVE',
@@ -1103,7 +1214,16 @@ router.post('/start', validateOperatorSession, logSecurityAction, async (req, re
 // POST /api/operators/pause - Mettre en pause un lancement
 router.post('/pause', validateOperatorSession, logSecurityAction, async (req, res) => {
     try {
-        const { operatorId, lancementCode, codeOperation } = req.body;
+        const { operatorId, lancementCode, codeOperation, pauseTypeCode } = req.body;
+        const normalizedPauseType = normalizePauseTypeCode(pauseTypeCode);
+        if (!normalizedPauseType) {
+            return res.status(400).json({
+                success: false,
+                error: 'PAUSE_TYPE_REQUIRED',
+                message: 'Choisissez un type de pause.',
+                pauseTypes: PAUSE_TYPES
+            });
+        }
 
         // Résoudre l'étape (Phase/CodeRubrique) pour éviter d'écrire sur PRODUCTION par défaut
         let phase = 'PRODUCTION';
@@ -1173,15 +1293,16 @@ router.post('/pause', validateOperatorSession, logSecurityAction, async (req, re
         // Obtenir l'heure française actuelle
         const { time: currentTime, date: currentDate } = TimeUtils.getCurrentDateTime();
         
-        TimeUtils.log(`⏸️ Pause lancement ${lancementCode} par opérateur ${operatorId} à ${currentTime}`);
+        TimeUtils.log(`⏸️ Pause ${normalizedPauseType} lancement ${lancementCode} par opérateur ${operatorId} à ${currentTime}`);
 
         // phase/codeRubrique déjà résolus plus haut
-        
-        // Enregistrer l'événement PAUSE dans ABHISTORIQUE_OPERATEURS avec corrélation session
+        await PauseTypeService.ensureHistoriquePauseTypeColumn();
+
+        // Enregistrer l'événement PAUSE + type (atomique sur la même ligne)
         await executeNonQuery(
             `
             INSERT INTO [SEDI_APP_INDEPENDANTE].[dbo].[ABHISTORIQUE_OPERATEURS]
-            (OperatorCode, CodeLanctImprod, CodeRubrique, Ident, Phase, Statut, HeureDebut, HeureFin, DateCreation, SessionId, RequestId, CreatedAt)
+            (OperatorCode, CodeLanctImprod, CodeRubrique, Ident, Phase, Statut, HeureDebut, HeureFin, DateCreation, SessionId, RequestId, CreatedAt, PauseTypeCode)
             VALUES (
                 @operatorId,
                 @lancementCode,
@@ -1194,7 +1315,8 @@ router.post('/pause', validateOperatorSession, logSecurityAction, async (req, re
                 CAST(@currentDate AS DATE),
                 @sessionId,
                 @requestId,
-                GETDATE()
+                GETDATE(),
+                @pauseTypeCode
             )
             `,
             {
@@ -1205,11 +1327,27 @@ router.post('/pause', validateOperatorSession, logSecurityAction, async (req, re
                 currentTime,
                 currentDate,
                 sessionId: activeSession ? activeSession.SessionId : null,
-                requestId
+                requestId,
+                pauseTypeCode: normalizedPauseType
             }
         );
+
+        let pauseTypeMeta = { code: normalizedPauseType, label: PauseTypeService.getPauseTypeLabel(normalizedPauseType) };
+        try {
+            pauseTypeMeta = await PauseTypeService.savePauseType({
+                requestId,
+                operatorCode: operatorId,
+                lancementCode,
+                pauseTypeCode: normalizedPauseType,
+                dateCreation: currentDate,
+                heureDebut: currentTime
+            });
+        } catch (e) {
+            // Journal secondaire — le type est déjà sur ABHISTORIQUE_OPERATEURS
+            console.warn('⚠️ Journal AB_PAUSE_TYPE_LOG échoué (non bloquant):', e.message);
+        }
         
-        console.log(` Lancement ${lancementCode} mis en pause par opérateur ${operatorId}`);
+        console.log(` Lancement ${lancementCode} mis en pause (${normalizedPauseType}) par opérateur ${operatorId}`);
         
         res.json({
             success: true,
@@ -1218,6 +1356,8 @@ router.post('/pause', validateOperatorSession, logSecurityAction, async (req, re
                 operatorId,
                 lancementCode,
                 action: 'PAUSE',
+                pauseTypeCode: pauseTypeMeta.code,
+                pauseTypeLabel: pauseTypeMeta.label,
                 timestamp: new Date().toISOString()
             }
         });
@@ -1643,28 +1783,34 @@ router.get('/:operatorCode/operations',
                 t.StatutTraitement
             FROM [SEDI_APP_INDEPENDANTE].[dbo].[ABHISTORIQUE_OPERATEURS] h
             LEFT JOIN [SEDI_ERP].[dbo].[LCTE] l ON l.CodeLancement = h.CodeLanctImprod
-            LEFT JOIN [SEDI_APP_INDEPENDANTE].[dbo].[ABTEMPS_OPERATEURS] t 
-                ON t.OperatorCode = h.OperatorCode 
-                AND t.LancementCode = h.CodeLanctImprod
-                AND CAST(t.DateCreation AS DATE) = CAST(h.DateCreation AS DATE)
-                -- IMPORTANT: ne pas cacher une autre étape du même lancement (Phase+CodeRubrique).
-                -- Si les clés ERP n'ont pas pu être résolues (V_LCTC muet), t.Phase/t.CodeRubrique
-                -- sont NULL : on retombe sur le rattachement lancement + date.
-                AND (
-                    t.Phase IS NULL
-                    OR ISNULL(LTRIM(RTRIM(t.Phase)), '') = ISNULL(LTRIM(RTRIM(COALESCE(h.Phase, 'PRODUCTION'))), '')
-                )
-                AND (
-                    t.CodeRubrique IS NULL
-                    OR ISNULL(LTRIM(RTRIM(t.CodeRubrique)), '') = ISNULL(LTRIM(RTRIM(h.CodeRubrique)), '')
-                )
-            -- ⚡ OPTIMISATION : Utiliser h.Phase directement (plus simple et fiable)
-            -- Si Phase n'est pas dans h, on utilise 'PRODUCTION' par défaut
+            -- OUTER APPLY TOP 1 : un seul ABTEMPS par événement.
+            -- Un LEFT JOIN classique multiplie les lignes HIST quand plusieurs cycles
+            -- existent le même jour (plusieurs TempsId) → faux "EN COURS" + "TERMINÉ".
+            OUTER APPLY (
+                SELECT TOP 1 t.StatutTraitement
+                FROM [SEDI_APP_INDEPENDANTE].[dbo].[ABTEMPS_OPERATEURS] t
+                WHERE t.OperatorCode = h.OperatorCode
+                  AND t.LancementCode = h.CodeLanctImprod
+                  AND CAST(t.DateCreation AS DATE) = CAST(h.DateCreation AS DATE)
+                  -- IMPORTANT: ne pas cacher une autre étape du même lancement (Phase+CodeRubrique).
+                  -- Si les clés ERP n'ont pas pu être résolues (V_LCTC muet), t.Phase/t.CodeRubrique
+                  -- sont NULL : on retombe sur le rattachement lancement + date.
+                  AND (
+                      t.Phase IS NULL
+                      OR ISNULL(LTRIM(RTRIM(t.Phase)), '') = ISNULL(LTRIM(RTRIM(COALESCE(h.Phase, 'PRODUCTION'))), '')
+                  )
+                  AND (
+                      t.CodeRubrique IS NULL
+                      OR ISNULL(LTRIM(RTRIM(t.CodeRubrique)), '') = ISNULL(LTRIM(RTRIM(h.CodeRubrique)), '')
+                  )
+                -- Préférer une ligne non transmise : si un cycle reste en O/NULL, l'historique reste visible.
+                ORDER BY CASE WHEN t.StatutTraitement = 'T' THEN 1 ELSE 0 END, t.TempsId DESC
+            ) t
             WHERE h.OperatorCode = @operatorCode
               -- Évite de réafficher l'historique de la veille à l'opérateur.
               AND CAST(h.DateCreation AS DATE) >= DATEADD(DAY, -(@historyDays - 1), CAST(GETDATE() AS DATE))
               AND CAST(h.DateCreation AS DATE) <= CAST(GETDATE() AS DATE)
-              -- Masquer pour l'opérateur uniquement les opérations réellement transmises/traitées (StatutTraitement = 'T').
+              -- Masquer pour l'opérateur uniquement quand tous les ABTEMPS liés sont déjà transmis ('T').
               -- Les enregistrements en attente (ex: 'O') doivent rester visibles tant que l'admin n'a pas validé le transfert final.
               AND (t.StatutTraitement IS NULL OR t.StatutTraitement != 'T')
             ORDER BY h.DateCreation DESC, h.NoEnreg DESC
@@ -1846,6 +1992,7 @@ router.get('/current/:operatorCode', authenticateOperator, async (req, res) => {
                 CONVERT(VARCHAR(8), h.HeureDebut, 108) AS HeureDebut, -- HH:mm:ss (stable)
                 CONVERT(VARCHAR(10), h.DateCreation, 23) AS DateCreation, -- YYYY-MM-DD (stable, évite décalage timezone)
                 h.CreatedAt,
+                ${await historiqueHasPauseTypeColumn() ? 'h.PauseTypeCode' : 'CAST(NULL AS NVARCHAR(32)) AS PauseTypeCode'},
                 COALESCE(h.Phase, 'PRODUCTION') AS Phase,
                 h.CodeRubrique,
                 l.DesignationLct1 as Article
@@ -1936,6 +2083,19 @@ router.get('/current/:operatorCode', authenticateOperator, async (req, res) => {
                 }
             }
         }
+
+        // Heure réelle de la pause (pas le DEBUT du cycle) pour reprendre le minuteur après refresh.
+        let pauseStartedAt = null;
+        let pauseTypeCode = null;
+        if (lastEvent === 'PAUSE') {
+            pauseTypeCode = normalizePauseTypeCode(operation.PauseTypeCode);
+            pauseStartedAt = operation.CreatedAt || null;
+            if (!pauseStartedAt && operation.DateCreation && operation.HeureDebut) {
+                const datePart = String(operation.DateCreation || '').slice(0, 10);
+                const timeStr = String(operation.HeureDebut || '').length >= 5 ? String(operation.HeureDebut) : null;
+                if (datePart && timeStr) pauseStartedAt = `${datePart}T${timeStr}`;
+            }
+        }
         
         res.json({
             success: true,
@@ -1946,6 +2106,8 @@ router.get('/current/:operatorCode', authenticateOperator, async (req, res) => {
                 status: operation.Statut,
                 startTime: operation.HeureDebut ? formatDateTime(operation.HeureDebut) : null,
                 startedAt,
+                pauseStartedAt,
+                pauseTypeCode,
                 dateCreation: operation.DateCreation || null,
                 lastEvent: operation.Ident,
                 phase: operation.Phase || 'PRODUCTION',

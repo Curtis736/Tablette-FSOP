@@ -1,12 +1,14 @@
 // Classe principale de l'application
-import { FRONTEND_RELEASE } from '../version.js';
+import { FRONTEND_RELEASE } from '../version.js?v=20261001.5';
 // ?v= aligné sur FRONTEND_RELEASE (frontend/version.js) pour invalidation navigateur
-import OperateurInterface from './OperateurInterface.js?v=20260908.11';
+import OperateurInterface from './OperateurInterface.js?v=20261001.5';
 import AdminPage from './AdminPage.js?v=20260512.1';
-import ApiService from '../services/ApiService.js?v=20260608.1';
+import RhPage from './RhPage.js?v=20261001.5';
+import ApiService from '../services/ApiService.js?v=20261001.5';
 import StorageService from '../services/StorageService.js?v=20260512.1';
 import notificationManager from '../utils/NotificationManager.js?v=20260512.1';
 import { ADMIN_CONFIG } from '../utils/Constants.js';
+import { clearOfflineApiCache } from '../utils/OfflineApiCache.js?v=20261001.5';
 
 // Quand FRONTEND_RELEASE change, purge des caches locaux (voir initializeApp)
 const APP_BUILD_ID = FRONTEND_RELEASE;
@@ -16,8 +18,10 @@ class App {
         this.currentScreen = 'login';
         this.currentOperator = null;
         this.isAdmin = false;
+        this.isRh = false;
         this.operateurInterface = null;
         this.adminPage = null;
+        this.rhPage = null;
         /** Horodatage du dernier passage en arrière-plan (veille tablette) */
         this._lastVisibilityHiddenAt = 0;
         this.apiService = new ApiService();
@@ -68,10 +72,16 @@ class App {
             if (prev && prev !== APP_BUILD_ID) {
                 console.warn(`🧹 App build changed (${prev} -> ${APP_BUILD_ID}): clearing local caches`);
                 window.sessionStorage?.removeItem('sedi_admin_token');
+                window.sessionStorage?.removeItem('sedi_rh_token');
+                window.localStorage?.removeItem('sedi_admin_token');
+                window.localStorage?.removeItem('sedi_rh_token');
                 this.apiService.clearOperatorSessions();
                 this.storageService.clearCurrentOperator();
                 this.storageService.clearAllCache?.();
+                try { clearOfflineApiCache(); } catch (_) {}
             }
+            // En local : toujours purger le cache offline API (évite sessions fantômes)
+            try { clearOfflineApiCache(); } catch (_) {}
             window.localStorage?.setItem(key, APP_BUILD_ID);
         } catch (_) {
             // ignore
@@ -172,17 +182,30 @@ class App {
         // Gestion de la connexion
         document.getElementById('loginForm').addEventListener('submit', (e) => this.handleLogin(e));
         document.getElementById('adminLoginForm').addEventListener('submit', (e) => this.handleAdminLogin(e));
+        const rhLoginForm = document.getElementById('rhLoginForm');
+        if (rhLoginForm) rhLoginForm.addEventListener('submit', (e) => this.handleRhLogin(e));
         document.getElementById('logoutBtn').addEventListener('click', () => this.handleLogout());
         
         // Navigation entre les écrans
         document.getElementById('backToOperatorBtn').addEventListener('click', () => this.showOperatorScreen());
         document.getElementById('adminModeBtn').addEventListener('click', () => this.showAdminLoginScreen());
+        const rhModeBtn = document.getElementById('rhModeBtn');
+        if (rhModeBtn) {
+            rhModeBtn.addEventListener('click', () => this.showRhLoginScreen());
+            this.apiService.isRhEnabled().then((enabled) => { rhModeBtn.hidden = !enabled; });
+        }
         
         // Bouton retour de la page admin login
         const backToLoginBtn = document.getElementById('backToLoginBtn');
         if (backToLoginBtn) {
             backToLoginBtn.addEventListener('click', () => this.showLoginScreen());
         }
+        const backToLoginFromRhBtn = document.getElementById('backToLoginFromRhBtn');
+        if (backToLoginFromRhBtn) {
+            backToLoginFromRhBtn.addEventListener('click', () => this.showLoginScreen());
+        }
+        const rhLogoutBtn = document.getElementById('rhLogoutBtn');
+        if (rhLogoutBtn) rhLogoutBtn.addEventListener('click', () => this.handleRhLogout());
         
         // Raccourcis clavier
         document.addEventListener('keydown', (e) => {
@@ -439,12 +462,50 @@ class App {
         }
     }
 
+    async handleRhLogin(e) {
+        e.preventDefault();
+        const username = document.getElementById('rhUsername').value.trim();
+        const password = document.getElementById('rhPassword').value.trim();
+        if (!username || !password) {
+            notificationManager.error('Veuillez saisir l\'identifiant et le mot de passe RH');
+            return;
+        }
+        try {
+            this.showLoading(true);
+            const response = await this.apiService.rhLogin(username, password);
+            if (response.success) {
+                if (response.token) this.apiService.setRhToken(response.token);
+                this.isRh = true;
+                this.isAdmin = false;
+                this.showRhScreen();
+                notificationManager.success(`Bienvenue ${response.user?.name || 'RH'}`);
+            } else {
+                notificationManager.error('Identifiants RH invalides');
+            }
+        } catch (error) {
+            console.error('Erreur connexion RH:', error);
+            notificationManager.error(error.message || 'Erreur de connexion RH');
+        } finally {
+            this.showLoading(false);
+        }
+    }
+
+    handleRhLogout() {
+        this.isRh = false;
+        this.apiService.setRhToken('');
+        Promise.resolve().then(() => this.apiService.rhLogout()).catch(() => {});
+        this.showLoginScreen();
+        notificationManager.info('Déconnexion RH');
+    }
+
     handleLogout() {
         // Nettoyer l'UI immédiatement (ne pas bloquer sur le réseau)
         const code = this.currentOperator?.code || this.currentOperator?.id || null;
         this.currentOperator = null;
         this.isAdmin = false;
+        this.isRh = false;
         this.apiService.setAdminToken('');
+        this.apiService.setRhToken('');
         this.apiService.clearOperatorSessions();
         this.storageService.clearCurrentOperator();
         this.showLoginScreen();
@@ -515,6 +576,16 @@ class App {
         document.getElementById('adminPassword').value = '';
     }
 
+    showRhLoginScreen() {
+        this.hideAllScreens();
+        document.getElementById('rhLoginScreen').classList.add('active');
+        this.currentScreen = 'rhLogin';
+        const u = document.getElementById('rhUsername');
+        const p = document.getElementById('rhPassword');
+        if (u) u.value = '';
+        if (p) p.value = '';
+    }
+
     showAdminScreen() {
         console.log('🔄 App.showAdminScreen() - Début');
         this.hideAllScreens();
@@ -538,6 +609,16 @@ class App {
             this.adminPage.loadData();
         }, 200);
         console.log('✅ App.showAdminScreen() - Terminé');
+    }
+
+    showRhScreen() {
+        this.hideAllScreens();
+        document.getElementById('rhScreen').classList.add('active');
+        this.currentScreen = 'rh';
+        setTimeout(() => {
+            if (!this.rhPage) this.rhPage = new RhPage(this);
+            this.rhPage.load();
+        }, 100);
     }
 
     hideAllScreens() {
@@ -564,7 +645,7 @@ class App {
 
     showLoading(show) {
         // Limiter le chargement aux boutons des formulaires de connexion
-        const selectors = ['#loginForm button', '#adminLoginForm button'];
+        const selectors = ['#loginForm button', '#adminLoginForm button', '#rhLoginForm button'];
         const buttons = document.querySelectorAll(selectors.join(','));
         buttons.forEach(btn => {
             if (show) {

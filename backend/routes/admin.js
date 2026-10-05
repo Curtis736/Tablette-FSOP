@@ -381,6 +381,19 @@ function validateSuspiciousTime(timeString, context = '') {
 }
 
 // Fonction pour formater une date en HH:mm (fuseau horaire Paris)
+function formatSqlTimeAsHhMm(dateTime) {
+    // mssql renvoie souvent TIME comme Date 1970-01-01T HH:mm:ss.000Z (heure murale en UTC).
+    // toLocaleTimeString(Europe/Paris) décale alors d'1h/2h — on lit les composants UTC.
+    if (!(dateTime instanceof Date) || Number.isNaN(dateTime.getTime())) return null;
+    const y = dateTime.getUTCFullYear();
+    if (y >= 1969 && y <= 1971) {
+        const hh = String(dateTime.getUTCHours()).padStart(2, '0');
+        const mm = String(dateTime.getUTCMinutes()).padStart(2, '0');
+        return `${hh}:${mm}`;
+    }
+    return null;
+}
+
 function formatDateTime(dateTime) {
     if (!dateTime) {
         console.log('🔍 formatDateTime: dateTime est null/undefined');
@@ -414,6 +427,8 @@ function formatDateTime(dateTime) {
         
         // Si c'est un objet Date, extraire l'heure avec fuseau horaire français
         if (dateTime instanceof Date) {
+            const sqlTime = formatSqlTimeAsHhMm(dateTime);
+            if (sqlTime) return sqlTime;
             const timeString = dateTime.toLocaleTimeString('fr-FR', {
                 timeZone: 'Europe/Paris',
                 hour: '2-digit',
@@ -612,6 +627,8 @@ function extractEventTime(event) {
         return heure.substring(0, 5);
     }
     if (heure && heure instanceof Date) {
+        const sqlTime = formatSqlTimeAsHhMm(heure);
+        if (sqlTime) return sqlTime;
         return heure.toLocaleTimeString('fr-FR', {
             timeZone: 'Europe/Paris',
             hour: '2-digit',
@@ -630,6 +647,8 @@ function extractEventEndTime(event) {
         return heure.substring(0, 5);
     }
     if (heure && heure instanceof Date) {
+        const sqlTime = formatSqlTimeAsHhMm(heure);
+        if (sqlTime) return sqlTime;
         return heure.toLocaleTimeString('fr-FR', {
             timeZone: 'Europe/Paris',
             hour: '2-digit',
@@ -889,6 +908,9 @@ function processLancementEventsWithPauses(events, { includePauseRows = false, in
                         repriseEvents,
                         finEvent
                     );
+                    // Chronologie simple : chaque créneau productif = 1 ligne.
+                    // Fin de ligne = début de pause ; début de ligne suivante = reprise.
+                    // Pas de ligne « pause » séparée.
                     processedItems.push(...segments);
                 } else {
                 processedItems.push(
@@ -922,11 +944,19 @@ function processLancementEventsWithPauses(events, { includePauseRows = false, in
         if (opA !== opB) return opA.localeCompare(opB, 'fr');
         const dateA = String(a.dateCreation || '').substring(0, 10);
         const dateB = String(b.dateCreation || '').substring(0, 10);
-        const timeA = String(a.startTime || '99:99');
-        const timeB = String(b.startTime || '99:99');
-        const tsA = dateA ? new Date(`${dateA}T${timeA}:00`).getTime() : 0;
-        const tsB = dateB ? new Date(`${dateB}T${timeB}:00`).getTime() : 0;
+        const hmA = String(a.startTime || '99:99').substring(0, 5);
+        const hmB = String(b.startTime || '99:99').substring(0, 5);
+        const tsA = dateA && /^\d{2}:\d{2}$/.test(hmA) ? new Date(`${dateA}T${hmA}:00`).getTime() : 0;
+        const tsB = dateB && /^\d{2}:\d{2}$/.test(hmB) ? new Date(`${dateB}T${hmB}:00`).getTime() : 0;
         if (tsA !== tsB) return tsA - tsB;
+        // Même minute : créneau productif avant la pause, puis reprise
+        const rank = (x) => {
+            if (x?._isPauseRow || x?.type === 'pause') return 1;
+            if (x?._isWorkSegment) return 0;
+            return 2;
+        };
+        const r = rank(a) - rank(b);
+        if (r !== 0) return r;
         return String(a.id || '').localeCompare(String(b.id || ''), 'fr');
     });
 }

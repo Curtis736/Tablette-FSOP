@@ -20,6 +20,25 @@ chmod +x docker/scripts/deploy-test.sh
 
 La prod (`docker-compose.production.yml` / ports 80-443) n’est **pas** déployée par Jenkins.
 
+### Alertes Prometheus → Teams (monitoring)
+
+Stack : `docker-compose.monitoring.yml` (Prometheus, Alertmanager, prometheus-msteams, Grafana).
+
+Dans `docker/.env` :
+```
+TEAMS_WEBHOOK_URL=https://outlook.office.com/webhook/...
+```
+
+Déploiement / mise à jour monitoring **sans toucher l’app tablette** :
+```bash
+cd /home/Tablette-FSOP/docker
+bash scripts/apply-monitoring.sh
+```
+
+- Règles : `docker/prometheus/alerts.yml` (backend down, erreurs HTTP, CPU/RAM/disque VM, Redis)
+- Vérifier : http://\<vm\>:9091/alerts et http://127.0.0.1:9093 (Alertmanager, sur la VM)
+- Grafana : http://\<vm\>:3002 — dashboard **SEDI Tablette — Prod**
+
 ## 1) Verifier etat backend / watchdog
 
 
@@ -49,11 +68,13 @@ sudo ./docker/scripts/install-systemd-watchdog.sh
 
 Le script installe health + CIFS + watchdog et adapte les chemins au clone courant.
 
-Optionnel dans `docker/.env` :
+**Obligatoire pour remonter le backend tout seul** dans `docker/.env` :
 ```
 AUTO_RESTART_BACKEND=true
 TEAMS_WEBHOOK_URL=https://outlook.office.com/webhook/...
 ```
+
+Sans `AUTO_RESTART_BACKEND=true`, le timer `sedi-backend-health` alerte seulement : si le conteneur a disparu (`docker ps` sans `sedi-tablette-backend`), il ne le recrée pas. Le script utilise `compose up -d backend` (pas seulement `restart`) quand le conteneur est absent.
 
 Backup (séparé) :
 ```bash
@@ -102,17 +123,27 @@ mountpoint -q /mnt/partage_services && echo "OK: /mnt/partage_services" || sudo 
 test -d "/mnt/partage_services/Services" && echo "OK: templates path" || ls -la /mnt/partage_services/
 ```
 
-Si tu déploies le timer systemd `sedi-cifs-ensure.timer`, il relance automatiquement `mount -a` quand les montages manquent.
+Le timer systemd `sedi-cifs-ensure.timer` vérifie **toutes les 60 s** et remonte automatiquement
+(y compris les montages « morts » / stale). **À installer une fois** sur la VM :
 
-Pour activer le timer (sur la VM) :
 ```bash
-sudo chmod +x /home/Tablette-FSOP/docker/scripts/ensure-cifs-mounts.sh
-sudo cp /home/Tablette-FSOP/docker/systemd/sedi-cifs-ensure.service /etc/systemd/system/
-sudo cp /home/Tablette-FSOP/docker/systemd/sedi-cifs-ensure.timer /etc/systemd/system/
-sudo systemctl daemon-reload
-sudo systemctl enable --now sedi-cifs-ensure.timer
-sudo systemctl status sedi-cifs-ensure.timer
+cd /home/Tablette-FSOP
+git pull
+sudo ./docker/scripts/install-systemd-watchdog.sh
+# ou seulement CIFS :
+sudo chmod +x docker/scripts/ensure-cifs-mounts.sh
+sudo ./docker/scripts/install-systemd-watchdog.sh
+systemctl status sedi-cifs-ensure.timer
 ```
+
+Durcir `/etc/fstab` (exemples d’options CIFS stables) :
+```
+_netdev,vers=3.1.1,nofail,x-systemd.automount,x-systemd.mount-timeout=30,soft,echo_interval=60
+```
+- `_netdev` + `x-systemd.automount` : remonte au boot / à l’accès
+- `nofail` : le boot ne bloque pas si le share est down
+- `soft` : évite un freeze Linux si le serveur SMB est mort
+
 
 ## 3) Incident DB timeout
 
@@ -128,6 +159,18 @@ Verifier les compteurs:
 ```bash
 docker exec -it sedi-tablette-backend sh -lc 'node -e "const sql=require(\"mssql\");(async()=>{await sql.connect({user:process.env.DB_USER,password:process.env.DB_PASSWORD,server:process.env.DB_SERVER,database:process.env.DB_NAME,options:{encrypt:false,trustServerCertificate:true}});const s=await sql.query(\"SELECT StatutTraitement, COUNT(*) AS c FROM [SEDI_APP_INDEPENDANTE].[dbo].[ABTEMPS_OPERATEURS] GROUP BY StatutTraitement\");console.log(s.recordset);await sql.close();})().catch(e=>{console.error(e.message);process.exit(1);});"'
 ```
+
+Migration pause type (DEJ fiable) — une fois sur SQL:
+
+```sql
+-- backend/sql/migration_add_pause_type_on_historique.sql
+-- Ajoute PauseTypeCode sur ABHISTORIQUE_OPERATEURS (+ backfill depuis AB_PAUSE_TYPE_LOG)
+```
+
+Health / déploiement (déjà en place):
+- `GET /api/health` + healthcheck Docker
+- timer systemd `sedi-backend-health.timer` → `check-backend-alive.sh`
+- backups: `sedi-backup.timer`
 
 Forcer NULL -> O (si necessaire):
 

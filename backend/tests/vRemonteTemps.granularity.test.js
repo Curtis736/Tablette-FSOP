@@ -17,6 +17,15 @@ describe('V_REMONTE_TEMPS granularity', () => {
     expect(sql).toMatch(/TempsId/);
     expect(sql).toMatch(/StartTime/);
     expect(sql).toMatch(/EndTime/);
+    expect(sql).toMatch(/DATEPART\(HOUR,\s*StartTime\)\s+AS\s+HeureDebut/);
+    expect(sql).toMatch(/DATEPART\(MINUTE,\s*StartTime\)\s+AS\s+MinutesDebut/);
+    expect(sql).toMatch(/DATEPART\(HOUR,\s*EndTime\)\s+AS\s+HeureFin/);
+    expect(sql).toMatch(/DATEPART\(MINUTE,\s*EndTime\)\s+AS\s+MinutesFin/);
+    expect(sql).toMatch(/CommentaireHeureDebut/);
+    expect(sql).toMatch(/CommentaireHeureFin/);
+    expect(sql).toMatch(/CommentaireHoraires/);
+    expect(sql).toMatch(/CONVERT\(VARCHAR\(8\),\s*StartTime,\s*108\)/);
+    expect(sql).toMatch(/CONVERT\(VARCHAR\(8\),\s*EndTime,\s*108\)/);
     expect(sql).toMatch(/ProductiveDuration/);
     expect(sql).toMatch(/TotalDuration/);
     expect(sql).toMatch(/PauseDuration/);

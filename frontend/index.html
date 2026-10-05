@@ -8,7 +8,7 @@
     <meta http-equiv="Pragma" content="no-cache">
     <title>SEDI - Interface Tablette</title>
     <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📱</text></svg>">
-    <link rel="stylesheet" href="assets/styles.css?v=20260908.11">
+    <link rel="stylesheet" href="assets/styles.css?v=20261001.5">
     <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
     <!-- ZXing pour le scan de code-barres (local, pas de dépendance Internet) -->
     <script defer src="assets/vendor/zxing.min.js?v=20260706.1"></script>
@@ -37,6 +37,10 @@
                     <button id="adminModeBtn" class="btn-secondary">
                         <i class="fas fa-cog"></i>
                         Mode Administrateur
+                    </button>
+                    <button id="rhModeBtn" class="btn-secondary" hidden>
+                        <i class="fas fa-user-tie"></i>
+                        Accès RH
                     </button>
                 </div>
             </div>
@@ -67,6 +71,39 @@
                 </form>
                 <div class="back-to-login">
                     <button id="backToLoginBtn" class="btn-secondary">
+                        <i class="fas fa-arrow-left"></i>
+                        Retour
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Écran de connexion RH (séparé de l'admin prod) -->
+        <div id="rhLoginScreen" class="screen">
+            <div class="login-container">
+                <div class="logo">
+                    <i class="fas fa-user-tie"></i>
+                    <h1>Espace RH</h1>
+                    <p class="rh-login-subtitle">Temps opérateurs — hors production</p>
+                </div>
+                <form id="rhLoginForm">
+                    <div class="input-group">
+                        <i class="fas fa-user" aria-hidden="true"></i>
+                        <label class="visually-hidden" for="rhUsername">Nom d'utilisateur RH</label>
+                        <input type="text" id="rhUsername" name="rhUsername" placeholder="Identifiant RH" aria-label="Identifiant RH" required>
+                    </div>
+                    <div class="input-group">
+                        <i class="fas fa-lock" aria-hidden="true"></i>
+                        <label class="visually-hidden" for="rhPassword">Mot de passe</label>
+                        <input type="password" id="rhPassword" name="rhPassword" placeholder="Mot de passe" aria-label="Mot de passe RH" required>
+                    </div>
+                    <button type="submit" class="btn-primary">
+                        <i class="fas fa-sign-in-alt"></i>
+                        Se connecter
+                    </button>
+                </form>
+                <div class="back-to-login">
+                    <button id="backToLoginFromRhBtn" class="btn-secondary">
                         <i class="fas fa-arrow-left"></i>
                         Retour
                     </button>
@@ -120,20 +157,6 @@
                     </div>
                 </div>
 
-                <div class="section shift-counter-section">
-                    <h2><i class="fas fa-hourglass-half"></i> Compteur Journée</h2>
-                    <div class="shift-progress">
-                        <div class="shift-progress-item">
-                            <span class="shift-progress-label">Temps cumulé</span>
-                            <span class="shift-progress-value" id="shiftWorkedDisplay">00:00:00</span>
-                        </div>
-                        <div class="shift-progress-item">
-                            <span class="shift-progress-label">Reste sur 8h</span>
-                            <span class="shift-progress-value shift-remaining" id="shiftRemainingDisplay">08:00:00</span>
-                        </div>
-                    </div>
-                </div>
-
                 <!-- Contrôles de lancement -->
                 <div class="section" id="controlsSection" style="display: none;">
                     <h2><i class="fas fa-cogs"></i> Contrôles</h2>
@@ -174,10 +197,44 @@
                             <div class="end-time-value" id="endTimeDisplay">—</div>
                         </div>
                     </div>
-                    <div class="timer">
+                    <div id="pauseTypePanel" class="pause-type-panel" hidden>
+                        <div class="pause-type-title">Choisir le type de pause</div>
+                        <div class="pause-type-grid" id="pauseTypeGrid"></div>
+                        <button type="button" id="pauseTypeCancelBtn" class="btn-secondary pause-type-cancel">Annuler</button>
+                    </div>
+                    <div class="timer" id="timerBlock">
                         <div class="timer-display" id="timerDisplay">00:00:00</div>
+                        <div class="pause-timer-hint" id="pauseTimerHint" hidden>Minuteur pause</div>
                         <div class="status" id="statusDisplay">En attente</div>
                     </div>
+                </div>
+
+                <!-- Compteurs temps opérateur -->
+                <div class="section" id="operatorCountersSection">
+                    <h2><i class="fas fa-stopwatch"></i> Mes compteurs</h2>
+                    <div class="counters-today" id="countersToday">
+                        <div class="counter-card counter-card-main">
+                            <span class="counter-label">Reste aujourd'hui (sur 8h45)</span>
+                            <span class="counter-value" id="counterRemainingToday">08:45</span>
+                        </div>
+                        <div class="counter-card">
+                            <span class="counter-label">Temps fait</span>
+                            <span class="counter-value" id="counterProductiveToday">00:00</span>
+                        </div>
+                        <div class="counter-card">
+                            <span class="counter-label">Pauses</span>
+                            <span class="counter-value" id="counterPauseToday">00:00</span>
+                        </div>
+                        <div class="counter-card">
+                            <span class="counter-label">Autre</span>
+                            <span class="counter-value" id="counterAutreToday">00:00</span>
+                        </div>
+                        <div class="counter-card">
+                            <span class="counter-label">Formation</span>
+                            <span class="counter-value" id="counterFormationToday">00:00</span>
+                        </div>
+                    </div>
+                    <div class="counters-week" id="countersWeek"></div>
                 </div>
 
                 <!-- Historique des lancements -->
@@ -392,6 +449,77 @@
 
             </main>
         </div>
+
+        <!-- Interface RH (séparée — pas de vues Admin prod) -->
+        <div id="rhScreen" class="screen">
+            <header class="header">
+                <h1><i class="fas fa-user-tie"></i> Espace RH — Temps</h1>
+                <div>
+                    <button id="rhLogoutBtn" class="btn-secondary">
+                        <i class="fas fa-sign-out-alt"></i>
+                        Déconnexion
+                    </button>
+                </div>
+            </header>
+            <main class="main-content rh-main">
+                <div class="rh-howto">
+                    <strong>Comment modifier un jour</strong>
+                    <ol>
+                        <li>Cherchez un <b>opérateur</b> (nom / prénom / code) ou choisissez-le dans la liste, puis la <b>semaine</b>.</li>
+                        <li>Dans chaque jour, changez le champ <b>Temps fait</b> (ex. <code>08:45</code>).</li>
+                        <li>Cliquez <b>Enregistrer</b> sur la ligne — le temps fait est enregistré.</li>
+                    </ol>
+                </div>
+                <div class="rh-controls">
+                    <div class="filter-group">
+                        <label for="rhWeekStart">Semaine (lundi)</label>
+                        <input type="date" id="rhWeekStart" class="filter-input">
+                    </div>
+                    <div class="filter-group">
+                        <label for="rhMonthInput">Mois heures supp</label>
+                        <input type="month" id="rhMonthInput" class="filter-input">
+                    </div>
+                    <div class="filter-group rh-search-group">
+                        <label for="rhOperatorSearch">Recherche</label>
+                        <input type="search" id="rhOperatorSearch" class="filter-input" placeholder="Nom, prénom ou code…" autocomplete="off">
+                    </div>
+                    <div class="filter-group">
+                        <label for="rhOperatorFilter">Opérateur</label>
+                        <select id="rhOperatorFilter" class="filter-select">
+                            <option value="">Tous les opérateurs</option>
+                        </select>
+                    </div>
+                    <button type="button" id="rhPrevWeekBtn" class="btn-secondary">Semaine −</button>
+                    <button type="button" id="rhNextWeekBtn" class="btn-secondary">Semaine +</button>
+                    <button type="button" id="rhRefreshBtn" class="btn-primary">
+                        <i class="fas fa-sync"></i> Actualiser
+                    </button>
+                    <button type="button" id="rhExportExcelBtn" class="btn-success">
+                        <i class="fas fa-file-excel"></i> Excel
+                    </button>
+                    <button type="button" id="rhExportPdfBtn" class="btn-secondary">
+                        <i class="fas fa-file-pdf"></i> PDF
+                    </button>
+                </div>
+                <p id="rhWeekMeta" class="rh-week-meta"></p>
+                <div id="rhContent" class="rh-content"></div>
+                <div id="rhBankSummary" class="rh-bank-summary"></div>
+                <details class="rh-correction-panel">
+                    <summary><strong>Ajustement heures supp (optionnel)</strong> — hors édition jour par jour</summary>
+                    <div class="rh-correction-form">
+                        <select id="rhCorrOperator" class="filter-select"></select>
+                        <input type="date" id="rhCorrDate" class="filter-input" title="Date concernée">
+                        <select id="rhCorrKind" class="filter-select">
+                            <option value="BANK">Ajuster heures supp</option>
+                            <option value="DAY_PRESENCE">Ajuster temps du jour (+/- min)</option>
+                        </select>
+                        <input type="number" id="rhCorrDelta" class="filter-input" placeholder="Minutes (+/-)" step="1">
+                        <input type="text" id="rhCorrComment" class="filter-input" placeholder="Commentaire">
+                        <button type="button" id="rhCorrSaveBtn" class="btn-primary">Enregistrer</button>
+                    </div>
+                </details>
+            </main>
+        </div>
     </div>
 
     <!-- Modal Scanner de Code-Barres -->
@@ -538,6 +666,6 @@
         </div>
     </div>
 
-    <script type="module" src="index.js?v=20260908.11"></script>
+    <script type="module" src="index.js?v=20261001.5"></script>
 </body>
 </html>

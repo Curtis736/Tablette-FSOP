@@ -1,6 +1,6 @@
 // Service pour gérer les appels API - v20251014-fixed-v3
 import { getLocalDevApiBase, resolveLocalDevBackendPort } from '../utils/DevBackendUrl.js';
-import { buildOfflineCacheKey, readOfflineCache, writeOfflineCache } from '../utils/OfflineApiCache.js';
+import { buildOfflineCacheKey, readOfflineCache, writeOfflineCache, shouldWriteOfflineCache, isLiveEndpoint } from '../utils/OfflineApiCache.js';
 
 class ApiService {
     constructor() {
@@ -55,11 +55,55 @@ class ApiService {
         this.adminToken = window.sessionStorage?.getItem('sedi_admin_token')
             || window.localStorage?.getItem('sedi_admin_token')
             || '';
+        this.rhToken = window.sessionStorage?.getItem('sedi_rh_token')
+            || window.localStorage?.getItem('sedi_rh_token')
+            || '';
         
         this._backendAvailable = true;
+        this._healPromise = null;
 
         console.log(`🔗 ApiService configuré pour: ${this.baseUrl}`);
         console.log(`🔍 Host détecté: ${currentHost}:${currentPort}`);
+    }
+
+    /**
+     * Une seule réparation de session à la fois (évite le spam de login
+     * qui ferme la session précédente et provoque des SESSION_MISMATCH en chaîne).
+     */
+    async healOperatorSessionOnce() {
+        if (this._healPromise) return this._healPromise;
+        this._healPromise = (async () => {
+            try {
+                this.syncOperatorContextWithLocalStorage();
+                const savedRaw = window?.localStorage?.getItem('currentOperator');
+                const saved = savedRaw ? JSON.parse(savedRaw) : null;
+                const code = String(saved?.code || saved?.id || '').trim();
+                if (!code) return null;
+
+                const relog = await this.directOperatorLogin(code);
+                const newSessionId = relog?.operator?.sessionId || relog?.operator?.SessionId || null;
+                if (!newSessionId) return null;
+
+                this.setOperatorSessionActive(code, true);
+                this.setCurrentOperatorContext(code, newSessionId);
+                try {
+                    window.localStorage?.setItem('currentOperator', JSON.stringify({
+                        ...(saved || {}),
+                        ...(relog?.operator || {}),
+                        code,
+                        sessionId: newSessionId
+                    }));
+                } catch (_) { /* ignore */ }
+                return { code, sessionId: newSessionId };
+            } catch (e) {
+                console.warn('Réparation session échouée:', e?.message || e);
+                return null;
+            } finally {
+                // Laisse les requêtes parallèles récupérer le même résultat un court instant
+                setTimeout(() => { this._healPromise = null; }, 800);
+            }
+        })();
+        return this._healPromise;
     }
 
     isBackendAvailable() {
@@ -79,6 +123,7 @@ class ApiService {
     }
 
     _tryOfflineFallback(endpoint, options) {
+        if (isLiveEndpoint(endpoint)) return null;
         const method = String(options?.method || 'GET').toUpperCase();
         if (method !== 'GET' && method !== 'HEAD') return null;
         const key = buildOfflineCacheKey(endpoint, options);
@@ -172,6 +217,22 @@ class ApiService {
         }
     }
 
+    setRhToken(token) {
+        const t = String(token || '').trim();
+        this.rhToken = t;
+        try {
+            if (t) {
+                window.sessionStorage?.setItem('sedi_rh_token', t);
+                window.localStorage?.setItem('sedi_rh_token', t);
+            } else {
+                window.sessionStorage?.removeItem('sedi_rh_token');
+                window.localStorage?.removeItem('sedi_rh_token');
+            }
+        } catch (_) {
+            // ignore storage errors
+        }
+    }
+
     clearMemoryCacheByPrefix(prefix) {
         try {
             const p = String(prefix || '');
@@ -251,13 +312,22 @@ class ApiService {
         const { __retried, headers: optionHeaders, cache: cacheOverride, ...restFetchOptions } = options || {};
         const url = `${this.baseUrl}${endpoint}`;
 
-        // Admin auth token (si présent) - envoyé uniquement sur /auth et /admin
+        // Tokens : admin sur /admin + /auth (hors RH) ; RH sur /rh + /auth/rh
         const adminToken = this.adminToken
             || window.sessionStorage?.getItem('sedi_admin_token')
             || window.localStorage?.getItem('sedi_admin_token')
             || '';
-        const shouldAttachAdminToken = adminToken && (endpoint.startsWith('/admin') || endpoint.startsWith('/auth'));
-        const authHeaders = shouldAttachAdminToken ? { Authorization: `Bearer ${adminToken}` } : {};
+        const rhToken = this.rhToken
+            || window.sessionStorage?.getItem('sedi_rh_token')
+            || window.localStorage?.getItem('sedi_rh_token')
+            || '';
+        const isRhEndpoint = endpoint.startsWith('/rh') || endpoint.startsWith('/auth/rh');
+        const shouldAttachRhToken = rhToken && isRhEndpoint;
+        const shouldAttachAdminToken = adminToken && !isRhEndpoint
+            && (endpoint.startsWith('/admin') || endpoint.startsWith('/auth'));
+        const authHeaders = shouldAttachRhToken
+            ? { Authorization: `Bearer ${rhToken}` }
+            : (shouldAttachAdminToken ? { Authorization: `Bearer ${adminToken}` } : {});
 
         const ep = String(endpoint || '');
         const operatorHeaders = {};
@@ -367,49 +437,26 @@ class ApiService {
                         errorData?.security === 'DEVICE_MISMATCH'
                     );
 
-                // Auto-resilience: for operator read flows, try a silent re-login once then retry.
-                // IMPORTANT: never auto-retry mutating requests (start/pause/resume/stop) to avoid
-                // duplicated side effects and "ghost" UI states after a context error.
+                // Auto-resilience: une seule réparation de session, puis 1 retry.
+                // Évite le cascade SESSION_MISMATCH (chaque login ferme l'ancienne session).
                 if (!hasRetried && isAuthIssue) {
                     const ep2 = String(endpoint || '');
-                    const method = String(options?.method || 'GET').toUpperCase();
                     const shouldRetry =
                         ep2.startsWith('/operators/') ||
                         ep2.startsWith('/fsop/');
                     const isLoginOrLogout =
                         ep2.startsWith('/operators/login') ||
                         ep2.startsWith('/operators/logout');
-                    const isSafeMethod = method === 'GET' || method === 'HEAD';
 
-                    if (shouldRetry && !isLoginOrLogout && isSafeMethod) {
-                        try {
-                            const savedRaw = window?.localStorage?.getItem('currentOperator');
-                            const saved = savedRaw ? JSON.parse(savedRaw) : null;
-                            const code = String(saved?.code || saved?.id || '').trim();
-                            if (code) {
-                                // Recreate a fresh server session (closes previous ones) and refresh context.
-                                // IMPORTANT: use direct fetch (out of queue) to avoid requestQueue deadlock.
-                                const relog = await this.directOperatorLogin(code);
-                                const newSessionId = relog?.operator?.sessionId || relog?.operator?.SessionId || null;
-                                this.setOperatorSessionActive(code, true);
-                                if (newSessionId) this.setCurrentOperatorContext(code, newSessionId);
-                                // Update localStorage with refreshed sessionId
-                                try {
-                                    window.localStorage?.setItem('currentOperator', JSON.stringify({
-                                        ...(saved || {}),
-                                        ...(relog?.operator || {}),
-                                        code
-                                    }));
-                                } catch (_) {}
-                                return await this.executeRequest(endpoint, { ...options, __retried: true });
-                            }
-                        } catch (_) {
-                            // fall through to normal handling
+                    if (shouldRetry && !isLoginOrLogout) {
+                        const healed = await this.healOperatorSessionOnce();
+                        if (healed?.sessionId) {
+                            return await this.executeRequest(endpoint, { ...options, __retried: true });
                         }
                     }
                 }
 
-                // Session opérateur expirée -> notifier l'app pour forcer retour écran login
+                // Session vraiment expirée (pas réparable) -> retour écran login
                 if (response.status === 401 && errorData && (errorData.security === 'SESSION_REQUIRED' || errorData.error === 'SESSION_REQUIRED')) {
                     try {
                         const body = options?.body ? JSON.parse(options.body) : null;
@@ -420,11 +467,12 @@ class ApiService {
                         // ignore
                     }
                 }
+                // MISMATCH après échec de réparation seulement
                 if (response.status === 401 && (
                     errorData?.security === 'SESSION_CONTEXT_REQUIRED' ||
                     errorData?.security === 'SESSION_MISMATCH' ||
                     errorData?.security === 'DEVICE_MISMATCH'
-                )) {
+                ) && hasRetried) {
                     this.currentOperatorContext = null;
                     try {
                         window.dispatchEvent(new CustomEvent('sedi:session-expired', { detail: { endpoint, errorData } }));
@@ -463,7 +511,7 @@ class ApiService {
 
             const data = await response.json();
             this._setBackendAvailable(true);
-            if (isSafeRead) {
+            if (isSafeRead && shouldWriteOfflineCache(endpoint)) {
                 writeOfflineCache(buildOfflineCacheKey(endpoint, options), data);
             }
             // Invalider les caches mémoire qui deviennent faux après mutation
@@ -579,6 +627,91 @@ class ApiService {
 
     async verifyAdmin() {
         return this.get('/auth/verify');
+    }
+
+    // Authentification RH (accès séparé)
+    async isRhEnabled() {
+        try {
+            const res = await this.get('/auth/rh/status');
+            return res?.enabled === true;
+        } catch (_) {
+            return false;
+        }
+    }
+
+    async rhLogin(username, password) {
+        return this.post('/auth/rh/login', { username, password });
+    }
+
+    async rhLogout() {
+        try {
+            return await this.post('/auth/rh/logout');
+        } finally {
+            this.setRhToken('');
+        }
+    }
+
+    async getRhWeek(weekStart, operatorCode = null) {
+        const params = { weekStart };
+        if (operatorCode) params.operatorCode = operatorCode;
+        return this.get('/rh/week', params);
+    }
+
+    async getRhOperators(weekStart) {
+        return this.get('/rh/operators', { weekStart });
+    }
+
+    async getRhMonth(yearMonth, operatorCode = null) {
+        const params = { yearMonth };
+        if (operatorCode) params.operatorCode = operatorCode;
+        return this.get('/rh/month', params);
+    }
+
+    async createRhCorrection(payload) {
+        return this.post('/rh/corrections', payload);
+    }
+
+    async setRhDayPresence(payload) {
+        return this.post('/rh/days/presence', payload);
+    }
+
+    async setRhCorrectionStatus(id, status) {
+        return this.post(`/rh/corrections/${id}/status`, { status });
+    }
+
+    async downloadRhExportExcel(yearMonth, operatorCode = null) {
+        const qs = new URLSearchParams({ yearMonth: yearMonth || '' });
+        if (operatorCode) qs.set('operatorCode', operatorCode);
+        const endpoint = `/rh/export.xlsx?${qs.toString()}`;
+        const url = `${this.baseUrl}${endpoint}`;
+        const rhToken = this.rhToken
+            || window.sessionStorage?.getItem('sedi_rh_token')
+            || window.localStorage?.getItem('sedi_rh_token')
+            || '';
+        const response = await fetch(url, {
+            headers: {
+                ...(rhToken ? { Authorization: `Bearer ${rhToken}` } : {}),
+                'x-device-id': this.deviceId
+            }
+        });
+        if (!response.ok) {
+            let msg = `Export HTTP ${response.status}`;
+            try {
+                const err = await response.json();
+                msg = err.error || err.message || msg;
+            } catch (_) { /* ignore */ }
+            throw new Error(msg);
+        }
+        const blob = await response.blob();
+        const a = document.createElement('a');
+        const objectUrl = URL.createObjectURL(blob);
+        a.href = objectUrl;
+        a.download = `rh-temps-${yearMonth || 'mois'}.xlsx`;
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        URL.revokeObjectURL(objectUrl);
+        return true;
     }
 
     // Sessions opérateurs (pour cohérence et sécurité côté backend)
@@ -736,9 +869,19 @@ class ApiService {
         return this.post('/operators/start', { operatorId, lancementCode, codeOperation });
     }
 
-    async pauseOperation(operatorId, lancementCode, { codeOperation } = {}) {
+    async pauseOperation(operatorId, lancementCode, { codeOperation, pauseTypeCode } = {}) {
         await this.ensureOperatorContext(operatorId);
-        return this.post('/operators/pause', { operatorId, lancementCode, codeOperation });
+        return this.post('/operators/pause', { operatorId, lancementCode, codeOperation, pauseTypeCode });
+    }
+
+    async getPauseTypes() {
+        return this.get('/operators/pause-types');
+    }
+
+    async getOperatorCounters(operatorCode, weekStart = null) {
+        const params = {};
+        if (weekStart) params.weekStart = weekStart;
+        return this.get(`/operators/${encodeURIComponent(operatorCode)}/counters`, params);
     }
 
     async resumeOperation(operatorId, lancementCode, { codeOperation } = {}) {
