@@ -14,7 +14,7 @@ const { generateRequestId } = require('../middleware/audit');
 const OperationStopService = require('../services/OperationStopService');
 const LancementTempsRestantService = require('../services/LancementTempsRestantService');
 const PauseTypeService = require('../services/PauseTypeService');
-const { PAUSE_TYPES, normalizePauseTypeCode } = require('../constants/pauseTypes');
+const { PAUSE_TYPES, normalizePauseTypeCode, isPauseTypesEnabled } = require('../constants/pauseTypes');
 
 let _historiqueHasPauseTypeColumn = null;
 async function historiqueHasPauseTypeColumn() {
@@ -32,7 +32,7 @@ async function historiqueHasPauseTypeColumn() {
 
 // GET /api/operators/pause-types — catalogue des boutons de pause
 router.get('/pause-types', (_req, res) => {
-    res.json({ success: true, data: PAUSE_TYPES });
+    res.json({ success: true, enabled: isPauseTypesEnabled(), data: PAUSE_TYPES });
 });
 
 // GET /api/operators/:operatorCode/counters — compteurs semaine (jour par jour)
@@ -1215,8 +1215,9 @@ router.post('/start', validateOperatorSession, logSecurityAction, async (req, re
 router.post('/pause', validateOperatorSession, logSecurityAction, async (req, res) => {
     try {
         const { operatorId, lancementCode, codeOperation, pauseTypeCode } = req.body;
-        const normalizedPauseType = normalizePauseTypeCode(pauseTypeCode);
-        if (!normalizedPauseType) {
+        const pauseTypesEnabled = isPauseTypesEnabled();
+        const normalizedPauseType = pauseTypesEnabled ? normalizePauseTypeCode(pauseTypeCode) : null;
+        if (pauseTypesEnabled && !normalizedPauseType) {
             return res.status(400).json({
                 success: false,
                 error: 'PAUSE_TYPE_REQUIRED',
@@ -1293,7 +1294,7 @@ router.post('/pause', validateOperatorSession, logSecurityAction, async (req, re
         // Obtenir l'heure française actuelle
         const { time: currentTime, date: currentDate } = TimeUtils.getCurrentDateTime();
         
-        TimeUtils.log(`⏸️ Pause ${normalizedPauseType} lancement ${lancementCode} par opérateur ${operatorId} à ${currentTime}`);
+        TimeUtils.log(`⏸️ Pause ${normalizedPauseType || ''} lancement ${lancementCode} par opérateur ${operatorId} à ${currentTime}`);
 
         // phase/codeRubrique déjà résolus plus haut
         await PauseTypeService.ensureHistoriquePauseTypeColumn();
@@ -1332,22 +1333,26 @@ router.post('/pause', validateOperatorSession, logSecurityAction, async (req, re
             }
         );
 
-        let pauseTypeMeta = { code: normalizedPauseType, label: PauseTypeService.getPauseTypeLabel(normalizedPauseType) };
-        try {
-            pauseTypeMeta = await PauseTypeService.savePauseType({
-                requestId,
-                operatorCode: operatorId,
-                lancementCode,
-                pauseTypeCode: normalizedPauseType,
-                dateCreation: currentDate,
-                heureDebut: currentTime
-            });
-        } catch (e) {
-            // Journal secondaire — le type est déjà sur ABHISTORIQUE_OPERATEURS
-            console.warn('⚠️ Journal AB_PAUSE_TYPE_LOG échoué (non bloquant):', e.message);
+        let pauseTypeMeta = normalizedPauseType
+            ? { code: normalizedPauseType, label: PauseTypeService.getPauseTypeLabel(normalizedPauseType) }
+            : null;
+        if (normalizedPauseType) {
+            try {
+                pauseTypeMeta = await PauseTypeService.savePauseType({
+                    requestId,
+                    operatorCode: operatorId,
+                    lancementCode,
+                    pauseTypeCode: normalizedPauseType,
+                    dateCreation: currentDate,
+                    heureDebut: currentTime
+                });
+            } catch (e) {
+                // Journal secondaire — le type est déjà sur ABHISTORIQUE_OPERATEURS
+                console.warn('⚠️ Journal AB_PAUSE_TYPE_LOG échoué (non bloquant):', e.message);
+            }
         }
         
-        console.log(` Lancement ${lancementCode} mis en pause (${normalizedPauseType}) par opérateur ${operatorId}`);
+        console.log(` Lancement ${lancementCode} mis en pause${normalizedPauseType ? ` (${normalizedPauseType})` : ''} par opérateur ${operatorId}`);
         
         res.json({
             success: true,
@@ -1356,8 +1361,8 @@ router.post('/pause', validateOperatorSession, logSecurityAction, async (req, re
                 operatorId,
                 lancementCode,
                 action: 'PAUSE',
-                pauseTypeCode: pauseTypeMeta.code,
-                pauseTypeLabel: pauseTypeMeta.label,
+                pauseTypeCode: pauseTypeMeta?.code || null,
+                pauseTypeLabel: pauseTypeMeta?.label || null,
                 timestamp: new Date().toISOString()
             }
         });

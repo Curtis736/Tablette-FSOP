@@ -19,6 +19,11 @@ const PAUSE_TYPES = [
 
 const PAUSE_TYPE_BY_CODE = Object.fromEntries(PAUSE_TYPES.map((t) => [t.code, t]));
 
+/** Choix du type de pause sur tablette : coupé tant que ENABLE_PAUSE_TYPES n'est pas à true. */
+function isPauseTypesEnabled() {
+    return String(process.env.ENABLE_PAUSE_TYPES || '').trim().toLowerCase() === 'true';
+}
+
 function isValidPauseTypeCode(code) {
     return Boolean(normalizePauseTypeCode(code));
 }
@@ -52,6 +57,7 @@ module.exports = {
     DEJ_MIN_MINUTES,
     /** @deprecated alias — préférer DEJ_MIN_MINUTES */
     DEJ_FIXED_MINUTES: DEJ_MIN_MINUTES,
+    isPauseTypesEnabled,
     isValidPauseTypeCode,
     normalizePauseTypeCode,
     getPauseTypeLabel,

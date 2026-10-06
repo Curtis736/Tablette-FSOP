@@ -2266,8 +2266,8 @@ class OperateurInterface {
     openPauseTypePanel() {
         if (!this.currentLancement) return;
         if (!this.canPerformAction()) return;
-        if (!this.pauseTypePanel || !this.pauseTypeGrid) {
-            this.handlePause();
+        if (!this.pauseTypesEnabled || !this.pauseTypePanel || !this.pauseTypeGrid) {
+            this.handlePause(null, null, { skipTypeChoice: true });
             return;
         }
         this.renderPauseTypeButtons();
@@ -2305,9 +2305,11 @@ class OperateurInterface {
     async loadPauseTypes() {
         try {
             const res = await this.apiService.getPauseTypes();
+            this.pauseTypesEnabled = res?.enabled === true;
             this.pauseTypes = res?.data || res || [];
         } catch (e) {
             console.warn('Catalogue pauses indisponible:', e.message);
+            this.pauseTypesEnabled = false;
             this.pauseTypes = [];
         }
     }
@@ -2487,12 +2489,12 @@ class OperateurInterface {
         btn.classList.toggle('is-done', remaining <= 0);
     }
 
-    async handlePause(pauseTypeCode = null, pauseTypeLabel = null) {
+    async handlePause(pauseTypeCode = null, pauseTypeLabel = null, { skipTypeChoice = false } = {}) {
         if (!this.currentLancement) return;
         
         if (!this.canPerformAction()) return;
 
-        if (!pauseTypeCode) {
+        if (!pauseTypeCode && !skipTypeChoice) {
             this.openPauseTypePanel();
             return;
         }
@@ -2505,7 +2507,7 @@ class OperateurInterface {
                 this.currentLancement.CodeLancement,
                 {
                     ...(selectedStep ? { codeOperation: selectedStep } : {}),
-                    pauseTypeCode
+                    ...(pauseTypeCode ? { pauseTypeCode } : {})
                 }
             );
             
