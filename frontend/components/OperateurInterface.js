@@ -2265,11 +2265,12 @@ class OperateurInterface {
 
     openPauseTypePanel() {
         if (!this.currentLancement) return;
-        if (!this.canPerformAction()) return;
         if (!this.pauseTypesEnabled || !this.pauseTypePanel || !this.pauseTypeGrid) {
+            // handlePause fait lui-même le contrôle anti double-clic
             this.handlePause(null, null, { skipTypeChoice: true });
             return;
         }
+        if (!this.canPerformAction()) return;
         this.renderPauseTypeButtons();
         this.pauseTypePanel.hidden = false;
     }
