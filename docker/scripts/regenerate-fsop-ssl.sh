@@ -16,6 +16,14 @@ TABLET_SSL="$SSL_RUNTIME/tablet"
 
 cd "$DOCKER_DIR"
 
+if [ -d "$SSL_RUNTIME/acme" ] && [ "${FORCE_SELFSIGNED:-0}" != "1" ]; then
+    echo "ERREUR: un certificat Let's Encrypt est en place (docker/ssl-runtime/acme)." >&2
+    echo "  Ce script l'écraserait par un certificat auto-signé." >&2
+    echo "  Renouvellement : ./scripts/letsencrypt-fsop.sh renew" >&2
+    echo "  Forcer quand même : FORCE_SELFSIGNED=1 $0" >&2
+    exit 1
+fi
+
 # Lire uniquement SSL_EXTRA_IP (ne pas sourcer tout le .env : chemins avec espaces, etc.)
 read_env_ssl_ip() {
     if [ -f ".env" ]; then
