@@ -331,6 +331,8 @@ class AdminPage {
             if (!match) continue;
             seg.TempsId = match.TempsId ?? match.tempsId;
             if (match.StatutTraitement != null) seg.StatutTraitement = match.StatutTraitement;
+            if (match.TotalDuration != null) seg.TotalDuration = match.TotalDuration;
+            if (match.PauseDuration != null) seg.PauseDuration = match.PauseDuration;
             if (match.ProductiveDuration != null) seg.ProductiveDuration = match.ProductiveDuration;
             seg._isUnconsolidated = false;
         }
@@ -2893,7 +2895,7 @@ class AdminPage {
         }
         
         // Vérifier les durées pour les opérations consolidées
-        if (operation.TempsId && !operation._isUnconsolidated) {
+        if (operation.TempsId && !operation._isUnconsolidated && operation.TotalDuration != null) {
             const totalDuration = operation.TotalDuration || 0;
             const pauseDuration = operation.PauseDuration || 0;
             const productiveDuration = operation.ProductiveDuration || 0;
