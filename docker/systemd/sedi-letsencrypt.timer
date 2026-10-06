@@ -1,0 +1,11 @@
+[Unit]
+Description=FSOP renouvellement Let's Encrypt quotidien à 03:15
+
+[Timer]
+OnCalendar=*-*-* 03:15:00
+RandomizedDelaySec=30min
+Persistent=true
+Unit=sedi-letsencrypt.service
+
+[Install]
+WantedBy=timers.target

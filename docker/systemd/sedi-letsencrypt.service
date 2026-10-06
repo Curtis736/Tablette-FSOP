@@ -1,0 +1,8 @@
+[Unit]
+Description=FSOP renouvellement certificat Let's Encrypt (fsop.sedi-ati.com)
+After=docker.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/home/Tablette-FSOP/docker/scripts/letsencrypt-fsop.sh renew
