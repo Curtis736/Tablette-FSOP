@@ -700,26 +700,35 @@ class MonitoringService {
      */
     static async setOnHold(tempsId) {
         try {
+            const id = Number.parseInt(tempsId, 10);
+            if (!Number.isFinite(id) || id <= 0) {
+                return { success: false, error: 'TempsId invalide' };
+            }
             const updateQuery = `
                 UPDATE [SEDI_APP_INDEPENDANTE].[dbo].[ABTEMPS_OPERATEURS]
                 SET StatutTraitement = 'A'
                 WHERE TempsId = @tempsId
+                  AND (
+                        StatutTraitement IS NULL
+                     OR StatutTraitement = 'O'
+                     OR StatutTraitement = 'A'
+                  )
             `;
             
-            const result = await executeNonQuery(updateQuery, { tempsId });
+            const result = await executeNonQuery(updateQuery, { tempsId: id });
             
             if (result.rowsAffected > 0) {
-                console.log(`✅ Enregistrement ${tempsId} mis en attente`);
+                console.log(`✅ Enregistrement ${id} mis en attente`);
                 return {
                     success: true,
                     message: 'Enregistrement mis en attente',
-                    tempsId: tempsId,
+                    tempsId: id,
                     statutTraitement: 'A'
                 };
             } else {
                 return {
                     success: false,
-                    error: 'Enregistrement non trouvé'
+                    error: 'Enregistrement non trouvé ou déjà transmis/écarté'
                 };
             }
             
@@ -730,6 +739,97 @@ class MonitoringService {
                 error: error.message
             };
         }
+    }
+
+    /**
+     * Débloquer une ligne en attente (A → NULL) pour la rendre à nouveau transférable.
+     */
+    static async releaseHold(tempsId) {
+        try {
+            const id = Number.parseInt(tempsId, 10);
+            if (!Number.isFinite(id) || id <= 0) {
+                return { success: false, error: 'TempsId invalide' };
+            }
+            const updateQuery = `
+                UPDATE [SEDI_APP_INDEPENDANTE].[dbo].[ABTEMPS_OPERATEURS]
+                SET StatutTraitement = NULL
+                WHERE TempsId = @tempsId
+                  AND StatutTraitement = 'A'
+            `;
+            const result = await executeNonQuery(updateQuery, { tempsId: id });
+            if (result.rowsAffected > 0) {
+                console.log(`✅ Enregistrement ${id} débloqué (A → NULL)`);
+                return {
+                    success: true,
+                    message: 'Enregistrement débloqué',
+                    tempsId: id,
+                    statutTraitement: null
+                };
+            }
+            return {
+                success: false,
+                error: 'Enregistrement non trouvé ou pas en attente (A)'
+            };
+        } catch (error) {
+            console.error('❌ Erreur lors du déblocage:', error);
+            return { success: false, error: error.message };
+        }
+    }
+
+    /**
+     * Mettre plusieurs enregistrements en attente (StatutTraitement = 'A').
+     */
+    static async setOnHoldBatch(tempsIds) {
+        const ids = [...new Set(
+            (Array.isArray(tempsIds) ? tempsIds : [])
+                .map((x) => Number.parseInt(x, 10))
+                .filter((n) => Number.isFinite(n) && n > 0)
+        )];
+        if (ids.length === 0) {
+            return { success: false, error: 'Liste d\'IDs invalide', heldIds: [], failed: [] };
+        }
+        const heldIds = [];
+        const failed = [];
+        for (const id of ids) {
+            const r = await this.setOnHold(id);
+            if (r.success) heldIds.push(id);
+            else failed.push({ tempsId: id, error: r.error });
+        }
+        return {
+            success: heldIds.length > 0,
+            message: `${heldIds.length} ligne(s) bloquée(s)`,
+            heldIds,
+            failed,
+            count: heldIds.length
+        };
+    }
+
+    /**
+     * Débloquer plusieurs enregistrements (A → NULL).
+     */
+    static async releaseHoldBatch(tempsIds) {
+        const ids = [...new Set(
+            (Array.isArray(tempsIds) ? tempsIds : [])
+                .map((x) => Number.parseInt(x, 10))
+                .filter((n) => Number.isFinite(n) && n > 0)
+        )];
+        if (ids.length === 0) {
+            return { success: false, error: 'Liste d\'IDs invalide', releasedIds: [], failed: [] };
+        }
+        const releasedIds = [];
+        const failed = [];
+        for (const id of ids) {
+            const r = await this.releaseHold(id);
+            if (r.success) releasedIds.push(id);
+            else failed.push({ tempsId: id, error: r.error });
+        }
+        return {
+            success: releasedIds.length > 0,
+            message: `${releasedIds.length} ligne(s) débloquée(s)`,
+            releasedIds,
+            failed,
+            count: releasedIds.length
+        };
     }
     
     /**
@@ -1319,7 +1419,8 @@ class MonitoringService {
 
     /**
      * Clôture « dashboard » : pour les journées **strictement avant aujourd'hui**, valider les temps terminés
-     * encore en NULL / A. En mode SILOG planifié, ne pas marquer 'T' ici (SEDI_ETDIFF ~17h15 le fait).
+     * encore en NULL. Les lignes bloquées (`A`) restent hors auto (correction / transfert manuel le lendemain).
+     * En mode SILOG planifié, ne pas marquer 'T' ici (SEDI_ETDIFF ~17h15 le fait).
      */
     static async runMidnightDashboardTransmit() {
         const { executeNonQuery, executeQuery } = require('../config/database');
@@ -1337,7 +1438,6 @@ class MonitoringService {
                   AND t.ProductiveDuration > 0
                   AND (
                       t.StatutTraitement IS NULL
-                      OR t.StatutTraitement = 'A'
                       OR t.StatutTraitement = 'O'
                   )
                 `
@@ -1356,12 +1456,7 @@ class MonitoringService {
                   AND t.Phase IS NOT NULL
                   AND t.CodeRubrique IS NOT NULL
                   AND ${lctcClause}
-                  AND (
-                      t.StatutTraitement IS NULL
-                      OR t.StatutTraitement = 'A'
-                      OR (t.StatutTraitement IS NOT NULL AND t.StatutTraitement <> 'O' AND t.StatutTraitement <> 'T'
-                          AND t.StatutTraitement <> 'M' AND t.StatutTraitement <> 'D')
-                  )
+                  AND t.StatutTraitement IS NULL
             `;
             const r1 = await executeNonQuery(validatePending);
 

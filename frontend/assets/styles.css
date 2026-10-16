@@ -2130,6 +2130,89 @@ tr:hover {
     color: #fff;
 }
 
+/* Ligne bloquée / en attente correction (StatutTraitement = A) */
+#operationsTable tbody tr.row-on-hold {
+    background-color: #fff7ed !important;
+}
+
+#operationsTable tbody tr.row-on-hold:hover {
+    background-color: #ffedd5 !important;
+}
+
+.status-badge.status-A,
+#operationsTable tbody tr.row-on-hold .status-badge.status-A {
+    background-color: #c2410c;
+    color: #fff;
+}
+
+.actions-cell .btn-hold,
+.actions-cell .btn-release-hold,
+.actions-cell .btn-transmit-one {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 44px;
+    min-height: 44px;
+    margin: 0 4px;
+    padding: 12px 16px;
+    border: none;
+    border-radius: 8px;
+    cursor: pointer;
+    font-size: 18px;
+    background: none;
+    transition: all 0.2s ease;
+}
+
+.actions-cell .btn-hold {
+    color: #ea580c;
+}
+
+.actions-cell .btn-hold:hover {
+    background-color: #fff7ed;
+    color: #c2410c;
+}
+
+.actions-cell .btn-release-hold {
+    color: #16a34a;
+}
+
+.actions-cell .btn-release-hold:hover {
+    background-color: #dcfce7;
+    color: #15803d;
+}
+
+.actions-cell .btn-transmit-one {
+    color: #2563eb;
+}
+
+.actions-cell .btn-transmit-one:hover {
+    background-color: #dbeafe;
+    color: #1d4ed8;
+}
+
+.actions-cell .btn-hold:active,
+.actions-cell .btn-release-hold:active,
+.actions-cell .btn-transmit-one:active {
+    transform: scale(0.95);
+}
+
+.actions-cell .btn-hold-disabled {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 44px;
+    min-height: 44px;
+    margin: 0 4px;
+    padding: 12px 16px;
+    border: none;
+    border-radius: 8px;
+    font-size: 18px;
+    color: #94a3b8;
+    background: none;
+    cursor: not-allowed;
+    opacity: 0.55;
+}
+
 /* Ligne déjà transmise à SILOG : indicateur verrouillé (pas d'action possible) */
 .actions-cell .transmitted-lock {
     display: inline-flex;

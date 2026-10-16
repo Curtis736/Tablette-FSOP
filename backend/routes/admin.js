@@ -4665,7 +4665,7 @@ router.post('/monitoring/:tempsId/on-hold', async (req, res) => {
     try {
         const { tempsId } = req.params;
         
-        const result = await MonitoringService.setOnHold(Number.parseInt(tempsId));
+        const result = await MonitoringService.setOnHold(Number.parseInt(tempsId, 10));
         
         if (result.success) {
             res.json({
@@ -4685,6 +4685,68 @@ router.post('/monitoring/:tempsId/on-hold', async (req, res) => {
         res.status(500).json({
             success: false,
             error: 'Erreur serveur lors de la mise en attente'
+        });
+    }
+});
+
+// POST /api/admin/monitoring/:tempsId/release-hold - Débloquer (A → NULL)
+router.post('/monitoring/:tempsId/release-hold', async (req, res) => {
+    try {
+        const { tempsId } = req.params;
+        const result = await MonitoringService.releaseHold(Number.parseInt(tempsId, 10));
+        if (result.success) {
+            return res.json({ success: true, message: result.message, data: result });
+        }
+        return res.status(400).json({ success: false, error: result.error });
+    } catch (error) {
+        console.error('❌ Erreur lors du déblocage:', error);
+        return res.status(500).json({
+            success: false,
+            error: 'Erreur serveur lors du déblocage'
+        });
+    }
+});
+
+// POST /api/admin/monitoring/on-hold-batch - Bloquer plusieurs lignes (A)
+router.post('/monitoring/on-hold-batch', async (req, res) => {
+    try {
+        const { tempsIds } = req.body || {};
+        const result = await MonitoringService.setOnHoldBatch(tempsIds);
+        if (result.success) {
+            return res.json({ success: true, message: result.message, data: result });
+        }
+        return res.status(400).json({
+            success: false,
+            error: result.error || 'Aucune ligne bloquée',
+            data: result
+        });
+    } catch (error) {
+        console.error('❌ Erreur on-hold-batch:', error);
+        return res.status(500).json({
+            success: false,
+            error: 'Erreur serveur lors du blocage batch'
+        });
+    }
+});
+
+// POST /api/admin/monitoring/release-hold-batch - Débloquer plusieurs lignes
+router.post('/monitoring/release-hold-batch', async (req, res) => {
+    try {
+        const { tempsIds } = req.body || {};
+        const result = await MonitoringService.releaseHoldBatch(tempsIds);
+        if (result.success) {
+            return res.json({ success: true, message: result.message, data: result });
+        }
+        return res.status(400).json({
+            success: false,
+            error: result.error || 'Aucune ligne débloquée',
+            data: result
+        });
+    } catch (error) {
+        console.error('❌ Erreur release-hold-batch:', error);
+        return res.status(500).json({
+            success: false,
+            error: 'Erreur serveur lors du déblocage batch'
         });
     }
 });

@@ -417,6 +417,7 @@ class AdminPage {
             transferModalTableBody: 'transferModalTableBody',
             closeTransferModalBtn: 'closeTransferModalBtn',
             transferSelectedConfirmBtn: 'transferSelectedConfirmBtn',
+            transferHoldSelectedBtn: 'transferHoldSelectedBtn',
             transferSelectAll: 'transferSelectAll'
         };
         
@@ -472,6 +473,11 @@ class AdminPage {
                 const transferSelectedConfirmBtn = this.domCache.get('transferSelectedConfirmBtn');
                 if (transferSelectedConfirmBtn) {
                     transferSelectedConfirmBtn.addEventListener('click', () => this.confirmTransferFromModal());
+                }
+
+                const transferHoldSelectedBtn = this.domCache.get('transferHoldSelectedBtn');
+                if (transferHoldSelectedBtn) {
+                    transferHoldSelectedBtn.addEventListener('click', () => this.holdSelectedFromTransferModal());
                 }
 
                 const transferSelectAll = this.domCache.get('transferSelectAll');
@@ -569,6 +575,25 @@ class AdminPage {
                             } else {
                                 await this.deleteMonitoringRecord(tempsId || id);
                             }
+                        } else if (e.target.closest('.btn-hold')) {
+                            e.preventDefault();
+                            e.stopPropagation();
+                            const btn = e.target.closest('.btn-hold');
+                            const tempsId = btn.dataset.tempsId ? Number.parseInt(btn.dataset.tempsId, 10) : null;
+                            if (tempsId) await this.holdMonitoringRecord(tempsId);
+                        } else if (e.target.closest('.btn-release-hold')) {
+                            e.preventDefault();
+                            e.stopPropagation();
+                            const btn = e.target.closest('.btn-release-hold');
+                            const tempsId = btn.dataset.tempsId ? Number.parseInt(btn.dataset.tempsId, 10) : null;
+                            if (tempsId) await this.releaseHoldMonitoringRecord(tempsId);
+                        } else if (e.target.closest('.btn-transmit-one')) {
+                            e.preventDefault();
+                            e.stopPropagation();
+                            const btn = e.target.closest('.btn-transmit-one');
+                            const tempsId = btn.dataset.tempsId ? Number.parseInt(btn.dataset.tempsId, 10) : null;
+                            const wasHold = btn.dataset.onHold === 'true';
+                            if (tempsId) await this.transmitSingleMonitoringRecord(tempsId, { wasHold });
                         } else if (e.target.closest('.btn-edit')) {
                             e.preventDefault();
                             e.stopPropagation();
@@ -2005,7 +2030,9 @@ class AdminPage {
             
             const row = createElement('tr');
             const isPauseRow = operation._isPauseRow === true || operation.type === 'pause';
-            const isTransmitted = String(operation.StatutTraitement || '').toUpperCase() === 'T';
+            const stTrait = String(operation.StatutTraitement || '').toUpperCase().trim();
+            const isTransmitted = stTrait === 'T';
+            const isOnHold = stTrait === 'A';
 
             if (isPauseRow) {
                 row.classList.add('pause-row');
@@ -2013,6 +2040,10 @@ class AdminPage {
             if (isTransmitted) {
                 row.classList.add('row-transmitted');
                 row.title = 'Transmis à SILOG (StatutTraitement = T)';
+            }
+            if (isOnHold) {
+                row.classList.add('row-on-hold');
+                row.title = 'Bloquée / en attente (StatutTraitement = A) — hors transfert';
             }
             
             // Identifiants (ne pas confondre):
@@ -2036,6 +2067,9 @@ class AdminPage {
             if (isTransmitted) {
                 statutCode = 'T';
                 statutLabel = STATUS_LABELS[STATUS_CODES.TRANSMIS] || 'TRANSMIS';
+            } else if (isOnHold) {
+                statutCode = 'A';
+                statutLabel = this.getMonitoringStatusText('A');
             }
             // Sinon statut opération (Status/StatusCode)
             else if (operation.StatusCode || operation.statusCode || operation.Status || operation.status) {
@@ -2155,6 +2189,49 @@ class AdminPage {
             });
             cell9.appendChild(editBtn);
             cell9.appendChild(deleteBtn);
+            if (tempsId && !isUnconsolidated) {
+                if (isOnHold) {
+                    const releaseBtn = createButton({
+                        icon: 'fas fa-lock-open',
+                        className: 'btn-release-hold',
+                        title: 'Débloquer (remettre transférable, sans envoyer)',
+                        dataset: { tempsId: String(tempsId) }
+                    });
+                    cell9.appendChild(releaseBtn);
+                    const transmitOneBtn = createButton({
+                        icon: 'fas fa-paper-plane',
+                        className: 'btn-transmit-one',
+                        title: 'Transférer uniquement cette ligne (débloque + envoie vers SILOG)',
+                        dataset: { tempsId: String(tempsId), onHold: 'true' }
+                    });
+                    cell9.appendChild(transmitOneBtn);
+                } else {
+                    const holdBtn = createButton({
+                        icon: 'fas fa-lock',
+                        className: 'btn-hold',
+                        title: 'Bloquer (hors auto 20h / transfert, le temps de corriger)',
+                        dataset: { tempsId: String(tempsId) }
+                    });
+                    cell9.appendChild(holdBtn);
+                    if (this.isOperationTerminated(operation) && stTrait !== 'T' && stTrait !== 'D') {
+                        const transmitOneBtn = createButton({
+                            icon: 'fas fa-paper-plane',
+                            className: 'btn-transmit-one',
+                            title: 'Transférer uniquement cette ligne vers SILOG',
+                            dataset: { tempsId: String(tempsId), onHold: 'false' }
+                        });
+                        cell9.appendChild(transmitOneBtn);
+                    }
+                }
+            } else if (!isPauseRow && this.isOperationTerminated(operation)) {
+                const holdHint = createButton({
+                    icon: 'fas fa-lock',
+                    className: 'btn-hold-disabled',
+                    title: 'Pas de cadenas : ligne non consolidée (pas de TempsId). Lance « Transfert » une fois, ou attends la consolidation auto, puis recharge.'
+                });
+                holdHint.disabled = true;
+                cell9.appendChild(holdHint);
+            }
             }
             row.appendChild(cell9);
             
@@ -2175,6 +2252,110 @@ class AdminPage {
             'D': 'ÉCARTÉ'
         };
         return map[code] || code;
+    }
+
+    async holdMonitoringRecord(tempsId) {
+        const id = Number.parseInt(tempsId, 10);
+        if (!Number.isFinite(id) || id <= 0) {
+            this.notificationManager.warning('TempsId manquant');
+            return;
+        }
+        const ok = confirm(
+            `Bloquer la ligne TempsId ${id} ?\n` +
+            `Elle restera hors auto 20h et hors transfert global.\n` +
+            `Tu pourras la corriger le lendemain puis la transférer seule.`
+        );
+        if (!ok) return;
+        try {
+            await this.apiService.onHoldMonitoringTemps(id);
+            this.notificationManager.success(`Ligne ${id} bloquée`);
+            await this.loadData();
+        } catch (error) {
+            this.errorHandler.handle(error, 'holdMonitoringRecord', error.message || 'Erreur blocage');
+        }
+    }
+
+    async releaseHoldMonitoringRecord(tempsId) {
+        const id = Number.parseInt(tempsId, 10);
+        if (!Number.isFinite(id) || id <= 0) {
+            this.notificationManager.warning('TempsId manquant');
+            return;
+        }
+        try {
+            await this.apiService.releaseHoldMonitoringTemps(id);
+            this.notificationManager.success(`Ligne ${id} débloquée`);
+            await this.loadData();
+        } catch (error) {
+            this.errorHandler.handle(error, 'releaseHoldMonitoringRecord', error.message || 'Erreur déblocage');
+        }
+    }
+
+    /**
+     * Transfert d'une seule ligne (après correction d'un blocage).
+     * Si la ligne est en A : débloque puis valide/envoie uniquement ce TempsId.
+     */
+    async transmitSingleMonitoringRecord(tempsId, { wasHold = false } = {}) {
+        const id = Number.parseInt(tempsId, 10);
+        if (!Number.isFinite(id) || id <= 0) {
+            this.notificationManager.warning('TempsId manquant');
+            return;
+        }
+        const ok = confirm(
+            wasHold
+                ? `Transférer uniquement la ligne TempsId ${id} ?\nElle sera débloquée puis envoyée vers SILOG (les autres lignes ne sont pas touchées).`
+                : `Transférer uniquement la ligne TempsId ${id} vers SILOG ?`
+        );
+        if (!ok) return;
+        try {
+            if (wasHold) {
+                await this.apiService.releaseHoldMonitoringTemps(id);
+            }
+            const result = await this.apiService.validateAndTransmitMonitoringBatch([id], {
+                triggerEdiJob: true,
+                adminMarkTransmitted: false
+            });
+            if (result?.success) {
+                this.notificationManager.success(
+                    this._formatTransferResultMessage(result, 1) || `Ligne ${id} transférée`
+                );
+                if (result.ediJob?.success === false) {
+                    this.notificationManager.warning(
+                        result.ediJob.error || result.ediJob.message || 'EDI_JOB a échoué — ligne en O'
+                    );
+                }
+                await this.loadData(false);
+            } else {
+                this.notificationManager.error(result?.error || `Échec transfert ligne ${id}`);
+            }
+        } catch (error) {
+            this.errorHandler.handle(error, 'transmitSingleMonitoringRecord', error.message || 'Erreur transfert ligne');
+        }
+    }
+
+    async holdSelectedFromTransferModal() {
+        const ids = Array.from(this.transferSelectionIds || [])
+            .map((x) => Number.parseInt(x, 10))
+            .filter((n) => Number.isFinite(n) && n > 0);
+        if (ids.length === 0) {
+            this.notificationManager.warning('Aucune ligne sélectionnée à bloquer');
+            return;
+        }
+        const ok = confirm(
+            `Bloquer ${ids.length} ligne(s) ?\n\n` +
+            `Ces enregistrements passeront en « En attente » (A) et ne seront pas basculés vers SILOG.\n` +
+            `Vous pourrez les débloquer après correction.`
+        );
+        if (!ok) return;
+        try {
+            const result = await this.apiService.onHoldMonitoringBatch(ids);
+            const data = result?.data || result;
+            const count = data?.count ?? data?.heldIds?.length ?? ids.length;
+            this.notificationManager.success(`${count} ligne(s) bloquée(s)`);
+            this.hideTransferModal();
+            await this.loadData();
+        } catch (error) {
+            this.errorHandler.handle(error, 'holdSelectedFromTransferModal', error.message || 'Erreur lors du blocage');
+        }
     }
 
     // ===== Helper: déterminer si une opération est Terminé (même logique que dans updateOperationsTable) =====
