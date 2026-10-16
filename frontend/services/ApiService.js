@@ -1010,6 +1010,18 @@ class ApiService {
         return this.post(`/admin/monitoring/${tempsId}/on-hold`, {});
     }
 
+    async releaseHoldMonitoringTemps(tempsId) {
+        return this.post(`/admin/monitoring/${tempsId}/release-hold`, {});
+    }
+
+    async onHoldMonitoringBatch(tempsIds) {
+        return this.post('/admin/monitoring/on-hold-batch', { tempsIds });
+    }
+
+    async releaseHoldMonitoringBatch(tempsIds) {
+        return this.post('/admin/monitoring/release-hold-batch', { tempsIds });
+    }
+
     async transmitMonitoringTemps(tempsId, { triggerEdiJob = false, codeTache = null } = {}) {
         return this.post(`/admin/monitoring/${tempsId}/transmit`, { triggerEdiJob, codeTache });
     }
