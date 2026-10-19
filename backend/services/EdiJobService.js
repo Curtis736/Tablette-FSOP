@@ -28,6 +28,25 @@ class EdiJobService {
         return process.env.SILOG_DAILY_GUARD_PATH || '/app/logs/edi-job-last-run.json';
     }
 
+    static _lastStatusPath() {
+        if (process.env.EDI_LAST_STATUS_PATH) return process.env.EDI_LAST_STATUS_PATH;
+        return path.join(path.dirname(this._dailyGuardPath()), 'edi-last-status.json');
+    }
+
+    static async _writeLastStatus(payload) {
+        const target = this._lastStatusPath();
+        try {
+            await fs.mkdir(path.dirname(target), { recursive: true });
+        } catch (_) {
+            // ignore
+        }
+        await fs.writeFile(
+            target,
+            JSON.stringify({ at: new Date().toISOString(), ...payload }, null, 2),
+            'utf8'
+        );
+    }
+
     static _todayKey() {
         return new Date().toISOString().slice(0, 10);
     }
@@ -336,6 +355,12 @@ class EdiJobService {
             
             if (success) {
                 await this._recordRun();
+                await this._writeLastStatus({
+                    ok: true,
+                    codeTache: config.codeTache,
+                    exitCode,
+                    elapsedMs
+                }).catch(() => {});
                 this._log('INFO', 'Exécution terminée avec succès', {
                     codeTache: config.codeTache,
                     exitCode,
@@ -367,6 +392,14 @@ class EdiJobService {
                 stdout: String(stdout || '').trim().slice(0, 500),
                 stderr: String(stderr || '').trim().slice(0, 500)
             });
+            await this._writeLastStatus({
+                ok: false,
+                error: 'EDI_JOB_FAILED',
+                message: `exitCode=${exitCode}`,
+                codeTache: config.codeTache,
+                exitCode,
+                elapsedMs
+            }).catch(() => {});
             return {
                 success: false,
                 error: 'EDI_JOB_FAILED',
@@ -402,6 +435,14 @@ class EdiJobService {
                 details: errorDetails
             });
 
+            await this._writeLastStatus({
+                ok: false,
+                error: errorMessage,
+                details: errorDetails,
+                codeTache: codeTache || null,
+                elapsedMs
+            }).catch(() => {});
+
             return {
                 success: false,
                 error: errorMessage,
@@ -434,6 +475,17 @@ class EdiJobService {
             });
             
             const result = await this.executeEdiJob(codeTache, runOptions);
+
+            // Statut pour le watchdog (couvre aussi les early-return success:false)
+            if (!result.skipped) {
+                await this._writeLastStatus({
+                    ok: Boolean(result.success),
+                    error: result.success ? null : (result.error || result.message || 'EDI_JOB_FAILED'),
+                    details: result.details || null,
+                    codeTache,
+                    exitCode: result.exitCode ?? null
+                }).catch(() => {});
+            }
             
             if (result.success && !result.skipped) {
                 this._log('INFO', 'Lot transmis traité avec succès', {

@@ -142,6 +142,8 @@ class AdminPage {
         this.selectedOperatorCode = ''; // persiste le filtre opérateur entre refresh
         this.transferSelectionIds = new Set(); // sélection dans la modale de transfert (TempsId)
         this.selectedTempsIds = new Set(); // sélection de lignes dans le tableau principal (TempsId)
+        this.aiAssistEnabled = false;
+        this._aiAssistLoading = false;
         
         // Flags pour éviter les appels simultanés
         this._isTransferring = false;
@@ -171,6 +173,16 @@ class AdminPage {
         this.initializeElements();
         this.setupEventListeners();
         this.startAutoSave();
+        this.refreshAiAssistStatus();
+    }
+
+    async refreshAiAssistStatus() {
+        try {
+            const res = await this.apiService.getAiAssistStatus();
+            this.aiAssistEnabled = Boolean(res?.data?.enabled && res?.data?.hasApiKey);
+        } catch {
+            this.aiAssistEnabled = false;
+        }
     }
 
     /**
@@ -529,6 +541,25 @@ class AdminPage {
                     }, ADMIN_CONFIG.SEARCH_DEBOUNCE_DELAY);
                     searchFilter.addEventListener('input', debouncedLoadData);
                 }
+
+                const operatorCodeSearch = this.domCache.get('operatorCodeSearch');
+                if (operatorCodeSearch) {
+                    operatorCodeSearch.addEventListener('input', () => {
+                        this.currentPage = 1;
+                        const term = operatorCodeSearch.value.trim();
+                        const hadFetchedOperator = Boolean(this._fetchedOperatorCode);
+                        if (term && (hadFetchedOperator || this.selectedOperatorCode || this.operatorSelect?.value)) {
+                            this.selectedOperatorCode = '';
+                            if (this.operatorSelect) this.operatorSelect.value = '';
+                            if (hadFetchedOperator) {
+                                this.loadData();
+                                return;
+                            }
+                        }
+                        this.updateOperationsTable();
+                        this.updatePaginationInfo();
+                    });
+                }
                 
                 // Bouton effacer filtres
                 const clearFiltersBtn = this.domCache.get('clearFiltersBtn');
@@ -543,6 +574,8 @@ class AdminPage {
                         if (adp) adp.value = '';
                         if (pg) pg.style.display = 'none';
                         if (searchFilter) searchFilter.value = '';
+                        const operatorCodeSearch = this.domCache.get('operatorCodeSearch');
+                        if (operatorCodeSearch) operatorCodeSearch.value = '';
                         this.loadData();
                     });
                 }
@@ -594,6 +627,12 @@ class AdminPage {
                             const tempsId = btn.dataset.tempsId ? Number.parseInt(btn.dataset.tempsId, 10) : null;
                             const wasHold = btn.dataset.onHold === 'true';
                             if (tempsId) await this.transmitSingleMonitoringRecord(tempsId, { wasHold });
+                        } else if (e.target.closest('.btn-ai-assist')) {
+                            e.preventDefault();
+                            e.stopPropagation();
+                            const btn = e.target.closest('.btn-ai-assist');
+                            const rowId = btn.dataset.id || btn.dataset.operationId;
+                            if (rowId) await this.analyzeLineWithAi(rowId);
                         } else if (e.target.closest('.btn-edit')) {
                             e.preventDefault();
                             e.stopPropagation();
@@ -814,6 +853,7 @@ class AdminPage {
             const searchFilter = this.domCache.get('searchFilter');
             const operatorCode = this.selectedOperatorCode || operatorFilter?.value || undefined;
             const lancementCode = searchFilter?.value?.trim() || undefined;
+            this._fetchedOperatorCode = operatorCode || '';
 
             const filters = { ...periodRange, includeAllStatuses: true };
             if (operatorCode) filters.operatorCode = operatorCode;
@@ -1599,6 +1639,10 @@ class AdminPage {
         
         const selectedOperator = this.operatorSelect.value;
         this.selectedOperatorCode = selectedOperator || '';
+        const operatorCodeSearch = this.domCache.get('operatorCodeSearch');
+        if (selectedOperator && operatorCodeSearch?.value) {
+            operatorCodeSearch.value = '';
+        }
         this.logger.log('🔄 Changement d\'opérateur sélectionné:', selectedOperator);
 
         // En mode Monitoring, le filtre opérateur est appliqué via loadMonitoringRecords()
@@ -1816,11 +1860,15 @@ class AdminPage {
 
         if (selectedOpStatus && selectedOpStatus !== '') {
             filteredOperations = filteredOperations.filter(op => {
+                const st = String(op?.StatutTraitement ?? '').toUpperCase().trim();
                 if (selectedOpStatus === 'T') {
-                    return String(op?.StatutTraitement ?? '').toUpperCase().trim() === 'T';
+                    return st === 'T';
                 }
-                // Hors filtre "Transmis" : ne pas mélanger les lignes déjà basculées SILOG
-                if (String(op?.StatutTraitement ?? '').toUpperCase().trim() === 'T') {
+                if (selectedOpStatus === 'A') {
+                    return st === 'A';
+                }
+                // Hors filtres SILOG/attente : ne pas mélanger les lignes déjà basculées
+                if (st === 'T') {
                     return false;
                 }
                 const normalized = this.normalizeOperationStatus(op);
@@ -1853,6 +1901,15 @@ class AdminPage {
                 return lancementCode.includes(searchTerm);
             });
             this.logger.log(`📊 Après filtrage recherche: ${filteredOperations.length} opérations`);
+        }
+
+        const operatorCodeSearch = this.domCache.get('operatorCodeSearch');
+        const operatorCodeTerm = String(operatorCodeSearch?.value || '').trim();
+        if (operatorCodeTerm) {
+            filteredOperations = filteredOperations.filter(op => {
+                const opCode = (op.OperatorCode || op.operatorCode || op.operatorId || '').toString().trim();
+                return opCode.includes(operatorCodeTerm);
+            });
         }
 
         // Transmis (T) : visibles et grisés. On masque seulement les overlays
@@ -1911,6 +1968,9 @@ class AdminPage {
             } else if (searchFilter && searchFilter.value.trim()) {
                 emptyMessage = 'Aucun lancement trouvé';
                 emptySubMessage = `Aucun lancement ne correspond à "${searchFilter.value.trim()}"`;
+            } else if (operatorCodeTerm) {
+                emptyMessage = 'Aucun opérateur trouvé';
+                emptySubMessage = `Aucun enregistrement pour le n° « ${operatorCodeTerm} »`;
             } else if (this.operations.length === 0) {
                 emptyMessage = 'Aucun enregistrement trouvé';
                 emptySubMessage = 'Il n\'y a pas d\'enregistrements pour la date sélectionnée';
@@ -2061,7 +2121,7 @@ class AdminPage {
             row.dataset.unconsolidated = isUnconsolidated ? 'true' : 'false';
 
             // Déterminer le statut à afficher :
-            // Priorité au basculement SILOG (T) pour que l'admin voie clairement ce qui est déjà transmis.
+            // Priorité au basculement SILOG (T) / blocage (A).
             let statutCode, statutLabel;
 
             if (isTransmitted) {
@@ -2189,6 +2249,20 @@ class AdminPage {
             });
             cell9.appendChild(editBtn);
             cell9.appendChild(deleteBtn);
+            if (this.aiAssistEnabled && !isPauseRow) {
+                const aiBtn = createButton({
+                    icon: 'fas fa-magic',
+                    className: 'btn-ai-assist',
+                    title: 'Assistance IA : expliquer / proposer bloquer · corriger · transférer',
+                    dataset: {
+                        id: String(rowId),
+                        operationId: String(rowId),
+                        tempsId: tempsId ? String(tempsId) : '',
+                        eventId: eventId ? String(eventId) : ''
+                    }
+                });
+                cell9.appendChild(aiBtn);
+            }
             if (tempsId && !isUnconsolidated) {
                 if (isOnHold) {
                     const releaseBtn = createButton({
@@ -2224,6 +2298,7 @@ class AdminPage {
                     }
                 }
             } else if (!isPauseRow && this.isOperationTerminated(operation)) {
+                // Pas de TempsId = pas encore consolidé en ABTEMPS → blocage/transfert impossibles
                 const holdHint = createButton({
                     icon: 'fas fa-lock',
                     className: 'btn-hold-disabled',
@@ -2252,110 +2327,6 @@ class AdminPage {
             'D': 'ÉCARTÉ'
         };
         return map[code] || code;
-    }
-
-    async holdMonitoringRecord(tempsId) {
-        const id = Number.parseInt(tempsId, 10);
-        if (!Number.isFinite(id) || id <= 0) {
-            this.notificationManager.warning('TempsId manquant');
-            return;
-        }
-        const ok = confirm(
-            `Bloquer la ligne TempsId ${id} ?\n` +
-            `Elle restera hors auto 20h et hors transfert global.\n` +
-            `Tu pourras la corriger le lendemain puis la transférer seule.`
-        );
-        if (!ok) return;
-        try {
-            await this.apiService.onHoldMonitoringTemps(id);
-            this.notificationManager.success(`Ligne ${id} bloquée`);
-            await this.loadData();
-        } catch (error) {
-            this.errorHandler.handle(error, 'holdMonitoringRecord', error.message || 'Erreur blocage');
-        }
-    }
-
-    async releaseHoldMonitoringRecord(tempsId) {
-        const id = Number.parseInt(tempsId, 10);
-        if (!Number.isFinite(id) || id <= 0) {
-            this.notificationManager.warning('TempsId manquant');
-            return;
-        }
-        try {
-            await this.apiService.releaseHoldMonitoringTemps(id);
-            this.notificationManager.success(`Ligne ${id} débloquée`);
-            await this.loadData();
-        } catch (error) {
-            this.errorHandler.handle(error, 'releaseHoldMonitoringRecord', error.message || 'Erreur déblocage');
-        }
-    }
-
-    /**
-     * Transfert d'une seule ligne (après correction d'un blocage).
-     * Si la ligne est en A : débloque puis valide/envoie uniquement ce TempsId.
-     */
-    async transmitSingleMonitoringRecord(tempsId, { wasHold = false } = {}) {
-        const id = Number.parseInt(tempsId, 10);
-        if (!Number.isFinite(id) || id <= 0) {
-            this.notificationManager.warning('TempsId manquant');
-            return;
-        }
-        const ok = confirm(
-            wasHold
-                ? `Transférer uniquement la ligne TempsId ${id} ?\nElle sera débloquée puis envoyée vers SILOG (les autres lignes ne sont pas touchées).`
-                : `Transférer uniquement la ligne TempsId ${id} vers SILOG ?`
-        );
-        if (!ok) return;
-        try {
-            if (wasHold) {
-                await this.apiService.releaseHoldMonitoringTemps(id);
-            }
-            const result = await this.apiService.validateAndTransmitMonitoringBatch([id], {
-                triggerEdiJob: true,
-                adminMarkTransmitted: false
-            });
-            if (result?.success) {
-                this.notificationManager.success(
-                    this._formatTransferResultMessage(result, 1) || `Ligne ${id} transférée`
-                );
-                if (result.ediJob?.success === false) {
-                    this.notificationManager.warning(
-                        result.ediJob.error || result.ediJob.message || 'EDI_JOB a échoué — ligne en O'
-                    );
-                }
-                await this.loadData(false);
-            } else {
-                this.notificationManager.error(result?.error || `Échec transfert ligne ${id}`);
-            }
-        } catch (error) {
-            this.errorHandler.handle(error, 'transmitSingleMonitoringRecord', error.message || 'Erreur transfert ligne');
-        }
-    }
-
-    async holdSelectedFromTransferModal() {
-        const ids = Array.from(this.transferSelectionIds || [])
-            .map((x) => Number.parseInt(x, 10))
-            .filter((n) => Number.isFinite(n) && n > 0);
-        if (ids.length === 0) {
-            this.notificationManager.warning('Aucune ligne sélectionnée à bloquer');
-            return;
-        }
-        const ok = confirm(
-            `Bloquer ${ids.length} ligne(s) ?\n\n` +
-            `Ces enregistrements passeront en « En attente » (A) et ne seront pas basculés vers SILOG.\n` +
-            `Vous pourrez les débloquer après correction.`
-        );
-        if (!ok) return;
-        try {
-            const result = await this.apiService.onHoldMonitoringBatch(ids);
-            const data = result?.data || result;
-            const count = data?.count ?? data?.heldIds?.length ?? ids.length;
-            this.notificationManager.success(`${count} ligne(s) bloquée(s)`);
-            this.hideTransferModal();
-            await this.loadData();
-        } catch (error) {
-            this.errorHandler.handle(error, 'holdSelectedFromTransferModal', error.message || 'Erreur lors du blocage');
-        }
     }
 
     // ===== Helper: déterminer si une opération est Terminé (même logique que dans updateOperationsTable) =====
@@ -2433,7 +2404,8 @@ class AdminPage {
         if (!op?.TempsId) return;
         if (!this.isOperationTerminated(op)) return;
         const st = String(op.StatutTraitement ?? '').toUpperCase().trim();
-        if (st === 'T') return;
+        // T = déjà transmis ; A = bloqué / en attente correction
+        if (st === 'T' || st === 'A') return;
         eligibleByTempsId.set(String(op.TempsId), op);
     }
 
@@ -2725,15 +2697,27 @@ class AdminPage {
         if (!modal || !body) return;
 
         this.transferSelectionIds.clear();
-        if (selectAll) selectAll.checked = true;
+        // Ne pré-sélectionner que les lignes non bloquées (A)
+        const transferable = (records || []).filter((r) => {
+            const st = String(r?.StatutTraitement ?? '').toUpperCase().trim();
+            return st !== 'A' && st !== 'T';
+        });
+        if (selectAll) selectAll.checked = transferable.length > 0;
 
         clearElement(body);
         for (const r of records) {
             const id = r.TempsId;
             const key = String(id);
-            this.transferSelectionIds.add(key); // pré-sélectionner tout
+            const st = String(r?.StatutTraitement ?? '').toUpperCase().trim();
+            const isBlocked = st === 'A';
+            const preSelect = !isBlocked && st !== 'T';
+            if (preSelect) this.transferSelectionIds.add(key);
 
             const tr = createElement('tr');
+            if (isBlocked) {
+                tr.classList.add('row-on-hold');
+                tr.title = 'Ligne bloquée (A) — hors transfert';
+            }
             
             // Cellule checkbox
             const cell1 = createTableCell('', { 
@@ -2743,7 +2727,8 @@ class AdminPage {
                 type: 'checkbox',
                 className: 'transfer-row',
                 dataset: { id: id },
-                checked: true
+                checked: preSelect,
+                disabled: isBlocked
             });
             cell1.appendChild(checkbox);
             tr.appendChild(cell1);
@@ -2815,6 +2800,260 @@ class AdminPage {
             if (checked) this.transferSelectionIds.add(id);
             else this.transferSelectionIds.delete(id);
         });
+    }
+
+    async holdSelectedFromTransferModal() {
+        const ids = Array.from(this.transferSelectionIds)
+            .map((x) => Number.parseInt(x, 10))
+            .filter((n) => Number.isFinite(n) && n > 0);
+        if (ids.length === 0) {
+            this.notificationManager.warning('Aucune ligne sélectionnée à bloquer');
+            return;
+        }
+        const ok = confirm(
+            `Bloquer ${ids.length} ligne(s) ?\n\n` +
+            `Ces enregistrements passeront en « En attente » (A) et ne seront pas basculés vers SILOG.\n` +
+            `Vous pourrez les débloquer après correction.`
+        );
+        if (!ok) return;
+        try {
+            const result = await this.apiService.onHoldMonitoringBatch(ids);
+            const data = result?.data || result;
+            const count = data?.count ?? data?.heldIds?.length ?? ids.length;
+            this.notificationManager.success(`${count} ligne(s) bloquée(s)`);
+            this.hideTransferModal();
+            await this.loadData();
+        } catch (error) {
+            this.errorHandler.handle(error, 'holdSelectedFromTransferModal', error.message || 'Erreur lors du blocage');
+        }
+    }
+
+    async holdMonitoringRecord(tempsId) {
+        const id = Number.parseInt(tempsId, 10);
+        if (!Number.isFinite(id) || id <= 0) {
+            this.notificationManager.warning('TempsId manquant');
+            return;
+        }
+        const ok = confirm(
+            `Bloquer la ligne TempsId ${id} ?\n` +
+            `Elle restera hors auto 20h et hors transfert global.\n` +
+            `Tu pourras la corriger le lendemain puis la transférer seule.`
+        );
+        if (!ok) return;
+        try {
+            await this.apiService.onHoldMonitoringTemps(id);
+            this.notificationManager.success(`Ligne ${id} bloquée`);
+            await this.loadData();
+        } catch (error) {
+            this.errorHandler.handle(error, 'holdMonitoringRecord', error.message || 'Erreur blocage');
+        }
+    }
+
+    async releaseHoldMonitoringRecord(tempsId) {
+        const id = Number.parseInt(tempsId, 10);
+        if (!Number.isFinite(id) || id <= 0) {
+            this.notificationManager.warning('TempsId manquant');
+            return;
+        }
+        try {
+            await this.apiService.releaseHoldMonitoringTemps(id);
+            this.notificationManager.success(`Ligne ${id} débloquée`);
+            await this.loadData();
+        } catch (error) {
+            this.errorHandler.handle(error, 'releaseHoldMonitoringRecord', error.message || 'Erreur déblocage');
+        }
+    }
+
+    /**
+     * Transfert d'une seule ligne (après correction d'un blocage).
+     * Si la ligne est en A : débloque puis valide/envoie uniquement ce TempsId.
+     */
+    async transmitSingleMonitoringRecord(tempsId, { wasHold = false } = {}) {
+        const id = Number.parseInt(tempsId, 10);
+        if (!Number.isFinite(id) || id <= 0) {
+            this.notificationManager.warning('TempsId manquant');
+            return;
+        }
+        const ok = confirm(
+            wasHold
+                ? `Transférer uniquement la ligne TempsId ${id} ?\nElle sera débloquée puis envoyée vers SILOG (les autres lignes ne sont pas touchées).`
+                : `Transférer uniquement la ligne TempsId ${id} vers SILOG ?`
+        );
+        if (!ok) return;
+        try {
+            if (wasHold) {
+                await this.apiService.releaseHoldMonitoringTemps(id);
+            }
+            const result = await this.apiService.validateAndTransmitMonitoringBatch([id], {
+                triggerEdiJob: true,
+                adminMarkTransmitted: false
+            });
+            if (result?.success) {
+                this.notificationManager.success(
+                    this._formatTransferResultMessage(result, 1) || `Ligne ${id} transférée`
+                );
+                if (result.ediJob?.success === false) {
+                    this.notificationManager.warning(
+                        result.ediJob.error || result.ediJob.message || 'EDI_JOB a échoué — ligne en O'
+                    );
+                }
+                await this.loadData(false);
+            } else {
+                this.notificationManager.error(result?.error || `Échec transfert ligne ${id}`);
+            }
+        } catch (error) {
+            this.errorHandler.handle(error, 'transmitSingleMonitoringRecord', error.message || 'Erreur transfert ligne');
+        }
+    }
+
+    /**
+     * Demande un diagnostic IA pour une ligne (propose seulement — n'applique rien).
+     */
+    async analyzeLineWithAi(rowId) {
+        if (!this.aiAssistEnabled) {
+            this.notificationManager.warning('Assistance IA désactivée (ENABLE_AI_ASSIST / clé API)');
+            return;
+        }
+        if (this._aiAssistLoading) return;
+
+        const operation = this.operations.find((op) => {
+            const tid = op.TempsId != null ? String(op.TempsId) : '';
+            const eid = op.EventId != null ? String(op.EventId) : (op.id != null ? String(op.id) : '');
+            const key = String(rowId);
+            return tid === key || eid === key || String(op.id) === key;
+        });
+        if (!operation) {
+            this.notificationManager.warning('Ligne introuvable — rechargez le tableau');
+            return;
+        }
+
+        const lt = String(operation.LancementCode || '').trim().toUpperCase();
+        let multiOperatorsOnLt = null;
+        if (lt) {
+            const names = new Set(
+                this.operations
+                    .filter((o) => String(o.LancementCode || '').trim().toUpperCase() === lt)
+                    .map((o) => String(o.OperatorCode || o.OperatorName || '').trim())
+                    .filter(Boolean)
+            );
+            multiOperatorsOnLt = names.size > 1 ? names.size : 1;
+        }
+
+        const knownIssues = [];
+        try {
+            const validation = this.validateOperationBeforeEdit(operation);
+            if (validation?.errors?.length) knownIssues.push(...validation.errors);
+            if (validation?.warnings?.length) knownIssues.push(...validation.warnings);
+        } catch {
+            /* ignore */
+        }
+
+        const stTrait = String(operation.StatutTraitement || '').toUpperCase().trim();
+        const context = stTrait === 'A' ? 'hold_corrector' : 'monitoring';
+
+        this._aiAssistLoading = true;
+        try {
+            this.notificationManager.info('Analyse IA en cours…');
+            const result = await this.apiService.analyzeMonitoringLineAi(
+                { ...operation, knownIssues, multiOperatorsOnLt },
+                { context }
+            );
+            if (!result?.success || !result.data) {
+                this.notificationManager.error(result?.error || 'Réponse IA invalide');
+                return;
+            }
+            this.showAiAssistPanel(operation, result.data);
+        } catch (error) {
+            this.errorHandler.handle(error, 'analyzeLineWithAi', error.message || 'Erreur assistance IA');
+        } finally {
+            this._aiAssistLoading = false;
+        }
+    }
+
+    showAiAssistPanel(operation, advice) {
+        const existing = document.getElementById('aiAssistModal');
+        if (existing) existing.remove();
+
+        const tempsId = operation.TempsId ?? null;
+        const rowId = tempsId || operation.EventId || operation.id;
+        const issuesHtml = (advice.issues || [])
+            .map((i) => `<li>${this.escapeHtmlAi(i)}</li>`)
+            .join('');
+        const hintsHtml = (advice.correctionHints || [])
+            .map((h) => `<li>${this.escapeHtmlAi(h)}</li>`)
+            .join('');
+
+        const modal = createElement('div', {
+            id: 'aiAssistModal',
+            className: 'ai-assist-modal',
+            role: 'dialog',
+            'aria-modal': 'true'
+        });
+        modal.innerHTML = `
+            <div class="ai-assist-modal-card">
+                <div class="ai-assist-modal-header">
+                    <strong><i class="fas fa-magic"></i> Assistance ligne</strong>
+                    <button type="button" class="ai-assist-close" aria-label="Fermer">&times;</button>
+                </div>
+                <p class="ai-assist-summary">${this.escapeHtmlAi(advice.summary || '')}</p>
+                <p class="ai-assist-motif"><b>Motif :</b> ${this.escapeHtmlAi(advice.motif || '')}</p>
+                ${issuesHtml ? `<ul class="ai-assist-list">${issuesHtml}</ul>` : ''}
+                ${hintsHtml ? `<p class="ai-assist-hints-title">Pistes</p><ul class="ai-assist-list">${hintsHtml}</ul>` : ''}
+                <p class="ai-assist-conf">Confiance ${(Math.round((advice.confidence || 0) * 100))}%</p>
+                <div class="ai-assist-actions">
+                    <button type="button" class="btn-secondary ai-act-block" ${tempsId ? '' : 'disabled'}>
+                        <i class="fas fa-lock"></i> Bloquer
+                    </button>
+                    <button type="button" class="btn-secondary ai-act-correct">
+                        <i class="fas fa-edit"></i> Corriger
+                    </button>
+                    <button type="button" class="btn-primary ai-act-apply">
+                        <i class="fas fa-check"></i> ${this.escapeHtmlAi(advice.actionLabel || 'Appliquer')}
+                    </button>
+                </div>
+            </div>`;
+
+        const close = () => modal.remove();
+        modal.querySelector('.ai-assist-close')?.addEventListener('click', close);
+        modal.addEventListener('click', (e) => {
+            if (e.target === modal) close();
+        });
+
+        modal.querySelector('.ai-act-block')?.addEventListener('click', async () => {
+            close();
+            if (tempsId) await this.holdMonitoringRecord(tempsId);
+        });
+        modal.querySelector('.ai-act-correct')?.addEventListener('click', async () => {
+            close();
+            if (tempsId) await this.editMonitoringRecord(tempsId);
+            else await this.editOperation(rowId);
+        });
+        modal.querySelector('.ai-act-apply')?.addEventListener('click', async () => {
+            close();
+            const action = advice.recommendedAction;
+            if (action === 'block' && tempsId) await this.holdMonitoringRecord(tempsId);
+            else if (action === 'release_hold' && tempsId) await this.releaseHoldMonitoringRecord(tempsId);
+            else if (action === 'transmit' && tempsId) {
+                await this.transmitSingleMonitoringRecord(tempsId, {
+                    wasHold: String(operation.StatutTraitement || '').toUpperCase() === 'A'
+                });
+            } else if (action === 'correct') {
+                if (tempsId) await this.editMonitoringRecord(tempsId);
+                else await this.editOperation(rowId);
+            } else {
+                this.notificationManager.info('Aucune action automatique pour cette recommandation');
+            }
+        });
+
+        document.body.appendChild(modal);
+    }
+
+    escapeHtmlAi(str) {
+        return String(str ?? '')
+            .replaceAll('&', '&amp;')
+            .replaceAll('<', '&lt;')
+            .replaceAll('>', '&gt;')
+            .replaceAll('"', '&quot;');
     }
 
     async confirmTransferFromModal() {

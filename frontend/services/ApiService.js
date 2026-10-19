@@ -1006,6 +1006,22 @@ class ApiService {
         return this.post(`/admin/monitoring/${tempsId}/validate`, {});
     }
 
+    async getAiAssistStatus() {
+        return this.get('/admin/ai/status');
+    }
+
+    async analyzeMonitoringLineAi(line, { context = 'monitoring' } = {}) {
+        return this.post('/admin/ai/analyze-line', { line, context });
+    }
+
+    async summarizeSupportTechAi(payload) {
+        return this.post('/admin/ai/summarize-support-tech', payload || {});
+    }
+
+    async diagnoseOpsAi({ symptoms = '', logs = '', context = '' } = {}) {
+        return this.post('/admin/ai/ops-diagnose', { symptoms, logs, context });
+    }
+
     async onHoldMonitoringTemps(tempsId) {
         return this.post(`/admin/monitoring/${tempsId}/on-hold`, {});
     }

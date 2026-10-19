@@ -1,14 +1,14 @@
 // Classe principale de l'application
-import { FRONTEND_RELEASE } from '../version.js?v=20261001.5';
+import { FRONTEND_RELEASE } from '../version.js?v=20261019.2';
 // ?v= aligné sur FRONTEND_RELEASE (frontend/version.js) pour invalidation navigateur
-import OperateurInterface from './OperateurInterface.js?v=20261001.5';
-import AdminPage from './AdminPage.js?v=20260512.1';
-import RhPage from './RhPage.js?v=20261001.5';
-import ApiService from '../services/ApiService.js?v=20261001.5';
-import StorageService from '../services/StorageService.js?v=20260512.1';
-import notificationManager from '../utils/NotificationManager.js?v=20260512.1';
+import OperateurInterface from './OperateurInterface.js?v=20261019.2';
+import AdminPage from './AdminPage.js?v=20261019.2';
+import RhPage from './RhPage.js?v=20261019.2';
+import ApiService from '../services/ApiService.js?v=20261019.2';
+import StorageService from '../services/StorageService.js?v=20261019.2';
+import notificationManager from '../utils/NotificationManager.js?v=20261019.2';
 import { ADMIN_CONFIG } from '../utils/Constants.js';
-import { clearOfflineApiCache } from '../utils/OfflineApiCache.js?v=20261001.5';
+import { clearOfflineApiCache } from '../utils/OfflineApiCache.js?v=20261019.2';
 
 // Quand FRONTEND_RELEASE change, purge des caches locaux (voir initializeApp)
 const APP_BUILD_ID = FRONTEND_RELEASE;
@@ -493,6 +493,10 @@ class App {
     handleRhLogout() {
         this.isRh = false;
         this.apiService.setRhToken('');
+        if (this.rhPage) {
+            try { this.rhPage.destroy(); } catch (_) { /* ignore */ }
+            this.rhPage = null;
+        }
         Promise.resolve().then(() => this.apiService.rhLogout()).catch(() => {});
         this.showLoginScreen();
         notificationManager.info('Déconnexion RH');
@@ -616,7 +620,11 @@ class App {
         document.getElementById('rhScreen').classList.add('active');
         this.currentScreen = 'rh';
         setTimeout(() => {
-            if (!this.rhPage) this.rhPage = new RhPage(this);
+            if (this.rhPage) {
+                try { this.rhPage.destroy(); } catch (_) { /* ignore */ }
+                this.rhPage = null;
+            }
+            this.rhPage = new RhPage(this);
             this.rhPage.load();
         }, 100);
     }
