@@ -8,9 +8,65 @@ const { getConcurrencyStats } = require('../middleware/concurrencyManager');
 const SessionService = require('../services/SessionService');
 const { generateRequestId } = require('../middleware/audit');
 const FactorialOperatorMappingService = require('../services/FactorialOperatorMappingService');
+const AiAssistService = require('../services/AiAssistService');
 
 // IMPORTANT: toutes les routes /api/admin doivent être protégées
 router.use(authenticateAdmin);
+
+function mapAiError(error, res) {
+    if (error?.code === 'AI_DISABLED') {
+        return res.status(503).json({ success: false, error: error.message, code: 'AI_DISABLED' });
+    }
+    if (error?.code === 'AI_CONFIG') {
+        return res.status(503).json({ success: false, error: error.message, code: 'AI_CONFIG' });
+    }
+    console.error('❌ AI assist:', error);
+    return res.status(500).json({
+        success: false,
+        error: error?.message || 'Erreur assistance IA'
+    });
+}
+
+// GET /api/admin/ai/status — feature flag (sans appeler le LLM)
+router.get('/ai/status', (req, res) => {
+    res.json({ success: true, data: AiAssistService.status() });
+});
+
+// POST /api/admin/ai/analyze-line — diagnostic ligne monitoring / hold
+router.post('/ai/analyze-line', async (req, res) => {
+    try {
+        const line = req.body?.line || req.body?.operation || req.body;
+        const context = req.body?.context || 'monitoring';
+        if (!line || typeof line !== 'object') {
+            return res.status(400).json({ success: false, error: 'Payload ligne manquant' });
+        }
+        const result = await AiAssistService.analyzeMonitoringLine(line, { context });
+        return res.json(result);
+    } catch (error) {
+        return mapAiError(error, res);
+    }
+});
+
+// POST /api/admin/ai/summarize-support-tech — résumé atelier écarts
+router.post('/ai/summarize-support-tech', async (req, res) => {
+    try {
+        const result = await AiAssistService.summarizeSupportTech(req.body || {});
+        return res.json(result);
+    } catch (error) {
+        return mapAiError(error, res);
+    }
+});
+
+// POST /api/admin/ai/ops-diagnose — runbook logs (maintenance)
+router.post('/ai/ops-diagnose', async (req, res) => {
+    try {
+        const { symptoms, logs, context } = req.body || {};
+        const result = await AiAssistService.diagnoseOps({ symptoms, logs, context });
+        return res.json(result);
+    } catch (error) {
+        return mapAiError(error, res);
+    }
+});
 
 const TIME_HM_RE = /^(\d{1,2}):(\d{2})$/;
 const TIME_HMS_RE = /^(\d{1,2}):(\d{2}):(\d{2})$/;

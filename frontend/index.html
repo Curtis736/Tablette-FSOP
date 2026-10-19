@@ -8,7 +8,7 @@
     <meta http-equiv="Pragma" content="no-cache">
     <title>SEDI - Interface Tablette</title>
     <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📱</text></svg>">
-    <link rel="stylesheet" href="assets/styles.css?v=20261016.1">
+    <link rel="stylesheet" href="assets/styles.css?v=20261019.2">
     <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
     <!-- ZXing pour le scan de code-barres (local, pas de dépendance Internet) -->
     <script defer src="assets/vendor/zxing.min.js?v=20260706.1"></script>
@@ -340,6 +340,7 @@
                                 <option value="EN_COURS">En cours</option>
                                 <option value="EN_PAUSE">En pause</option>
                                 <option value="TERMINE">Terminé</option>
+                                <option value="A">En attente (bloqué)</option>
                                 <option value="T">Transmis SILOG</option>
                             </select>
                         </div>
@@ -372,6 +373,14 @@
                                 Recherche :
                             </label>
                             <input type="text" id="searchFilter" class="filter-input" placeholder="Code lancement...">
+                        </div>
+
+                        <div class="filter-group">
+                            <label for="operatorCodeSearch">
+                                <i class="fas fa-hashtag"></i>
+                                N° opérateur :
+                            </label>
+                            <input type="search" id="operatorCodeSearch" class="filter-input" placeholder="Ex. 754" inputmode="numeric" autocomplete="off">
                         </div>
 
                     </div>
@@ -462,12 +471,24 @@
                 </div>
             </header>
             <main class="main-content rh-main">
+                <div id="rhSandboxBanner" class="rh-sandbox-banner" hidden>
+                    SANDBOX — base locale (aucune écriture sur la production)
+                </div>
+                <section id="rhLivePanel" class="rh-live-panel" aria-live="polite">
+                    <div class="rh-live-header">
+                        <strong><i class="fas fa-broadcast-tower"></i> En cours maintenant</strong>
+                        <span id="rhLiveMeta" class="rh-live-meta"></span>
+                    </div>
+                    <div id="rhLiveContent" class="rh-live-content">
+                        <p class="rh-live-empty">Aucun opérateur en cours</p>
+                    </div>
+                </section>
                 <div class="rh-howto">
                     <strong>Comment modifier un jour</strong>
                     <ol>
-                        <li>Cherchez un <b>opérateur</b> (nom / prénom / code) ou choisissez-le dans la liste, puis la <b>semaine</b>.</li>
-                        <li>Dans chaque jour, changez le champ <b>Temps fait</b> (ex. <code>08:45</code>).</li>
-                        <li>Cliquez <b>Enregistrer</b> sur la ligne — le temps fait est enregistré.</li>
+                        <li>Cherchez un <b>opérateur</b> par nom, ou par <b>numéro</b>, ou choisissez-le dans la liste, puis la <b>semaine</b>.</li>
+                        <li>Dans chaque jour, saisissez <b>Début</b> et <b>Fin</b> (ex. <code>07:00</code> → <code>16:00</code>).</li>
+                        <li>La <b>durée</b> est calculée automatiquement — cliquez <b>Enregistrer</b>.</li>
                     </ol>
                 </div>
                 <div class="rh-controls">
@@ -476,12 +497,16 @@
                         <input type="date" id="rhWeekStart" class="filter-input">
                     </div>
                     <div class="filter-group">
-                        <label for="rhMonthInput">Mois heures supp</label>
+                        <label for="rhMonthInput">Mois (Excel)</label>
                         <input type="month" id="rhMonthInput" class="filter-input">
                     </div>
                     <div class="filter-group rh-search-group">
                         <label for="rhOperatorSearch">Recherche</label>
-                        <input type="search" id="rhOperatorSearch" class="filter-input" placeholder="Nom, prénom ou code…" autocomplete="off">
+                        <input type="search" id="rhOperatorSearch" class="filter-input" placeholder="Nom ou prénom…" autocomplete="off">
+                    </div>
+                    <div class="filter-group rh-search-group">
+                        <label for="rhOperatorCodeSearch">N° opérateur</label>
+                        <input type="search" id="rhOperatorCodeSearch" class="filter-input" placeholder="Ex. 754" inputmode="numeric" autocomplete="off">
                     </div>
                     <div class="filter-group">
                         <label for="rhOperatorFilter">Opérateur</label>
@@ -495,7 +520,7 @@
                         <i class="fas fa-sync"></i> Actualiser
                     </button>
                     <button type="button" id="rhExportExcelBtn" class="btn-success">
-                        <i class="fas fa-file-excel"></i> Excel
+                        <i class="fas fa-file-excel"></i> Exporter Excel
                     </button>
                     <button type="button" id="rhExportPdfBtn" class="btn-secondary">
                         <i class="fas fa-file-pdf"></i> PDF
@@ -561,15 +586,18 @@
                 <h3 style="margin:0;">Sélectionner les lignes à transférer</h3>
                 <button id="closeTransferModalBtn" class="btn-secondary" style="min-width:120px;">Fermer</button>
             </div>
-            <p style="margin:10px 0 12px 0; color:#555;">Choisis les enregistrements à transférer vers SILOG.</p>
+            <p style="margin:10px 0 12px 0; color:#555;">
+                Choisis les enregistrements à transférer vers SILOG.
+                Les lignes douteuses : <b>Bloquer</b> (ne basculent pas) le temps de corriger.
+            </p>
             <div style="display:flex; align-items:center; justify-content:space-between; gap:12px; margin-bottom:10px;">
                 <label style="display:flex; align-items:center; gap:8px;">
                     <input type="checkbox" id="transferSelectAll" />
                     Tout sélectionner
                 </label>
-                <div style="display:flex; gap:8px; align-items:center;">
+                <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
                     <button type="button" id="transferHoldSelectedBtn" class="btn-secondary" style="min-width:160px;" title="Bloquer la sélection (StatutTraitement=A) — hors transfert">
-                        <i class="fas fa-lock"></i> Bloquer
+                        <i class="fas fa-ban"></i> Bloquer
                     </button>
                     <button id="transferSelectedConfirmBtn" class="btn-warning" style="min-width:180px;">
                         <i class="fas fa-exchange-alt"></i> Transférer
@@ -669,6 +697,6 @@
         </div>
     </div>
 
-    <script type="module" src="index.js?v=20261016.1"></script>
+    <script type="module" src="index.js?v=20261019.2"></script>
 </body>
 </html>
