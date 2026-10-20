@@ -14,7 +14,14 @@ const { generateRequestId } = require('../middleware/audit');
 const OperationStopService = require('../services/OperationStopService');
 const LancementTempsRestantService = require('../services/LancementTempsRestantService');
 const PauseTypeService = require('../services/PauseTypeService');
-const { PAUSE_TYPES, normalizePauseTypeCode, isPauseTypesEnabled } = require('../constants/pauseTypes');
+const {
+    PAUSE_TYPES,
+    normalizePauseTypeCode,
+    isPauseTypesEnabled,
+    getPauseTypesForOperator,
+    isPauseTypeAllowedForOperator,
+    getPauseTypeLabel
+} = require('../constants/pauseTypes');
 
 let _historiqueHasPauseTypeColumn = null;
 async function historiqueHasPauseTypeColumn() {
@@ -30,9 +37,20 @@ async function historiqueHasPauseTypeColumn() {
     return _historiqueHasPauseTypeColumn;
 }
 
-// GET /api/operators/pause-types — catalogue des boutons de pause
-router.get('/pause-types', (_req, res) => {
-    res.json({ success: true, enabled: isPauseTypesEnabled(), data: PAUSE_TYPES });
+// GET /api/operators/pause-types — catalogue des boutons de pause (filtré par jour / opérateur)
+router.get('/pause-types', (req, res) => {
+    const operatorCode = String(req.query.operatorCode || req.query.code || '').trim();
+    const operatorName = String(req.query.operatorName || req.query.name || '').trim();
+    const data = getPauseTypesForOperator({ operatorCode, operatorName, at: new Date() });
+    res.json({
+        success: true,
+        enabled: isPauseTypesEnabled(),
+        data,
+        rules: {
+            friday: 'Vendredi : pause courte 10 min max ; pas de plafond 8h45 (tout le temps fait = HS)',
+            weekdays: 'Lundi–jeudi : pause courte 20 min (sauf Hassan / Joséphine / Maria → 10 min)'
+        }
+    });
 });
 
 // GET /api/operators/:operatorCode/counters — compteurs semaine (jour par jour)
@@ -1217,12 +1235,39 @@ router.post('/pause', validateOperatorSession, logSecurityAction, async (req, re
         const { operatorId, lancementCode, codeOperation, pauseTypeCode } = req.body;
         const pauseTypesEnabled = isPauseTypesEnabled();
         const normalizedPauseType = pauseTypesEnabled ? normalizePauseTypeCode(pauseTypeCode) : null;
+        const operatorName = String(
+            req.operator?.name || req.operator?.nom || req.body?.operatorName || ''
+        ).trim();
+        const allowedPauseTypes = getPauseTypesForOperator({
+            operatorCode: String(operatorId || '').trim(),
+            operatorName,
+            at: new Date()
+        });
         if (pauseTypesEnabled && !normalizedPauseType) {
             return res.status(400).json({
                 success: false,
                 error: 'PAUSE_TYPE_REQUIRED',
                 message: 'Choisissez un type de pause.',
-                pauseTypes: PAUSE_TYPES
+                pauseTypes: allowedPauseTypes
+            });
+        }
+        if (
+            pauseTypesEnabled
+            && normalizedPauseType
+            && !isPauseTypeAllowedForOperator(normalizedPauseType, {
+                operatorCode: String(operatorId || '').trim(),
+                operatorName,
+                at: new Date()
+            })
+        ) {
+            const friday = new Date().getDay() === 5;
+            return res.status(400).json({
+                success: false,
+                error: 'PAUSE_TYPE_NOT_ALLOWED',
+                message: friday
+                    ? `Le vendredi, la pause courte est limitée à 10 min (${getPauseTypeLabel('P10')}).`
+                    : `Ce type de pause n’est pas autorisé aujourd’hui (${getPauseTypeLabel(normalizedPauseType)}).`,
+                pauseTypes: allowedPauseTypes
             });
         }
 
@@ -1824,11 +1869,13 @@ router.get('/:operatorCode/operations',
         const events = await executeQuery(eventsQuery, { operatorCode, historyDays }, 1);
         console.log(`📊 ${events.length} événements trouvés pour l'opérateur ${operatorCode}`);
         
-        // Utiliser la fonction qui garde les pauses séparées
+        // Inclure les lignes de pause séparées (sinon l'opérateur ne voit que le cycle DEBUT→FIN
+        // et se croit « perdu » sur le temps de pause).
         const { processLancementEventsWithPauses } = require('./admin');
-        const processed = processLancementEventsWithPauses(events);
+        const processed = processLancementEventsWithPauses(events, { includePauseRows: true });
         const fabricationMap = await getFabricationMapForOperations(processed);
         const allFormattedOperations = processed.map(operation => {
+            const isPauseRow = operation.type === 'pause' || operation._isPauseRow === true;
             // Normaliser les heures pour s'assurer qu'elles sont au format HH:mm:ss
             let startTime = operation.startTime;
             let endTime = operation.endTime;
@@ -1884,7 +1931,7 @@ router.get('/:operatorCode/operations',
             let codeRubrique = operation.codeRubrique || null;
             const opCode = String(operation.operatorId || operation.operatorCode || operatorCode || '').trim();
             const steps = (fabricationMap._byLaunch && fabricationMap._byLaunch.get(String(operation.lancementCode || '').trim())) || [];
-            if (!phase || MARKERS.has(phase.toUpperCase()) || phase === opCode) {
+            if (!isPauseRow && (!phase || MARKERS.has(phase.toUpperCase()) || phase === opCode)) {
                 let match = null;
                 const rub = String(codeRubrique || '').trim();
                 if (rub && rub !== opCode) {
@@ -1900,17 +1947,23 @@ router.get('/:operatorCode/operations',
                 }
             }
             const fabKey = `${operation.lancementCode}_${String(phase || '').trim()}_${String(codeRubrique || '').trim()}`;
-            const fabrication = fabricationMap.get(fabKey)
+            let fabrication = fabricationMap.get(fabKey)
                 || (steps.filter(s => s.Phase === phase).map(s => s.CodeOperation).filter(Boolean).join(' / '))
                 || operation.codeOperation
                 || operation.fabrication
                 || '-';
+            if (isPauseRow) {
+                phase = 'PAUSE';
+                fabrication = 'Pause';
+            }
             
             return {
                 id: operation.id,
                 operatorCode: operation.operatorId || operation.operatorCode,
                 lancementCode: operation.lancementCode,
-                article: operation.article || 'N/A',
+                article: isPauseRow
+                    ? (`Pause — ${operation.article || 'N/A'}`)
+                    : (operation.article || 'N/A'),
                 fabrication,
                 startTime: startTime || '-',
                 endTime: endTime || '-',
@@ -1918,7 +1971,8 @@ router.get('/:operatorCode/operations',
                 statusCode: statusCode || 'EN_COURS',
                 phase,
                 codeRubrique,
-                type: operation.type || 'lancement'
+                type: isPauseRow ? 'pause' : (operation.type || 'lancement'),
+                _isPauseRow: isPauseRow
             };
         });
         
@@ -1997,6 +2051,8 @@ router.get('/current/:operatorCode', authenticateOperator, async (req, res) => {
                 CONVERT(VARCHAR(8), h.HeureDebut, 108) AS HeureDebut, -- HH:mm:ss (stable)
                 CONVERT(VARCHAR(10), h.DateCreation, 23) AS DateCreation, -- YYYY-MM-DD (stable, évite décalage timezone)
                 h.CreatedAt,
+                -- Horodatage local SQL (sans Z) pour le minuteur pause — évite le décalage UTC de JSON Date
+                CONVERT(VARCHAR(19), h.CreatedAt, 126) AS CreatedAtLocal,
                 ${await historiqueHasPauseTypeColumn() ? 'h.PauseTypeCode' : 'CAST(NULL AS NVARCHAR(32)) AS PauseTypeCode'},
                 COALESCE(h.Phase, 'PRODUCTION') AS Phase,
                 h.CodeRubrique,
@@ -2090,15 +2146,22 @@ router.get('/current/:operatorCode', authenticateOperator, async (req, res) => {
         }
 
         // Heure réelle de la pause (pas le DEBUT du cycle) pour reprendre le minuteur après refresh.
+        // Toujours une chaîne locale "YYYY-MM-DDTHH:mm:ss" (pas de Date JSON/UTC) sinon le
+        // compte à rebours P10/P20/DEJ part décalé (souvent déjà en dépassement).
         let pauseStartedAt = null;
         let pauseTypeCode = null;
         if (lastEvent === 'PAUSE') {
             pauseTypeCode = normalizePauseTypeCode(operation.PauseTypeCode);
-            pauseStartedAt = operation.CreatedAt || null;
-            if (!pauseStartedAt && operation.DateCreation && operation.HeureDebut) {
+            const localCreated = String(operation.CreatedAtLocal || '').trim();
+            if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}/.test(localCreated)) {
+                pauseStartedAt = localCreated.slice(0, 19);
+            } else if (operation.DateCreation && operation.HeureDebut) {
                 const datePart = String(operation.DateCreation || '').slice(0, 10);
-                const timeStr = String(operation.HeureDebut || '').length >= 5 ? String(operation.HeureDebut) : null;
-                if (datePart && timeStr) pauseStartedAt = `${datePart}T${timeStr}`;
+                let timeStr = String(operation.HeureDebut || '').trim();
+                if (/^\d{2}:\d{2}$/.test(timeStr)) timeStr = `${timeStr}:00`;
+                if (/^\d{4}-\d{2}-\d{2}$/.test(datePart) && /^\d{2}:\d{2}:\d{2}/.test(timeStr)) {
+                    pauseStartedAt = `${datePart}T${timeStr.slice(0, 8)}`;
+                }
             }
         }
         

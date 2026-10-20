@@ -2109,9 +2109,16 @@ class OperateurInterface {
     }
 
     resumePausedOperation(operation) {
+        const lancementCode = operation?.lancementCode || operation?.CodeLancement;
+        const prevLt = String(this.currentLancement?.CodeLancement || '');
+        const wasPaused = this.isPaused === true;
+        const watchAlive = wasPaused
+            && prevLt === String(lancementCode || '')
+            && this.pauseWatchStartedAt
+            && this.pauseWatchInterval;
+
         this.isRunning = false;
         this.isPaused = true;
-        const lancementCode = operation?.lancementCode || operation?.CodeLancement;
         this.currentLancement = { CodeLancement: lancementCode };
         
         this.startBtn.disabled = false;
@@ -2120,19 +2127,10 @@ class OperateurInterface {
         this.stopBtn.disabled = false;
         this.statusDisplay.textContent = 'En pause';
 
-        // Si le backend fournit startedAt/heure de pause complète, l'utiliser; sinon fallback sur dateCreation.
-        const parseLocalDateOnly = (dc) => {
-            const s = String(dc || '').trim();
-            const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(s);
-            if (!m) return null;
-            const out = new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]), 0, 0, 0, 0);
-            return Number.isNaN(out.getTime()) ? null : out;
-        };
-        const pausedAt = operation?.pauseStartedAt || operation?.startedAt || operation?.dateCreation || operation?.DateCreation || null;
-        const pauseSince = pausedAt
-            ? (typeof pausedAt === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(pausedAt) ? (parseLocalDateOnly(pausedAt) || new Date()) : new Date(pausedAt))
-            : new Date();
-        
+        // Horodatage local (pas UTC) pour le minuteur — voir parseLocalDateTime
+        const pausedAt = operation?.pauseStartedAt || null;
+        const pauseSince = this.parseLocalDateTime(pausedAt) || new Date();
+
         this.lancementDetails.innerHTML = `
             <strong>Lancement: ${this.escapeHtml(lancementCode)}</strong><br>
             <small>Opération en pause depuis ${pauseSince.toLocaleTimeString('fr-FR', { timeZone: 'Europe/Paris', hour: '2-digit', minute: '2-digit' })}</small>
@@ -2142,7 +2140,44 @@ class OperateurInterface {
 
         const pauseTypeCode = operation?.pauseTypeCode || operation?.PauseTypeCode || null;
         const pauseLabel = this.pauseTypeLabel(pauseTypeCode);
-        this.startPauseWatch(pauseTypeCode, pauseLabel, pauseSince);
+        // Ne pas réinitialiser le minuteur si déjà en pause sur le même LT (évite un saut)
+        if (!watchAlive) {
+            this.startPauseWatch(pauseTypeCode, pauseLabel, pauseSince);
+        } else if (pauseTypeCode && !this.currentPauseTypeCode) {
+            this.currentPauseTypeCode = pauseTypeCode;
+            this.currentPauseTypeLabel = pauseLabel;
+        }
+    }
+
+    /** Parse "YYYY-MM-DDTHH:mm:ss" en Date locale (sans décalage UTC). */
+    parseLocalDateTime(value) {
+        if (value == null || value === '') return null;
+        if (value instanceof Date) {
+            return Number.isNaN(value.getTime()) ? null : value;
+        }
+        const s = String(value).trim();
+        // Date seule → minuit local
+        let m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(s);
+        if (m) {
+            const d = new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]), 0, 0, 0, 0);
+            return Number.isNaN(d.getTime()) ? null : d;
+        }
+        // Local wall-clock (avec ou sans Z / offset — on ignore le suffixe fuseau)
+        m = /^(\d{4})-(\d{2})-(\d{2})[T ](\d{2}):(\d{2})(?::(\d{2}))?/.exec(s);
+        if (m) {
+            const d = new Date(
+                Number(m[1]),
+                Number(m[2]) - 1,
+                Number(m[3]),
+                Number(m[4]),
+                Number(m[5]),
+                Number(m[6] || 0),
+                0
+            );
+            return Number.isNaN(d.getTime()) ? null : d;
+        }
+        const d = new Date(s);
+        return Number.isNaN(d.getTime()) ? null : d;
     }
 
     pauseTypeLabel(pauseTypeCode) {
@@ -2270,9 +2305,10 @@ class OperateurInterface {
             this.handlePause(null, null, { skipTypeChoice: true });
             return;
         }
-        if (!this.canPerformAction()) return;
-        this.renderPauseTypeButtons();
+        // Ne pas consommer le cooldown ici : sinon le clic sur un type
+        // dans la seconde qui suit est refusé (« Veuillez attendre »).
         this.pauseTypePanel.hidden = false;
+        this.renderPauseTypeButtons();
     }
 
     closePauseTypePanel() {
@@ -2280,6 +2316,12 @@ class OperateurInterface {
     }
 
     renderPauseTypeButtons() {
+        if (!this.pauseTypeGrid) return;
+        // Recharger le catalogue au moment du clic : le jour (vendredi) et l’opérateur comptent
+        this.loadPauseTypes().finally(() => this.paintPauseTypeButtons());
+    }
+
+    paintPauseTypeButtons() {
         if (!this.pauseTypeGrid) return;
         const types = this.pauseTypes.length
             ? this.pauseTypes
@@ -2305,7 +2347,9 @@ class OperateurInterface {
 
     async loadPauseTypes() {
         try {
-            const res = await this.apiService.getPauseTypes();
+            const operatorCode = this.operator?.code || this.operator?.id || '';
+            const operatorName = this.operator?.nom || this.operator?.name || '';
+            const res = await this.apiService.getPauseTypes({ operatorCode, operatorName });
             this.pauseTypesEnabled = res?.enabled === true;
             this.pauseTypes = res?.data || res || [];
         } catch (e) {
@@ -2514,6 +2558,8 @@ class OperateurInterface {
             
             this.closePauseTypePanel();
             this.pauseTimer();
+            // Couper le timer productif : sinon updateTimer peut écraser le minuteur de pause
+            this.isRunning = false;
             this.freezeLivePresenceIntoSnapshot();
             this.startBtn.disabled = false;
             this.startBtn.innerHTML = '<i class="fas fa-play"></i> Reprendre';
@@ -2651,7 +2697,12 @@ class OperateurInterface {
         this.stopPauseWatch({ clearDisplay: false });
         this.currentPauseTypeCode = pauseTypeCode || null;
         this.currentPauseTypeLabel = pauseTypeLabel || pauseTypeCode || 'Pause';
-        this.pauseWatchStartedAt = startedAt ? new Date(startedAt) : new Date();
+        const parsedStart = startedAt
+            ? (startedAt instanceof Date ? startedAt : this.parseLocalDateTime(startedAt))
+            : null;
+        this.pauseWatchStartedAt = (parsedStart && !Number.isNaN(parsedStart.getTime()))
+            ? parsedStart
+            : new Date();
         const expectedMin = this.resolvePauseExpectedMinutes(pauseTypeCode);
         this.pauseWatchExpectedSec = (expectedMin != null && Number(expectedMin) > 0)
             ? Math.round(Number(expectedMin) * 60)
@@ -2905,22 +2956,29 @@ class OperateurInterface {
             console.log(`Phase pour ${operation.lancementCode}:`, operation.phase);
             
             const row = document.createElement('tr');
+            const isPause = operation.type === 'pause' || operation._isPauseRow === true;
             
-            // Ajouter une classe spéciale pour les lignes de pause
-            if (operation.type === 'pause') {
+            // Lignes de pause bien visibles (fond jaune + icône) pour éviter la confusion opérateur
+            if (isPause) {
                 row.classList.add('pause-row');
-                if (operation.statusCode === 'PAUSE_TERMINEE') {
+                if (String(operation.statusCode || '').toUpperCase().includes('TERMINEE')
+                    || String(operation.statusCode || '').toUpperCase().includes('TERMINÉE')) {
                     row.classList.add('pause-terminee');
                 }
             }
             
             // Normaliser le statusCode pour les classes CSS (en majuscules, remplacer les caractères spéciaux)
             const normalizedStatusCode = (operation.statusCode || 'EN_COURS').toUpperCase().replace(/[^A-Z0-9_]/g, '_');
+            const stepLabel = isPause
+                ? 'Pause'
+                : (operation.fabrication && operation.fabrication !== '-'
+                    ? operation.fabrication
+                    : (operation.phase || 'PRODUCTION'));
             
             row.innerHTML = `
-                <td>${this.escapeHtml(operation.lancementCode || '-')} ${operation.type === 'pause' ? '<i class="fas fa-pause-circle pause-icon"></i>' : ''}</td>
+                <td>${this.escapeHtml(operation.lancementCode || '-')} ${isPause ? '<i class="fas fa-pause-circle pause-icon" title="Pause"></i>' : ''}</td>
                 <td>${this.escapeHtml(operation.article || '-')}</td>
-                <td>${this.escapeHtml(operation.phase || 'PRODUCTION')}</td>
+                <td>${this.escapeHtml(stepLabel)}</td>
                 <td>${this.escapeHtml(operation.startTime || '-')}</td>
                 <td>${this.escapeHtml(operation.endTime || '-')}</td>
                 <td>
