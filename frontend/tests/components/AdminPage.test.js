@@ -2,7 +2,8 @@ import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest';
 import AdminPage, {
   getAdminStepColumnDisplay,
   compareAdminTimelineRows,
-  getAdminRowSortTimestamp
+  getAdminRowSortTimestamp,
+  composeClockOnDay
 } from '../../components/AdminPage.js';
 
 // Mock des dépendances
@@ -24,6 +25,13 @@ vi.mock('../../utils/TimeUtils.js', () => ({
     })
   }
 }));
+
+describe('composeClockOnDay', () => {
+  it('keeps a corrected time on yesterday even if the input date is today', () => {
+    expect(composeClockOnDay('2026-10-20', '17:25')).toBe('2026-10-20T17:25:00');
+    expect(composeClockOnDay('2026-10-20', '2026-10-21T17:25:00')).toBe('2026-10-20T17:25:00');
+  });
+});
 
 describe('getAdminStepColumnDisplay', () => {
   it('shows Phase as step code and Fabrication as label', () => {
@@ -165,7 +173,7 @@ describe('AdminPage', () => {
       <span id="activeLancements"></span>
       <span id="pausedLancements"></span>
       <span id="completedLancements"></span>
-      <table><tbody id="operationsTableBody"></tbody></table>
+      <div class="table-container"><table id="operationsTable"><tbody id="operationsTableBody"></tbody></table></div>
       <select id="operatorFilter"></select>
       <select id="statusFilter">
         <option value=""></option>
@@ -175,6 +183,7 @@ describe('AdminPage', () => {
         <option value="T">Transmis SILOG</option>
       </select>
       <input id="searchFilter" />
+      <input id="operatorCodeSearch" />
       <button id="clearFiltersBtn"></button>
       <button id="transferBtn"></button>
       <button id="addOperationBtn"></button>
@@ -317,6 +326,23 @@ describe('AdminPage', () => {
       mockApiService.getAdminData.mockRejectedValue(new Error('Network error'));
       await adminPage.loadData().catch(() => {});
       expect(adminPage.operations.length).toBe(1);
+    });
+
+    it('keeps existing rows while a silent refresh is in flight', async () => {
+      adminPage.operationsTableBody.innerHTML = '<tr data-operation-id="keep"><td>Myriam</td></tr>';
+      let resolveAdmin;
+      mockApiService.getAdminData.mockImplementation(() => new Promise((resolve) => {
+        resolveAdmin = resolve;
+      }));
+      mockApiService.getConnectedOperators.mockResolvedValue({ success: true, operators: [] });
+      mockApiService.getAllOperators.mockResolvedValue({ success: true, operators: [] });
+      mockApiService.getMonitoringTemps.mockResolvedValue({ success: true, data: [], count: 0 });
+
+      const pending = adminPage.loadData(true, { silent: true });
+      expect(adminPage.operationsTableBody.querySelector('tr[data-operation-id="keep"]')).toBeTruthy();
+      expect(adminPage.operationsTableBody.textContent).not.toContain('Chargement...');
+      resolveAdmin({ operations: [], stats: {}, pagination: { currentPage: 1, totalPages: 1 } });
+      await pending;
     });
 
     it('should increment consecutive errors', async () => {
@@ -465,6 +491,14 @@ describe('AdminPage', () => {
           DateCreation: '2026-09-30',
           StartTime: '2026-09-30T14:53:17',
           EndTime: '2026-09-30T15:38:06'
+        },
+        {
+          TempsId: 607,
+          OperatorCode: '865',
+          LancementCode: 'LT2600636',
+          DateCreation: '2026-09-30',
+          StartTime: '2026-09-30T16:55:40',
+          EndTime: '2026-09-30T17:25:00'
         }
       ];
       const out = adminPage._preferWorkSegmentsOverConsolidated(ops);
@@ -472,6 +506,8 @@ describe('AdminPage', () => {
       expect(out.find((o) => o.TempsId === 450 && !o._isWorkSegment)).toBeUndefined();
       expect(out.filter((o) => o._isWorkSegment)).toHaveLength(3);
       expect(out.find((o) => o.TempsId === 451)).toBeTruthy();
+      // Autre cycle le même jour (heure de début différente) : reste visible
+      expect(out.find((o) => o.TempsId === 607 && !o._isWorkSegment)).toBeTruthy();
     });
   });
 
@@ -726,6 +762,18 @@ describe('AdminPage', () => {
       expect(row).toBeTruthy();
       expect(row.textContent).toContain('TRANSMIS');
       expect(row.querySelector('.transmitted-lock')).toBeTruthy();
+    });
+
+    it('should filter by operator number', () => {
+      adminPage.operations = [
+        { TempsId: 1, OperatorCode: '754', LancementCode: 'LT2600960', StatutTraitement: null, DateCreation: '2026-10-09' },
+        { TempsId: 2, OperatorCode: '890', LancementCode: 'LT2600960', StatutTraitement: null, DateCreation: '2026-10-09' }
+      ];
+      document.getElementById('operatorCodeSearch').value = '754';
+      adminPage.updateOperationsTable();
+      const text = adminPage.operationsTableBody.textContent;
+      expect(text).toContain('754');
+      expect(text).not.toContain('890');
     });
 
     it('should filter by search', () => {
