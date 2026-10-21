@@ -1682,6 +1682,27 @@ body {
     overflow-x: auto;
 }
 
+.table-container.is-refreshing {
+    pointer-events: none;
+    opacity: 0.92;
+    transition: opacity 0.12s linear;
+}
+
+#operationsTable {
+    table-layout: fixed;
+}
+
+#operationsTable td.designation-cell,
+#operationsTable td:nth-child(3) {
+    white-space: normal;
+    overflow: hidden;
+    line-height: 1.3;
+    max-height: 2.6em;
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+}
+
 table {
     width: 100%;
     border-collapse: collapse;

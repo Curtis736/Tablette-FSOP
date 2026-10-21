@@ -9,6 +9,20 @@ import { debounce } from '../utils/debounce.js';
 import { createElement, createTableCell, createButton, createBadge, clearElement } from '../utils/DOMHelper.js';
 import { ADMIN_CONFIG, STATUS_CODES, STATUS_LABELS } from '../utils/Constants.js';
 
+/**
+ * Recolle une heure corrigée sur le jour de la ligne.
+ * "17:25" ou "2026-10-21T17:25:00" restent sur dayYmd (la veille), pas sur aujourd'hui.
+ */
+function composeClockOnDay(dayYmd, timeInput) {
+    const day = String(dayYmd || '').match(/^(\d{4}-\d{2}-\d{2})/)?.[1];
+    const hm = String(timeInput || '').trim().match(/(\d{1,2}):(\d{2})(?::(\d{2}))?/);
+    if (!day || !hm) return timeInput || '';
+    const hh = hm[1].padStart(2, '0');
+    const mm = hm[2];
+    const ss = String(hm[3] || '00').padStart(2, '0');
+    return `${day}T${hh}:${mm}:${ss}`;
+}
+
 /** Date locale YYYY-MM-DD (alignée avec loadData / SQL jour civil). */
 function toLocalDateOnlyString(d) {
     const x = new Date(d);
@@ -126,7 +140,7 @@ class AdminPage {
         this.notificationManager = app.getNotificationManager();
         
         // Initialiser les utilitaires
-        this.logger = new Logger(true); // logs admin toujours actifs
+        this.logger = new Logger(false);
         this.domCache = new DOMCache();
         this.errorHandler = new ErrorHandler(this.notificationManager, this.logger);
         this.validator = new Validator();
@@ -295,8 +309,9 @@ class AdminPage {
     }
 
     /**
-     * Si des créneaux productifs (segments) existent pour opérateur+LT+jour,
-     * masquer la ligne ABTEMPS cumulée (DEBUT→FIN) — sinon on voit un seul bloc.
+     * Si un segment productif couvre le même créneau (opérateur+LT+jour+heure de début),
+     * masquer la ligne ABTEMPS de ce cycle — sinon on voit le cumul et le détail.
+     * Un autre cycle du même jour (autre heure de début) reste visible.
      * La pause n'est pas une ligne : fin d'une ligne = pause, début suivante = reprise.
      */
     _preferWorkSegmentsOverConsolidated(ops) {
@@ -326,6 +341,9 @@ class AdminPage {
         };
 
         const segmentDays = new Set(segments.map(dayKey));
+        const segmentSlots = new Set(
+            segments.map((op) => this._getAdminStartSlotKey(op)).filter(Boolean)
+        );
 
         // Attacher les TempsId consolidés aux segments (même créneau) pour le transfert / sélection.
         const consolidatedBySlot = new Map();
@@ -353,7 +371,7 @@ class AdminPage {
             if (op?._isPauseRow) return true;
             if (op?._isWorkSegment) return true;
             const tid = op?.TempsId ?? op?.tempsId;
-            if (tid != null && String(tid).trim() !== '' && segmentDays.has(dayKey(op))) {
+            if (tid != null && String(tid).trim() !== '' && segmentSlots.has(this._getAdminStartSlotKey(op))) {
                 return false;
             }
             return true;
@@ -532,18 +550,26 @@ class AdminPage {
                     });
                 }
                 
-                // Filtre de recherche avec debounce
+                // Filtre de recherche : filtrage local immédiat, API en silence (sans vider le tableau)
                 const searchFilter = this.domCache.get('searchFilter');
                 if (searchFilter) {
-                    const debouncedLoadData = debounce(() => {
-                        // Recharger depuis le backend car le filtre lancement peut être appliqué côté API
-                        this.loadData();
+                    const debouncedSearchReload = debounce(() => {
+                        this.loadData(true, { silent: true });
                     }, ADMIN_CONFIG.SEARCH_DEBOUNCE_DELAY);
-                    searchFilter.addEventListener('input', debouncedLoadData);
+                    searchFilter.addEventListener('input', () => {
+                        this.currentPage = 1;
+                        this.updateOperationsTable();
+                        this.updatePaginationInfo();
+                        debouncedSearchReload();
+                    });
                 }
 
                 const operatorCodeSearch = this.domCache.get('operatorCodeSearch');
                 if (operatorCodeSearch) {
+                    const debouncedOperatorCodeFilter = debounce(() => {
+                        this.updateOperationsTable();
+                        this.updatePaginationInfo();
+                    }, 150);
                     operatorCodeSearch.addEventListener('input', () => {
                         this.currentPage = 1;
                         const term = operatorCodeSearch.value.trim();
@@ -552,12 +578,11 @@ class AdminPage {
                             this.selectedOperatorCode = '';
                             if (this.operatorSelect) this.operatorSelect.value = '';
                             if (hadFetchedOperator) {
-                                this.loadData();
+                                this.loadData(true, { silent: true });
                                 return;
                             }
                         }
-                        this.updateOperationsTable();
-                        this.updatePaginationInfo();
+                        debouncedOperatorCodeFilter();
                     });
                 }
                 
@@ -707,6 +732,33 @@ class AdminPage {
     }
 
     /**
+     * Si le filtre affiche un seul jour (aujourd'hui, hier, calendrier) qui n'est pas
+     * celui de la ligne, basculer sur le jour de la ligne. Mois / semaine inchangés.
+     */
+    _keepAdminPeriodOnRecordDay(recordDay) {
+        if (!recordDay) return;
+        const periodFilter = this.domCache.get('periodFilter') || document.getElementById('periodFilter');
+        const period = periodFilter?.value || 'month';
+        if (period === 'month' || period === 'week') return;
+
+        const today = toLocalDateOnlyString(new Date());
+        const yesterdayDate = new Date();
+        yesterdayDate.setDate(yesterdayDate.getDate() - 1);
+        const yesterday = toLocalDateOnlyString(yesterdayDate);
+        const picker = this.domCache.get('adminDatePicker');
+        const shown = period === 'today'
+            ? today
+            : period === 'yesterday'
+                ? yesterday
+                : (picker?.value || today);
+        if (shown === recordDay) return;
+
+        if (periodFilter) periodFilter.value = 'custom';
+        if (picker) picker.value = recordDay;
+        this.syncAdminDatePickerUI();
+    }
+
+    /**
      * Affiche le sélecteur de date lorsque la période « Un jour » est choisie.
      */
     syncAdminDatePickerUI() {
@@ -729,7 +781,18 @@ class AdminPage {
         }
     }
 
-    async loadData(enableAutoConsolidate = true) {
+    _setOperationsTableRefreshing(isRefreshing) {
+        const container = this.operationsTableBody?.closest('.table-container')
+            || document.getElementById('operationsTable')?.closest('.table-container');
+        if (container) container.classList.toggle('is-refreshing', Boolean(isRefreshing));
+    }
+
+    _hasVisibleOperationRows() {
+        if (!this.operationsTableBody) return false;
+        return Boolean(this.operationsTableBody.querySelector('tr:not(.empty-state-row)'));
+    }
+
+    async loadData(enableAutoConsolidate = true, options = {}) {
         if (this.isLoading) {
             this.logger.log('Chargement déjà en cours, ignorer...');
             return;
@@ -738,9 +801,11 @@ class AdminPage {
         try {
             this.isLoading = true;
             const seq = ++this._loadSeq;
+            const silent = options?.silent === true || this._isAutoRefresh === true;
+            const keepExistingRows = silent || this._hasVisibleOperationRows();
 
-            // Vider immédiatement le tableau pour éviter les mélanges pendant le chargement
-            if (this.operationsTableBody) {
+            this._setOperationsTableRefreshing(keepExistingRows);
+            if (!keepExistingRows && this.operationsTableBody) {
                 clearElement(this.operationsTableBody);
                 const row = createElement('tr', { className: 'empty-state-row' });
                 const cell = createTableCell('', { colspan: '9', className: 'empty-state' });
@@ -1156,7 +1221,7 @@ class AdminPage {
             throw error;
         } finally {
             this.isLoading = false;
-            // Masquer l'indicateur de chargement
+            this._setOperationsTableRefreshing(false);
             this.loadingIndicator.hide('loadData');
         }
     }
@@ -1939,9 +2004,12 @@ class AdminPage {
         // Mémoriser pour stats cohérentes avec le tableau
         this._lastFilteredOperationsForStats = filteredOperations;
         this.updateStats(filteredOperations);
+
+        const scrollY = typeof window !== 'undefined' ? window.scrollY : 0;
+        const tableContainer = this.operationsTableBody?.closest('.table-container');
+        const tableScrollTop = tableContainer?.scrollTop || 0;
         
         clearElement(this.operationsTableBody);
-        this.logger.log('🧹 TABLEAU VIDE');
         
         // Déterminer le message à afficher si aucune opération
         let emptyMessage = '';
@@ -2050,21 +2118,9 @@ class AdminPage {
             if (opCode) ltToOperators.get(lt).add(opCode);
         });
         
-        this.logger.log('🔄 CREATION DES LIGNES POUR', operationsToDisplay.length, 'OPERATIONS');
-        this.logger.log('📋 DONNEES COMPLETES DES OPERATIONS:', operationsToDisplay);
+        const fragment = document.createDocumentFragment();
         
-        operationsToDisplay.forEach((operation, index) => {
-            // Debug pour voir les données reçues (Monitoring)
-            this.logger.log(`🔍 Enregistrement ${index + 1}:`, {
-                TempsId: operation.TempsId,
-                OperatorName: operation.OperatorName,
-                OperatorCode: operation.OperatorCode,
-                LancementCode: operation.LancementCode,
-                LancementName: operation.LancementName,
-                StartTime: operation.StartTime,
-                EndTime: operation.EndTime,
-                StatutTraitement: operation.StatutTraitement
-            });
+        operationsToDisplay.forEach((operation) => {
             
             const formattedStartTime = this.formatDateTime(operation.StartTime);
             const formattedEndTime = this.formatDateTime(operation.EndTime);
@@ -2081,12 +2137,6 @@ class AdminPage {
                     this.logger.warn(`⚠️ Heures incohérentes pour ${operation.lancementCode}: ${formattedStartTime} -> ${formattedEndTime}`);
                 }
             }
-            
-            this.logger.log(`⏰ Heures formatées pour ${operation.LancementCode}:`, {
-                startTime: `${operation.StartTime} -> ${formattedStartTime}`,
-                endTime: `${operation.EndTime} -> ${formattedEndTime}`,
-                warning: timeWarning ? 'Heures incohérentes détectées' : 'OK'
-            });
             
             const row = createElement('tr');
             const isPauseRow = operation._isPauseRow === true || operation.type === 'pause';
@@ -2184,7 +2234,8 @@ class AdminPage {
             row.appendChild(cell2);
             
             // Cellule 3: Nom lancement
-            const cell3 = createTableCell(operation.LancementName || '-');
+            const cell3 = createTableCell(operation.LancementName || '-', { className: 'designation-cell' });
+            cell3.title = operation.LancementName || '';
             row.appendChild(cell3);
             
             const { stepCode, stepLabel } = getAdminStepColumnDisplay(operation);
@@ -2309,12 +2360,16 @@ class AdminPage {
             }
             }
             row.appendChild(cell9);
-            
-            this.operationsTableBody.appendChild(row);
+            fragment.appendChild(row);
             
             // Afficher les problèmes détectés pour cette opération
             this.showOperationIssues(operation, row);
         });
+        this.operationsTableBody.appendChild(fragment);
+        if (tableContainer) tableContainer.scrollTop = tableScrollTop;
+        if (typeof window !== 'undefined' && Number.isFinite(scrollY)) {
+            window.scrollTo(0, scrollY);
+        }
     }
 
     getMonitoringStatusText(code) {
@@ -3252,25 +3307,26 @@ class AdminPage {
                 
                 // Mettre à jour l'enregistrement en mémoire immédiatement
                 if (record) {
+                    const recordDay = this._parseOpDateCreationLocalYmd(record.DateCreation)
+                        || this._parseOpDateCreationLocalYmd(record.StartTime);
                     if (corrections.LancementCode !== undefined) record.LancementCode = corrections.LancementCode;
                     if (corrections.Phase !== undefined) record.Phase = corrections.Phase;
                     if (corrections.CodeRubrique !== undefined) record.CodeRubrique = corrections.CodeRubrique;
-                    if (corrections.StartTime !== undefined) record.StartTime = corrections.StartTime;
-                    if (corrections.EndTime !== undefined) record.EndTime = corrections.EndTime;
+                    if (corrections.StartTime !== undefined) {
+                        record.StartTime = composeClockOnDay(recordDay, corrections.StartTime);
+                    }
+                    if (corrections.EndTime !== undefined) {
+                        record.EndTime = composeClockOnDay(recordDay, corrections.EndTime);
+                    }
                     
                     // Mettre à jour la ligne dans le tableau sans tout recharger
                     this.updateMonitoringRowInTable(tempsId, record);
+                    this._keepAdminPeriodOnRecordDay(recordDay);
                 }
                 
-                // Recharger les données après un court délai pour s'assurer que tout est synchronisé
-                setTimeout(async () => {
-                    // Utiliser la date locale pour correspondre à la date SQL (évite les décalages UTC).
-                    const d = new Date();
-                    const y = d.getFullYear();
-                    const m = String(d.getMonth() + 1).padStart(2, '0');
-                    const day = String(d.getDate()).padStart(2, '0');
-                    await this.loadMonitoringRecords(`${y}-${m}-${day}`);
-                    this.updateOperationsTable();
+                this.lastEditTime = Date.now();
+                setTimeout(() => {
+                    this.loadData(true, { silent: true });
                 }, 500);
             } else {
                 this.notificationManager.error(result?.error || 'Erreur correction');
@@ -4766,6 +4822,7 @@ export {
     getAdminStepColumnDisplay,
     compareAdminTimelineRows,
     getAdminRowSortTimestamp,
-    formatAdminRowDate
+    formatAdminRowDate,
+    composeClockOnDay
 };
 export default AdminPage;

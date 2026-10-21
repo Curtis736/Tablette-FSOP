@@ -8,22 +8,30 @@ const { executeQuery, executeNonQuery } = require('../config/database');
 class MonitoringService {
     static _toDateOnly(value) {
         if (!value) return null;
-        // SQL DATE often comes back as JS Date via mssql
+        // DATETIME SQL sans fuseau : tedious le renvoie en UTC (horloge murale SQL).
+        // getDate() local déplace une ligne de la veille sur aujourd'hui (Paris = UTC+2).
         if (value instanceof Date) {
             if (Number.isNaN(value.getTime())) return null;
-            // Prefer local calendar day for Date objects that are midnight local
-            const y = value.getFullYear();
-            const m = String(value.getMonth() + 1).padStart(2, '0');
-            const d = String(value.getDate()).padStart(2, '0');
-            // If ISO UTC midnight shifts day, still use the SQL-ish YYYY-MM-DD from ISO when available
-            const iso = value.toISOString().slice(0, 10);
-            return iso || `${y}-${m}-${d}`;
+            const y = value.getUTCFullYear();
+            const m = String(value.getUTCMonth() + 1).padStart(2, '0');
+            const d = String(value.getUTCDate()).padStart(2, '0');
+            return `${y}-${m}-${d}`;
         }
         const s = String(value).trim();
-        // Common formats: "2026-01-21", "2026-01-21T00:00:00.000Z"
         const m = s.match(/^(\d{4}-\d{2}-\d{2})/);
         if (m) return m[1];
         return null;
+    }
+
+    /**
+     * Pose une heure corrigée sur le jour de la ligne (DateCreation), jamais sur aujourd'hui.
+     * Une saisie "17:25" ou "2026-10-21T17:25:00" ne change pas le jour.
+     */
+    static _clockOnRecordDay(dateCreation, timeInput, fallbackDateTime) {
+        const date = this._toDateOnly(dateCreation) || this._toDateOnly(fallbackDateTime);
+        const parts = this._parseTimeParts(timeInput) || this._wallClockParts(timeInput);
+        if (!date || !parts) return null;
+        return { date, hms: this._timePartsToHms(parts) };
     }
 
     /**
@@ -81,6 +89,33 @@ class MonitoringService {
         if (end >= start) return end - start;
         // Cross midnight
         return (24 * 60 - start) + end;
+    }
+
+    /**
+     * Heure murale SQL (DATETIME sans fuseau).
+     * tedious renvoie ces valeurs comme Date UTC : getHours()/toTimeString()
+     * appliquent le fuseau du process et décalent l'heure (ex. 16:55 → 18:55 à Paris).
+     */
+    static _wallClockParts(value) {
+        if (!value) return null;
+        if (value instanceof Date) {
+            if (Number.isNaN(value.getTime())) return null;
+            return {
+                hh: value.getUTCHours(),
+                mm: value.getUTCMinutes(),
+                ss: value.getUTCSeconds()
+            };
+        }
+        const s = String(value).trim();
+        const asTime = this._parseTimeParts(s);
+        if (asTime) return asTime;
+        const embedded = s.match(/(\d{1,2}):(\d{2})(?::(\d{2}))?/);
+        if (!embedded) return null;
+        const hh = Number.parseInt(embedded[1], 10);
+        const mm = Number.parseInt(embedded[2], 10);
+        const ss = embedded[3] ? Number.parseInt(embedded[3], 10) : 0;
+        if (hh > 23 || mm > 59 || ss > 59) return null;
+        return { hh, mm, ss };
     }
 
     /**
@@ -363,8 +398,8 @@ class MonitoringService {
             `;
             const currentRows = await executeQuery(currentQuery, { tempsId });
             const current = currentRows?.[0] || null;
-            // Date (YYYY-MM-DD) de l'enregistrement pour construire StartTime/EndTime côté SQL (sans décalage timezone)
-            const dateOnly = this._toDateOnly(current?.DateCreation);
+            // Jour de la ligne (DateCreation). Une correction d'heure ne doit jamais glisser sur aujourd'hui.
+            const dateOnly = this._toDateOnly(current?.DateCreation) || this._toDateOnly(current?.StartTime);
             
             // Construire la requête de mise à jour
             const updateFields = [];
@@ -453,29 +488,29 @@ class MonitoringService {
             }
             
             if (corrections.StartTime !== undefined) {
-                const parts = this._parseTimeParts(corrections.StartTime);
-                if (parts && dateOnly) {
-                    updateFields.push("StartTime = DATEADD(SECOND, DATEDIFF(SECOND, '00:00:00', CAST(@startTimeHms AS TIME)), CAST(@date AS DATETIME2))");
-                    updateParams.startTimeHms = this._timePartsToHms(parts);
-                    updateParams.date = dateOnly;
-                } else {
-                    // Fallback: assume full datetime string
-                updateFields.push('StartTime = @startTime');
-                updateParams.startTime = corrections.StartTime;
+                const scheduled = this._clockOnRecordDay(dateOnly, corrections.StartTime);
+                if (!scheduled) {
+                    return {
+                        success: false,
+                        error: 'Heure de début invalide, ou jour de la ligne introuvable'
+                    };
                 }
+                updateFields.push("StartTime = DATEADD(SECOND, DATEDIFF(SECOND, '00:00:00', CAST(@startTimeHms AS TIME)), CAST(@date AS DATETIME2))");
+                updateParams.startTimeHms = scheduled.hms;
+                updateParams.date = scheduled.date;
             }
             
             if (corrections.EndTime !== undefined) {
-                const parts = this._parseTimeParts(corrections.EndTime);
-                if (parts && dateOnly) {
-                    updateFields.push("EndTime = DATEADD(SECOND, DATEDIFF(SECOND, '00:00:00', CAST(@endTimeHms AS TIME)), CAST(@date AS DATETIME2))");
-                    updateParams.endTimeHms = this._timePartsToHms(parts);
-                    updateParams.date = dateOnly;
-                } else {
-                    // Fallback: assume full datetime string
-                updateFields.push('EndTime = @endTime');
-                updateParams.endTime = corrections.EndTime;
+                const scheduled = this._clockOnRecordDay(dateOnly, corrections.EndTime);
+                if (!scheduled) {
+                    return {
+                        success: false,
+                        error: 'Heure de fin invalide, ou jour de la ligne introuvable'
+                    };
                 }
+                updateFields.push("EndTime = DATEADD(SECOND, DATEDIFF(SECOND, '00:00:00', CAST(@endTimeHms AS TIME)), CAST(@date AS DATETIME2))");
+                updateParams.endTimeHms = scheduled.hms;
+                updateParams.date = scheduled.date;
             }
 
             // IMPORTANT: Si StartTime/EndTime sont modifiés, recalculer automatiquement TotalDuration/ProductiveDuration
@@ -487,11 +522,11 @@ class MonitoringService {
             if (shouldRecalculateFromTimes) {
                 const startParts = corrections.StartTime !== undefined
                     ? this._parseTimeParts(corrections.StartTime)
-                    : this._parseTimeParts(current?.StartTime ? new Date(current.StartTime).toTimeString().substring(0, 5) : null);
+                    : this._wallClockParts(current?.StartTime);
 
                 const endParts = corrections.EndTime !== undefined
                     ? this._parseTimeParts(corrections.EndTime)
-                    : this._parseTimeParts(current?.EndTime ? new Date(current.EndTime).toTimeString().substring(0, 5) : null);
+                    : this._wallClockParts(current?.EndTime);
 
                 if (startParts && endParts) {
                     const total = this._minutesBetweenTimes(startParts, endParts);

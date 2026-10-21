@@ -31,6 +31,23 @@ describe('MonitoringService.reconcileSameKeyCyclesForSilog', () => {
     expect(nonQuery).not.toHaveBeenCalled();
   });
 
+  it('keeps a yesterday correction on the record day, not today', () => {
+    const dateCreation = new Date('2026-10-20T00:00:00.000Z');
+    expect(MonitoringService._toDateOnly(dateCreation)).toBe('2026-10-20');
+    const fromTime = MonitoringService._clockOnRecordDay(dateCreation, '17:25');
+    const fromTodayDatetime = MonitoringService._clockOnRecordDay(dateCreation, '2026-10-21T17:25:00');
+    expect(fromTime).toEqual({ date: '2026-10-20', hms: '17:25:00' });
+    expect(fromTodayDatetime).toEqual({ date: '2026-10-20', hms: '17:25:00' });
+  });
+
+  it('reads SQL wall-clock hours in UTC so Paris does not shift 16:55 to 18:55', () => {
+    const start = new Date('2026-10-20T16:55:40.000Z');
+    const end = MonitoringService._parseTimeParts('17:25');
+    const startParts = MonitoringService._wallClockParts(start);
+    expect(startParts).toEqual({ hh: 16, mm: 55, ss: 40 });
+    expect(MonitoringService._minutesBetweenTimes(startParts, end)).toBe(30);
+  });
+
   it('deduplicates ids and ignores invalid values', async () => {
     const result = await MonitoringService.reconcileSameKeyCyclesForSilog([501, 501, 0, 'x', 502]);
     expect(result.primaryIds).toEqual([501, 502]);
