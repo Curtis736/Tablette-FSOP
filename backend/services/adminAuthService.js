@@ -36,6 +36,25 @@ function getAdminCredentials() {
     return { enabled, username, password };
 }
 
+function isTruthyEnv(value) {
+    const raw = String(value || '').trim().toLowerCase();
+    return raw === '1' || raw === 'true' || raw === 'yes';
+}
+
+// Espace RH désactivé tant que ENABLE_RH=true n'est pas posé explicitement.
+function isRhEnabled() {
+    return isTruthyEnv(process.env.ENABLE_RH) && !isTruthyEnv(process.env.RH_AUTH_DISABLED);
+}
+
+function getRhCredentials() {
+    const username = process.env.RH_USERNAME || 'rh';
+    const password = (process.env.RH_PASSWORD && String(process.env.RH_PASSWORD).trim() !== '')
+        ? process.env.RH_PASSWORD
+        : 'rh';
+
+    return { enabled: isRhEnabled(), username, password };
+}
+
 function signPayload(payload) {
     const data = JSON.stringify(payload);
     const b64 = Buffer.from(data).toString('base64url');
@@ -60,12 +79,12 @@ function verifyPayload(token) {
     }
 }
 
-function issueToken(username) {
+function issueToken(username, { role = 'admin' } = {}) {
     const ttlMs = Number.parseInt(process.env.ADMIN_TOKEN_TTL_MS || '', 10);
     const expiresAt = Date.now() + (Number.isFinite(ttlMs) ? ttlMs : DEFAULT_TTL_MS);
-    const jti = crypto.randomBytes(16).toString('hex'); // identifiant unique pour révocation
-    const token = signPayload({ username, expiresAt, jti });
-    return { token, expiresAt };
+    const jti = crypto.randomBytes(16).toString('hex');
+    const token = signPayload({ username, role, expiresAt, jti });
+    return { token, expiresAt, role };
 }
 
 function revokeToken(token) {
@@ -81,7 +100,11 @@ function verifyToken(token) {
     if (!payload) return null;
     if (Date.now() > payload.expiresAt) return null;
     if (revokedTokens.has(payload.jti)) return null;
-    return { username: payload.username, expiresAt: payload.expiresAt };
+    return {
+        username: payload.username,
+        role: payload.role || 'admin',
+        expiresAt: payload.expiresAt
+    };
 }
 
 function cleanupExpiredTokens() {
@@ -98,6 +121,8 @@ function cleanupExpiredTokens() {
 
 module.exports = {
     getAdminCredentials,
+    getRhCredentials,
+    isRhEnabled,
     issueToken,
     revokeToken,
     verifyToken,

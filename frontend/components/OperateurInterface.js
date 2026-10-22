@@ -20,8 +20,6 @@ class OperateurInterface {
         this.pendingForceReplace = false; // Flag pour forcer le remplacement après confirmation
         this.cachedOperators = null; // Cache pour la liste des opérateurs
         this.startRequestInFlight = false;
-        this.shiftTargetSeconds = 8 * 60 * 60; // Objectif opérateur: 8h
-        this.dailyWorkedSecondsFromHistory = 0;
         this.tempsRestantData = null;
 
         // Debouncing pour éviter les clics répétés
@@ -49,7 +47,6 @@ class OperateurInterface {
         this.setupEventListeners();
         window.addEventListener('sedi:session-expired', this._onSessionExpired);
         this.initializeLancementInput();
-        this.updateShiftCountdownDisplay();
         // Important: on part toujours d'un écran neutre à la connexion.
         // Évite d'afficher un LT "résiduel" (champ conservé par le DOM / cache) quand aucune opération n'est en cours.
         this.resetControls();
@@ -64,11 +61,14 @@ class OperateurInterface {
         queueMicrotask(() => {
             this.checkCurrentOperation({ promptIfRunning: false });
             this.loadOperatorHistory();
+            this.loadPauseTypes();
+            this.loadOperatorCounters();
         });
 
         // Synchronisation périodique UI ↔ DB (toutes les 30s)
-        // Détecte les désynchronisations (coupure réseau, refresh partiel, etc.)
         this._syncInterval = setInterval(() => this._syncStateFromDB(), 30000);
+        // Stream compteurs toutes les 8s (soft = pas de collapse UI)
+        this._presenceInterval = setInterval(() => this.loadOperatorCounters({ soft: true }), 8000);
     }
 
     // ─── Nettoyage / destruction propre ───────────────────────────────────────
@@ -82,9 +82,14 @@ class OperateurInterface {
             clearInterval(this.timerInterval);
             this.timerInterval = null;
         }
+        this.stopPauseWatch();
         if (this._syncInterval) {
             clearInterval(this._syncInterval);
             this._syncInterval = null;
+        }
+        if (this._presenceInterval) {
+            clearInterval(this._presenceInterval);
+            this._presenceInterval = null;
         }
         window.removeEventListener('sedi:session-expired', this._onSessionExpired);
         // Réinitialiser tout l'état interne pour éviter les fuites
@@ -265,8 +270,25 @@ class OperateurInterface {
         this.timerDisplay = document.getElementById('timerDisplay');
         this.statusDisplay = document.getElementById('statusDisplay');
         this.endTimeDisplay = document.getElementById('endTimeDisplay');
-        this.shiftWorkedDisplay = document.getElementById('shiftWorkedDisplay');
-        this.shiftRemainingDisplay = document.getElementById('shiftRemainingDisplay');
+        this.pauseTypePanel = document.getElementById('pauseTypePanel');
+        this.pauseTypeGrid = document.getElementById('pauseTypeGrid');
+        this.pauseTypeCancelBtn = document.getElementById('pauseTypeCancelBtn');
+        this.countersWeek = document.getElementById('countersWeek');
+        this.counterRemainingToday = document.getElementById('counterRemainingToday');
+        this.counterProductiveToday = document.getElementById('counterProductiveToday');
+        this.counterPauseToday = document.getElementById('counterPauseToday');
+        this.counterAutreToday = document.getElementById('counterAutreToday');
+        this.counterFormationToday = document.getElementById('counterFormationToday');
+        this.pauseTypes = [];
+        this.currentPauseTypeLabel = null;
+        this.currentPauseTypeCode = null;
+        this.countersSnapshot = null;
+        this.countersLiveSince = null;
+        this.pauseWatchInterval = null;
+        this.pauseWatchStartedAt = null;
+        this.pauseWatchExpectedSec = null;
+        this.timerBlock = document.getElementById('timerBlock');
+        this.pauseTimerHint = document.getElementById('pauseTimerHint');
         
         // Éléments pour l'historique
         this.refreshHistoryBtn = document.getElementById('refreshHistoryBtn');
@@ -395,14 +417,22 @@ class OperateurInterface {
         
         // Contrôles de lancement
         if (this.startBtn) this.startBtn.addEventListener('click', () => this.handleStart());
-        if (this.pauseBtn) this.pauseBtn.addEventListener('click', () => this.handlePause());
+        if (this.pauseBtn) this.pauseBtn.addEventListener('click', () => this.openPauseTypePanel());
         if (this.stopBtn) this.stopBtn.addEventListener('click', () => this.handleStop());
+        if (this.pauseTypeCancelBtn) {
+            this.pauseTypeCancelBtn.addEventListener('click', () => this.closePauseTypePanel());
+        }
         if (this.operationStepSelect) {
             this.operationStepSelect.addEventListener('change', () => this.updateTempsRestantDisplay());
         }
         
         // Bouton actualiser historique
-        if (this.refreshHistoryBtn) this.refreshHistoryBtn.addEventListener('click', () => this.loadOperatorHistory());
+        if (this.refreshHistoryBtn) {
+            this.refreshHistoryBtn.addEventListener('click', () => {
+                this.loadOperatorHistory();
+                this.loadOperatorCounters();
+            });
+        }
         
         // Gestion des commentaires
         if (this.commentInput) this.commentInput.addEventListener('input', () => this.handleCommentInput());
@@ -2071,14 +2101,24 @@ class OperateurInterface {
         if (this.timerInterval) clearInterval(this.timerInterval);
         this.timerInterval = setInterval(() => this.updateTimer(), 1000);
         this.lancementInput.disabled = true;
+        // Timer cycle = startedAt (DEBUT). Compteur présence = ancré sur « maintenant »
+        // car l'API a déjà compté le segment ouvert jusqu'à l'instant du fetch.
+        this.countersLiveSince = Date.now();
         // Mettre à jour l’affichage du temps immédiatement (sinon il reste à 00:00:00 jusqu’au premier tick)
         this.updateTimer();
     }
 
     resumePausedOperation(operation) {
+        const lancementCode = operation?.lancementCode || operation?.CodeLancement;
+        const prevLt = String(this.currentLancement?.CodeLancement || '');
+        const wasPaused = this.isPaused === true;
+        const watchAlive = wasPaused
+            && prevLt === String(lancementCode || '')
+            && this.pauseWatchStartedAt
+            && this.pauseWatchInterval;
+
         this.isRunning = false;
         this.isPaused = true;
-        const lancementCode = operation?.lancementCode || operation?.CodeLancement;
         this.currentLancement = { CodeLancement: lancementCode };
         
         this.startBtn.disabled = false;
@@ -2087,25 +2127,72 @@ class OperateurInterface {
         this.stopBtn.disabled = false;
         this.statusDisplay.textContent = 'En pause';
 
-        // Si le backend fournit startedAt/heure de pause complète, l'utiliser; sinon fallback sur dateCreation.
-        const parseLocalDateOnly = (dc) => {
-            const s = String(dc || '').trim();
-            const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(s);
-            if (!m) return null;
-            const out = new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]), 0, 0, 0, 0);
-            return Number.isNaN(out.getTime()) ? null : out;
-        };
-        const pausedAt = operation?.startedAt || operation?.dateCreation || operation?.DateCreation || null;
-        const pauseSince = pausedAt
-            ? (typeof pausedAt === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(pausedAt) ? (parseLocalDateOnly(pausedAt) || new Date()) : new Date(pausedAt))
-            : new Date();
-        
+        // Horodatage local (pas UTC) pour le minuteur — voir parseLocalDateTime
+        const pausedAt = operation?.pauseStartedAt || null;
+        const pauseSince = this.parseLocalDateTime(pausedAt) || new Date();
+
         this.lancementDetails.innerHTML = `
             <strong>Lancement: ${this.escapeHtml(lancementCode)}</strong><br>
             <small>Opération en pause depuis ${pauseSince.toLocaleTimeString('fr-FR', { timeZone: 'Europe/Paris', hour: '2-digit', minute: '2-digit' })}</small>
         `;
         
         this.lancementInput.disabled = true;
+
+        const pauseTypeCode = operation?.pauseTypeCode || operation?.PauseTypeCode || null;
+        const pauseLabel = this.pauseTypeLabel(pauseTypeCode);
+        // Ne pas réinitialiser le minuteur si déjà en pause sur le même LT (évite un saut)
+        if (!watchAlive) {
+            this.startPauseWatch(pauseTypeCode, pauseLabel, pauseSince);
+        } else if (pauseTypeCode && !this.currentPauseTypeCode) {
+            this.currentPauseTypeCode = pauseTypeCode;
+            this.currentPauseTypeLabel = pauseLabel;
+        }
+    }
+
+    /** Parse "YYYY-MM-DDTHH:mm:ss" en Date locale (sans décalage UTC). */
+    parseLocalDateTime(value) {
+        if (value == null || value === '') return null;
+        if (value instanceof Date) {
+            return Number.isNaN(value.getTime()) ? null : value;
+        }
+        const s = String(value).trim();
+        // Date seule → minuit local
+        let m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(s);
+        if (m) {
+            const d = new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]), 0, 0, 0, 0);
+            return Number.isNaN(d.getTime()) ? null : d;
+        }
+        // Local wall-clock (avec ou sans Z / offset — on ignore le suffixe fuseau)
+        m = /^(\d{4})-(\d{2})-(\d{2})[T ](\d{2}):(\d{2})(?::(\d{2}))?/.exec(s);
+        if (m) {
+            const d = new Date(
+                Number(m[1]),
+                Number(m[2]) - 1,
+                Number(m[3]),
+                Number(m[4]),
+                Number(m[5]),
+                Number(m[6] || 0),
+                0
+            );
+            return Number.isNaN(d.getTime()) ? null : d;
+        }
+        const d = new Date(s);
+        return Number.isNaN(d.getTime()) ? null : d;
+    }
+
+    pauseTypeLabel(pauseTypeCode) {
+        const code = String(pauseTypeCode || '').trim().toUpperCase();
+        const fromApi = (this.pauseTypes || []).find((t) => String(t.code).toUpperCase() === code);
+        if (fromApi?.label) return fromApi.label;
+        const defaults = {
+            P20_PAYEE: 'Pause 20 min',
+            P10: 'Pause 10 min',
+            DEJ: 'Pause déjeuner',
+            DEJ45: 'Pause déjeuner',
+            AUTRE: 'Autre',
+            FORMATION: 'Formation'
+        };
+        return defaults[code] || 'Pause';
     }
 
     async handleStart() {
@@ -2146,6 +2233,7 @@ class OperateurInterface {
                     selectedStep ? { codeOperation: selectedStep } : {}
                 );
                 this.notificationManager.success('Opération reprise');
+                this.stopPauseWatch();
             } else {
                 // Démarrer nouvelle opération
                 if (selectedStep) {
@@ -2166,9 +2254,13 @@ class OperateurInterface {
             this.statusDisplay.textContent = 'En cours';
             this.lancementInput.disabled = true;
             this.isPaused = false;
+            // Live présence : toujours ancrer (même si snapshot pas encore là)
+            this.countersLiveSince = Date.now();
+            this.renderTodayCountersLive();
             
             // Actualiser l'historique après démarrage
             this.loadOperatorHistory();
+            this.loadOperatorCounters();
             
         } catch (error) {
             console.error('Erreur:', error);
@@ -2187,16 +2279,270 @@ class OperateurInterface {
                 this.notificationManager.warning('Phase invalide: choisissez une phase dans la liste');
                 return;
             }
+            // UI idle mais DB déjà active → restaurer au lieu d'afficher une erreur brute
+            if (
+                error?.errorCode === 'OPERATION_ALREADY_ACTIVE' ||
+                error?.errorCode === 'OPERATOR_ALREADY_HAS_ACTIVE_OPERATION'
+            ) {
+                try {
+                    await this.checkCurrentOperation({ promptIfRunning: false });
+                    if (this.isRunning || this.isPaused) {
+                        this.notificationManager.warning('Opération déjà en cours — état restauré');
+                        return;
+                    }
+                } catch (_) { /* fall through */ }
+            }
             this.notificationManager.error(error.message || 'Erreur de connexion');
         } finally {
             this.startRequestInFlight = false;
         }
     }
 
-    async handlePause() {
+    openPauseTypePanel() {
+        if (!this.currentLancement) return;
+        if (!this.pauseTypesEnabled || !this.pauseTypePanel || !this.pauseTypeGrid) {
+            // handlePause fait lui-même le contrôle anti double-clic
+            this.handlePause(null, null, { skipTypeChoice: true });
+            return;
+        }
+        // Ne pas consommer le cooldown ici : sinon le clic sur un type
+        // dans la seconde qui suit est refusé (« Veuillez attendre »).
+        this.pauseTypePanel.hidden = false;
+        this.renderPauseTypeButtons();
+    }
+
+    closePauseTypePanel() {
+        if (this.pauseTypePanel) this.pauseTypePanel.hidden = true;
+    }
+
+    renderPauseTypeButtons() {
+        if (!this.pauseTypeGrid) return;
+        // Recharger le catalogue au moment du clic : le jour (vendredi) et l’opérateur comptent
+        this.loadPauseTypes().finally(() => this.paintPauseTypeButtons());
+    }
+
+    paintPauseTypeButtons() {
+        if (!this.pauseTypeGrid) return;
+        const types = this.pauseTypes.length
+            ? this.pauseTypes
+            : [
+                { code: 'P20_PAYEE', label: 'Pause 20 min', expectedMinutes: 20 },
+                { code: 'P10', label: 'Pause 10 min', expectedMinutes: 10 },
+                { code: 'DEJ', label: 'Pause déjeuner (min. 45 min)', expectedMinutes: 45 },
+                { code: 'AUTRE', label: 'Autre', expectedMinutes: null },
+                { code: 'FORMATION', label: 'Formation', expectedMinutes: null }
+            ];
+        // Plus de bouton DEJ45 (fusionné dans DEJ)
+        const visible = types.filter((t) => String(t.code || '').toUpperCase() !== 'DEJ45');
+        this.pauseTypeGrid.innerHTML = '';
+        for (const type of visible) {
+            const btn = document.createElement('button');
+            btn.type = 'button';
+            btn.className = 'btn-warning pause-type-btn';
+            btn.textContent = type.label;
+            btn.addEventListener('click', () => this.handlePause(type.code, type.label));
+            this.pauseTypeGrid.appendChild(btn);
+        }
+    }
+
+    async loadPauseTypes() {
+        try {
+            const operatorCode = this.operator?.code || this.operator?.id || '';
+            const operatorName = this.operator?.nom || this.operator?.name || '';
+            const res = await this.apiService.getPauseTypes({ operatorCode, operatorName });
+            this.pauseTypesEnabled = res?.enabled === true;
+            this.pauseTypes = res?.data || res || [];
+        } catch (e) {
+            console.warn('Catalogue pauses indisponible:', e.message);
+            this.pauseTypesEnabled = false;
+            this.pauseTypes = [];
+        }
+    }
+
+    formatMinutesCounter(mins) {
+        const total = Math.max(0, Math.round(Number(mins) || 0));
+        const h = Math.floor(total / 60);
+        const m = total % 60;
+        return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
+    }
+
+    weekdayLabel(dateStr) {
+        try {
+            const d = new Date(`${dateStr}T12:00:00`);
+            return d.toLocaleDateString('fr-FR', { weekday: 'short', day: '2-digit', month: '2-digit' });
+        } catch {
+            return dateStr;
+        }
+    }
+
+    async loadOperatorCounters({ soft = false } = {}) {
+        try {
+            const operatorCode = this.operator?.code || this.operator?.id;
+            if (!operatorCode) return;
+            const res = await this.apiService.getOperatorCounters(operatorCode);
+            const data = res?.data || res;
+            const today = data?.today || {};
+            const defaultTarget = (() => {
+                if (!today.date) return 8 * 60 + 45;
+                const dow = new Date(`${today.date}T12:00:00`).getDay();
+                return dow === 5 ? 5 * 60 : 8 * 60 + 45;
+            })();
+            const target = today.targetMinutes != null ? today.targetMinutes : defaultTarget;
+            const presenceBase = Number(today.presenceMinutes ?? today.productiveMinutes) || 0;
+
+            this.countersSnapshot = {
+                closedPresenceMinutes: presenceBase,
+                targetMinutes: target,
+                pauseMinutes: Number(today.pauseMinutes) || 0,
+                autreMinutes: Number(today.autreMinutes) || 0,
+                formationMinutes: Number(today.formationMinutes) || 0,
+                date: today.date || null
+            };
+            if (this.isRunning && !this.isPaused) {
+                this.countersLiveSince = Date.now();
+            } else {
+                this.countersLiveSince = null;
+            }
+
+            this.renderTodayCountersLive();
+
+            const remainingLabel = this.counterRemainingToday?.previousElementSibling;
+            if (remainingLabel && remainingLabel.classList?.contains('counter-label')) {
+                const pretty = `${Math.floor(target / 60)}h${String(target % 60).padStart(2, '0')}`;
+                remainingLabel.textContent = `Reste aujourd'hui (sur ${pretty})`;
+            }
+
+            const days = (data?.days || []).filter((day) => {
+                const d = new Date(`${day.date}T12:00:00`);
+                const dow = d.getDay();
+                return dow >= 1 && dow <= 5;
+            });
+
+            if (soft && this.countersWeek?.querySelector?.('.counter-day')) {
+                for (const day of days) {
+                    const isToday = data?.today?.date === day.date;
+                    const dayTarget = day.targetMinutes != null
+                        ? day.targetMinutes
+                        : (new Date(`${day.date}T12:00:00`).getDay() === 5 ? 5 * 60 : 8 * 60 + 45);
+                    let presenceMins = Number(day.presenceMinutes ?? day.productiveMinutes) || 0;
+                    if (isToday) {
+                        presenceMins = (Number(this.countersSnapshot?.closedPresenceMinutes) || 0)
+                            + this.getLiveSessionPresenceMinutes();
+                    }
+                    const rem = isToday
+                        ? Math.max(0, dayTarget - presenceMins)
+                        : (day.remainingMinutes != null
+                            ? day.remainingMinutes
+                            : Math.max(0, dayTarget - presenceMins));
+                    const btn = this.countersWeek.querySelector(`.counter-day[data-date="${day.date}"]`);
+                    if (!btn) continue;
+                    btn.dataset.targetMinutes = String(dayTarget);
+                    btn.classList.toggle('is-today', isToday);
+                    btn.classList.toggle('is-done', rem <= 0);
+                    const remEl = btn.querySelector('.counter-day-prod');
+                    const faitEl = btn.querySelector('.counter-day-pause');
+                    const targetLabel = `${Math.floor(dayTarget / 60)}h${String(dayTarget % 60).padStart(2, '0')}`;
+                    if (remEl) remEl.textContent = `reste ${this.formatMinutesCounter(rem)}`;
+                    if (faitEl) faitEl.textContent = `fait ${this.formatMinutesCounter(presenceMins)} / ${targetLabel}`;
+                }
+                return;
+            }
+
+            if (this.countersWeek) {
+                this.countersWeek.innerHTML = days.map((day) => {
+                    const isToday = data?.today?.date === day.date;
+                    const dayTarget = day.targetMinutes != null
+                        ? day.targetMinutes
+                        : (new Date(`${day.date}T12:00:00`).getDay() === 5 ? 5 * 60 : 8 * 60 + 45);
+                    let presenceMins = Number(day.presenceMinutes ?? day.productiveMinutes) || 0;
+                    if (isToday) {
+                        presenceMins = (Number(this.countersSnapshot?.closedPresenceMinutes) || 0)
+                            + this.getLiveSessionPresenceMinutes();
+                    }
+                    const rem = isToday
+                        ? Math.max(0, dayTarget - presenceMins)
+                        : (day.remainingMinutes != null
+                            ? day.remainingMinutes
+                            : Math.max(0, dayTarget - presenceMins));
+                    const targetLabel = `${Math.floor(dayTarget / 60)}h${String(dayTarget % 60).padStart(2, '0')}`;
+                    return `<button type="button" class="counter-day${isToday ? ' is-today' : ''}${rem <= 0 ? ' is-done' : ''}" data-date="${day.date}" data-target-minutes="${dayTarget}">
+                        <span class="counter-day-label">${this.weekdayLabel(day.date)}</span>
+                        <span class="counter-day-prod">reste ${this.formatMinutesCounter(rem)}</span>
+                        <span class="counter-day-pause">fait ${this.formatMinutesCounter(presenceMins)} / ${targetLabel}</span>
+                    </button>`;
+                }).join('');
+            }
+        } catch (e) {
+            console.warn('Compteurs indisponibles:', e.message);
+        }
+    }
+
+    /** Minutes productives du segment ouvert depuis le dernier chargement API. */
+    getLiveSessionPresenceMinutes() {
+        if (!this.countersLiveSince || !this.isRunning || this.isPaused) return 0;
+        return Math.max(0, (Date.now() - this.countersLiveSince) / 60000);
+    }
+
+    /** Figé le live dans le snapshot (ex. juste avant une pause) pour éviter un saut d'affichage. */
+    freezeLivePresenceIntoSnapshot() {
+        if (!this.countersSnapshot || !this.countersLiveSince) return;
+        const live = this.getLiveSessionPresenceMinutes();
+        this.countersSnapshot.closedPresenceMinutes =
+            (Number(this.countersSnapshot.closedPresenceMinutes) || 0) + live;
+        this.countersLiveSince = null;
+    }
+
+    renderTodayCountersLive() {
+        const snap = this.countersSnapshot;
+        if (!snap) return;
+        const presence = (Number(snap.closedPresenceMinutes) || 0) + this.getLiveSessionPresenceMinutes();
+        const remaining = Math.max(0, (Number(snap.targetMinutes) || 0) - presence);
+        if (this.counterRemainingToday) {
+            this.counterRemainingToday.textContent = this.formatMinutesCounter(remaining);
+            this.counterRemainingToday.classList.toggle('is-done', remaining <= 0);
+        }
+        if (this.counterProductiveToday) {
+            this.counterProductiveToday.textContent = this.formatMinutesCounter(presence);
+        }
+        if (this.counterPauseToday) {
+            this.counterPauseToday.textContent = this.formatMinutesCounter(snap.pauseMinutes);
+        }
+        if (this.counterAutreToday) {
+            this.counterAutreToday.textContent = this.formatMinutesCounter(snap.autreMinutes);
+        }
+        if (this.counterFormationToday) {
+            this.counterFormationToday.textContent = this.formatMinutesCounter(snap.formationMinutes);
+        }
+        this.updateTodayWeekDayCard(presence, remaining);
+    }
+
+    /** Synchronise la pastille du jour (ex. mar. 15/09) avec le bandeau live. */
+    updateTodayWeekDayCard(presence, remaining) {
+        if (!this.countersWeek || !this.countersSnapshot?.date) return;
+        const btn = this.countersWeek.querySelector(
+            `.counter-day[data-date="${this.countersSnapshot.date}"]`
+        );
+        if (!btn) return;
+        const target = Number(btn.dataset.targetMinutes)
+            || Number(this.countersSnapshot.targetMinutes)
+            || 0;
+        const targetLabel = `${Math.floor(target / 60)}h${String(target % 60).padStart(2, '0')}`;
+        const remEl = btn.querySelector('.counter-day-prod');
+        const faitEl = btn.querySelector('.counter-day-pause');
+        if (remEl) remEl.textContent = `reste ${this.formatMinutesCounter(remaining)}`;
+        if (faitEl) faitEl.textContent = `fait ${this.formatMinutesCounter(presence)} / ${targetLabel}`;
+        btn.classList.toggle('is-done', remaining <= 0);
+    }
+
+    async handlePause(pauseTypeCode = null, pauseTypeLabel = null, { skipTypeChoice = false } = {}) {
         if (!this.currentLancement) return;
         
         if (!this.canPerformAction()) return;
+
+        if (!pauseTypeCode && !skipTypeChoice) {
+            this.openPauseTypePanel();
+            return;
+        }
         
         try {
             const operatorCode = this.operator.code || this.operator.id;
@@ -2204,19 +2550,31 @@ class OperateurInterface {
             await this.apiService.pauseOperation(
                 operatorCode,
                 this.currentLancement.CodeLancement,
-                selectedStep ? { codeOperation: selectedStep } : {}
+                {
+                    ...(selectedStep ? { codeOperation: selectedStep } : {}),
+                    ...(pauseTypeCode ? { pauseTypeCode } : {})
+                }
             );
             
+            this.closePauseTypePanel();
             this.pauseTimer();
+            // Couper le timer productif : sinon updateTimer peut écraser le minuteur de pause
+            this.isRunning = false;
+            this.freezeLivePresenceIntoSnapshot();
             this.startBtn.disabled = false;
             this.startBtn.innerHTML = '<i class="fas fa-play"></i> Reprendre';
             this.pauseBtn.disabled = true;
-            this.statusDisplay.textContent = 'En pause';
-            this.notificationManager.info('Opération mise en pause');
+            this.currentPauseTypeLabel = pauseTypeLabel || pauseTypeCode;
+            this.currentPauseTypeCode = pauseTypeCode;
             this.isPaused = true;
+            this.startPauseWatch(pauseTypeCode, this.currentPauseTypeLabel);
+            this.notificationManager.info(this.currentPauseTypeLabel
+                ? `Pause : ${this.currentPauseTypeLabel}`
+                : 'Opération mise en pause');
+            this.renderTodayCountersLive();
             
-            // Actualiser l'historique après pause
             this.loadOperatorHistory();
+            this.loadOperatorCounters();
             
         } catch (error) {
             console.error('Erreur:', error);
@@ -2242,6 +2600,7 @@ class OperateurInterface {
             this._afterStopCleanup('Terminé');
             this.notificationManager.success(`Opération terminée - Durée: ${result?.data?.duration || result?.duration || 'N/A'}`);
             this.loadOperatorHistory();
+            this.loadOperatorCounters();
 
         } catch (error) {
             console.error('Erreur stop:', error);
@@ -2290,6 +2649,10 @@ class OperateurInterface {
             clearInterval(this.timerInterval);
         }
         this.timerInterval = setInterval(() => this.updateTimer(), 1000);
+        // Stream Mes compteurs dès le tick (même avant le 1er load API)
+        if (!this.countersLiveSince && this.isRunning && !this.isPaused) {
+            this.countersLiveSince = Date.now();
+        }
         this.updateTimer();
     }
 
@@ -2304,12 +2667,122 @@ class OperateurInterface {
             clearInterval(this.timerInterval);
             this.timerInterval = null;
         }
+        this.stopPauseWatch();
         this.isRunning = false;
         this.startTime = null;
         this.totalPausedTime = 0;
         this.pauseStartTime = null;
         if (this.timerDisplay) this.timerDisplay.textContent = '00:00:00';
-        this.updateShiftCountdownDisplay();
+    }
+
+    /** Minuteur affiché pendant une pause (compte à rebours ou libre). */
+    resolvePauseExpectedMinutes(pauseTypeCode) {
+        const code = String(pauseTypeCode || '').trim().toUpperCase();
+        const fromApi = (this.pauseTypes || []).find((t) => String(t.code).toUpperCase() === code);
+        if (fromApi && Object.prototype.hasOwnProperty.call(fromApi, 'expectedMinutes')) {
+            return fromApi.expectedMinutes;
+        }
+        const defaults = {
+            P20_PAYEE: 20,
+            P10: 10,
+            DEJ: 45,
+            DEJ45: 45, // legacy
+            AUTRE: null,
+            FORMATION: null
+        };
+        return Object.prototype.hasOwnProperty.call(defaults, code) ? defaults[code] : null;
+    }
+
+    startPauseWatch(pauseTypeCode, pauseTypeLabel, startedAt = null) {
+        this.stopPauseWatch({ clearDisplay: false });
+        this.currentPauseTypeCode = pauseTypeCode || null;
+        this.currentPauseTypeLabel = pauseTypeLabel || pauseTypeCode || 'Pause';
+        const parsedStart = startedAt
+            ? (startedAt instanceof Date ? startedAt : this.parseLocalDateTime(startedAt))
+            : null;
+        this.pauseWatchStartedAt = (parsedStart && !Number.isNaN(parsedStart.getTime()))
+            ? parsedStart
+            : new Date();
+        const expectedMin = this.resolvePauseExpectedMinutes(pauseTypeCode);
+        this.pauseWatchExpectedSec = (expectedMin != null && Number(expectedMin) > 0)
+            ? Math.round(Number(expectedMin) * 60)
+            : null;
+
+        if (this.timerBlock) this.timerBlock.classList.add('is-pause-watch');
+        if (this.pauseTimerHint) {
+            this.pauseTimerHint.hidden = false;
+            this.pauseTimerHint.textContent = this.pauseWatchExpectedSec != null
+                ? `Minuteur ${this.currentPauseTypeLabel}`
+                : `Compteur ${this.currentPauseTypeLabel}`;
+        }
+
+        if (this.pauseWatchInterval) clearInterval(this.pauseWatchInterval);
+        this.pauseWatchInterval = setInterval(() => this.updatePauseWatch(), 1000);
+        this.updatePauseWatch();
+    }
+
+    stopPauseWatch({ clearDisplay = true } = {}) {
+        if (this.pauseWatchInterval) {
+            clearInterval(this.pauseWatchInterval);
+            this.pauseWatchInterval = null;
+        }
+        this.pauseWatchStartedAt = null;
+        this.pauseWatchExpectedSec = null;
+        this.currentPauseTypeCode = null;
+        if (this.timerDisplay) {
+            this.timerDisplay.classList.remove('pause-timer-overrun');
+            if (clearDisplay) this.timerDisplay.textContent = '00:00:00';
+        }
+        if (this.timerBlock) {
+            this.timerBlock.classList.remove('is-pause-watch', 'pause-over-limit');
+        }
+        if (this.pauseTimerHint) {
+            this.pauseTimerHint.hidden = true;
+            this.pauseTimerHint.textContent = 'Minuteur pause';
+        }
+    }
+
+    updatePauseWatch() {
+        if (!this.pauseWatchStartedAt || !this.timerDisplay) return;
+        const elapsedSec = Math.max(0, Math.floor((Date.now() - this.pauseWatchStartedAt.getTime()) / 1000));
+        const label = this.currentPauseTypeLabel || 'Pause';
+
+        // Pause autre / formation : compteur libre qui défile
+        // (déjeuner = minuteur 45 min, comme pause 10/20)
+        if (this.pauseWatchExpectedSec == null) {
+            this.timerDisplay.textContent = TimeUtils.formatDuration(elapsedSec);
+            this.timerDisplay.classList.remove('pause-timer-overrun');
+            if (this.timerBlock) this.timerBlock.classList.remove('pause-over-limit');
+            if (this.statusDisplay) this.statusDisplay.textContent = `En pause — ${label}`;
+            if (this.pauseTimerHint) {
+                this.pauseTimerHint.textContent = `Compteur ${label}`;
+            }
+            return;
+        }
+
+        const remaining = this.pauseWatchExpectedSec - elapsedSec;
+        if (remaining >= 0) {
+            this.timerDisplay.textContent = TimeUtils.formatDuration(remaining);
+            this.timerDisplay.classList.remove('pause-timer-overrun');
+            if (this.timerBlock) this.timerBlock.classList.remove('pause-over-limit');
+            if (this.statusDisplay) {
+                this.statusDisplay.textContent = `En pause — ${label} · reste ${TimeUtils.formatDuration(remaining)}`;
+            }
+            if (this.pauseTimerHint) {
+                this.pauseTimerHint.textContent = `Minuteur ${label}`;
+            }
+        } else {
+            const overrun = Math.abs(remaining);
+            this.timerDisplay.textContent = `+${TimeUtils.formatDuration(overrun)}`;
+            this.timerDisplay.classList.add('pause-timer-overrun');
+            if (this.timerBlock) this.timerBlock.classList.add('pause-over-limit');
+            if (this.statusDisplay) {
+                this.statusDisplay.textContent = `En pause — ${label} · dépassé`;
+            }
+            if (this.pauseTimerHint) {
+                this.pauseTimerHint.textContent = `Dépassement ${label}`;
+            }
+        }
     }
 
     resetControls() {
@@ -2337,64 +2810,7 @@ class OperateurInterface {
         const now = new Date();
         const elapsed = Math.floor((now - this.startTime - this.totalPausedTime) / 1000);
         this.timerDisplay.textContent = TimeUtils.formatDuration(Math.max(0, elapsed));
-        this.updateShiftCountdownDisplay();
-    }
-
-    parseOperationDurationToSeconds(operation = {}) {
-        const rawDuration = operation?.duration;
-        if (typeof rawDuration === 'number' && Number.isFinite(rawDuration) && rawDuration >= 0) {
-            return Math.floor(rawDuration);
-        }
-
-        if (typeof rawDuration === 'string') {
-            const normalized = rawDuration.trim();
-            // Format attendu côté backend: HH:mm ou HH:mm:ss
-            const secondsFromDuration = TimeUtils.parseDuration(normalized);
-            if (secondsFromDuration > 0) {
-                return secondsFromDuration;
-            }
-        }
-
-        // Fallback: si l'opération est terminée et qu'on a juste HH:mm, calculer une durée simple.
-        const start = String(operation?.startTime || '').trim();
-        const end = String(operation?.endTime || '').trim();
-        const isTime = (value) => /^\d{2}:\d{2}(:\d{2})?$/.test(value);
-        if (!isTime(start) || !isTime(end)) return 0;
-
-        const parseTime = (value) => {
-            const [h, m, s = '0'] = value.split(':');
-            return (Number(h) * 3600) + (Number(m) * 60) + Number(s);
-        };
-
-        const startSeconds = parseTime(start);
-        const endSeconds = parseTime(end);
-        if (!Number.isFinite(startSeconds) || !Number.isFinite(endSeconds) || endSeconds <= startSeconds) {
-            return 0;
-        }
-
-        return endSeconds - startSeconds;
-    }
-
-    getCurrentActiveOperationSeconds() {
-        if (!this.isRunning || !this.startTime) return 0;
-        const now = new Date();
-        const elapsed = Math.floor((now - this.startTime - this.totalPausedTime) / 1000);
-        return Math.max(0, elapsed);
-    }
-
-    updateShiftCountdownDisplay() {
-        const workedSeconds = this.dailyWorkedSecondsFromHistory + this.getCurrentActiveOperationSeconds();
-        const remainingSeconds = Math.max(0, this.shiftTargetSeconds - workedSeconds);
-        const targetReached = remainingSeconds <= 0;
-
-        if (this.shiftWorkedDisplay) {
-            this.shiftWorkedDisplay.textContent = TimeUtils.formatDuration(Math.max(0, workedSeconds));
-        }
-        if (this.shiftRemainingDisplay) {
-            this.shiftRemainingDisplay.textContent = TimeUtils.formatDuration(remainingSeconds);
-            this.shiftRemainingDisplay.classList.toggle('shift-target-reached', targetReached);
-            this.shiftRemainingDisplay.classList.toggle('shift-target-pending', !targetReached);
-        }
+        this.renderTodayCountersLive();
     }
 
     // Méthodes de compatibilité
@@ -2423,23 +2839,9 @@ class OperateurInterface {
                 return;
             }
             
-            // Afficher un message de chargement
-            const loadingRow = document.createElement('tr');
-            loadingRow.innerHTML = '<td colspan="6" class="no-data"><i class="fas fa-spinner fa-spin"></i> Chargement en cours...</td>';
-            this.operatorHistoryTableBody.innerHTML = '';
-            this.operatorHistoryTableBody.appendChild(loadingRow);
-            
-            // Vérifier les propriétés de l'opérateur
-            console.log('=== DEBUG OPÉRATEUR ===');
-            console.log('Opérateur complet:', this.operator);
-            console.log('Opérateur.id:', this.operator.id);
-            console.log('Opérateur.code:', this.operator.code);
-            console.log('Opérateur.coderessource:', this.operator.coderessource);
-            console.log('Opérateur.nom:', this.operator.nom);
-            
+            // Pas de collapse : garder l'historique jusqu'à réception des nouvelles données
             const operatorCode = this.operator.code || this.operator.coderessource || this.operator.id;
             console.log('Code opérateur utilisé pour l\'API:', operatorCode);
-            console.log('=== FIN DEBUG OPÉRATEUR ===');
             
             if (!operatorCode) {
                 console.error('❌ Aucun code opérateur trouvé');
@@ -2525,8 +2927,6 @@ class OperateurInterface {
         }
         
         if (!operations || operations.length === 0) {
-            this.dailyWorkedSecondsFromHistory = 0;
-            this.updateShiftCountdownDisplay();
             console.log('⚠️ Aucune opération à afficher');
             const emptyRow = document.createElement('tr');
             emptyRow.className = 'empty-state-row';
@@ -2548,11 +2948,6 @@ class OperateurInterface {
             return;
         }
 
-        this.dailyWorkedSecondsFromHistory = operations.reduce((total, operation) => {
-            return total + this.parseOperationDurationToSeconds(operation);
-        }, 0);
-        this.updateShiftCountdownDisplay();
-
         console.log('🔄 Vidage du tableau et ajout des lignes...');
         this.operatorHistoryTableBody.innerHTML = '';
         
@@ -2561,22 +2956,29 @@ class OperateurInterface {
             console.log(`Phase pour ${operation.lancementCode}:`, operation.phase);
             
             const row = document.createElement('tr');
+            const isPause = operation.type === 'pause' || operation._isPauseRow === true;
             
-            // Ajouter une classe spéciale pour les lignes de pause
-            if (operation.type === 'pause') {
+            // Lignes de pause bien visibles (fond jaune + icône) pour éviter la confusion opérateur
+            if (isPause) {
                 row.classList.add('pause-row');
-                if (operation.statusCode === 'PAUSE_TERMINEE') {
+                if (String(operation.statusCode || '').toUpperCase().includes('TERMINEE')
+                    || String(operation.statusCode || '').toUpperCase().includes('TERMINÉE')) {
                     row.classList.add('pause-terminee');
                 }
             }
             
             // Normaliser le statusCode pour les classes CSS (en majuscules, remplacer les caractères spéciaux)
             const normalizedStatusCode = (operation.statusCode || 'EN_COURS').toUpperCase().replace(/[^A-Z0-9_]/g, '_');
+            const stepLabel = isPause
+                ? 'Pause'
+                : (operation.fabrication && operation.fabrication !== '-'
+                    ? operation.fabrication
+                    : (operation.phase || 'PRODUCTION'));
             
             row.innerHTML = `
-                <td>${this.escapeHtml(operation.lancementCode || '-')} ${operation.type === 'pause' ? '<i class="fas fa-pause-circle pause-icon"></i>' : ''}</td>
+                <td>${this.escapeHtml(operation.lancementCode || '-')} ${isPause ? '<i class="fas fa-pause-circle pause-icon" title="Pause"></i>' : ''}</td>
                 <td>${this.escapeHtml(operation.article || '-')}</td>
-                <td>${this.escapeHtml(operation.phase || 'PRODUCTION')}</td>
+                <td>${this.escapeHtml(stepLabel)}</td>
                 <td>${this.escapeHtml(operation.startTime || '-')}</td>
                 <td>${this.escapeHtml(operation.endTime || '-')}</td>
                 <td>

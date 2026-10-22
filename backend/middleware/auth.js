@@ -1,6 +1,6 @@
  // Middleware d'authentification et d'autorisation
 const { executeQuery } = require('../config/database');
-const { verifyToken, getAdminCredentials } = require('../services/adminAuthService');
+const { verifyToken, getAdminCredentials, getRhCredentials } = require('../services/adminAuthService');
 const SessionService = require('../services/SessionService');
 
 const BEARER_RE = /^Bearer[ \t]+(\S+)$/i;
@@ -115,7 +115,7 @@ async function authenticateAdmin(req, res, next) {
         const m = BEARER_RE.exec(String(auth));
         const token = m ? m[1].trim() : '';
         const entry = verifyToken(token);
-        if (!entry) {
+        if (!entry || entry.role !== 'admin') {
             return res.status(401).json({
                 success: false,
                 error: 'Accès administrateur requis'
@@ -131,6 +131,45 @@ async function authenticateAdmin(req, res, next) {
         
     } catch (error) {
         console.error('Erreur lors de l\'authentification admin:', error);
+        res.status(500).json({
+            success: false,
+            error: 'Erreur interne du serveur'
+        });
+    }
+}
+
+/**
+ * Middleware pour vérifier qu'un utilisateur est RH (accès séparé de l'admin prod)
+ */
+async function authenticateRh(req, res, next) {
+    try {
+        const creds = getRhCredentials();
+        if (!creds.enabled) {
+            return res.status(403).json({
+                success: false,
+                error: 'Accès RH désactivé (ENABLE_RH)'
+            });
+        }
+
+        const auth = req.headers.authorization || '';
+        const m = BEARER_RE.exec(String(auth));
+        const token = m ? m[1].trim() : '';
+        const entry = verifyToken(token);
+        if (!entry || entry.role !== 'rh') {
+            return res.status(401).json({
+                success: false,
+                error: 'Accès RH requis'
+            });
+        }
+
+        req.rh = {
+            id: 'rh',
+            username: entry.username,
+            role: 'rh'
+        };
+        next();
+    } catch (error) {
+        console.error('Erreur lors de l\'authentification RH:', error);
         res.status(500).json({
             success: false,
             error: 'Erreur interne du serveur'
@@ -177,6 +216,7 @@ function requireDebugMode(req, res, next) {
 module.exports = {
     authenticateOperator,
     authenticateAdmin,
+    authenticateRh,
     requireDangerousRoute,
     requireDebugMode
 };

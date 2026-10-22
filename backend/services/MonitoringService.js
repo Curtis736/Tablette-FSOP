@@ -8,16 +8,48 @@ const { executeQuery, executeNonQuery } = require('../config/database');
 class MonitoringService {
     static _toDateOnly(value) {
         if (!value) return null;
-        // SQL DATE often comes back as JS Date via mssql
+        // DATETIME SQL sans fuseau : tedious le renvoie en UTC (horloge murale SQL).
+        // getDate() local déplace une ligne de la veille sur aujourd'hui (Paris = UTC+2).
         if (value instanceof Date) {
             if (Number.isNaN(value.getTime())) return null;
-            return value.toISOString().slice(0, 10); // YYYY-MM-DD
+            const y = value.getUTCFullYear();
+            const m = String(value.getUTCMonth() + 1).padStart(2, '0');
+            const d = String(value.getUTCDate()).padStart(2, '0');
+            return `${y}-${m}-${d}`;
         }
         const s = String(value).trim();
-        // Common formats: "2026-01-21", "2026-01-21T00:00:00.000Z"
         const m = s.match(/^(\d{4}-\d{2}-\d{2})/);
         if (m) return m[1];
         return null;
+    }
+
+    /**
+     * Pose une heure corrigée sur le jour de la ligne (DateCreation), jamais sur aujourd'hui.
+     * Une saisie "17:25" ou "2026-10-21T17:25:00" ne change pas le jour.
+     */
+    static _clockOnRecordDay(dateCreation, timeInput, fallbackDateTime) {
+        const date = this._toDateOnly(dateCreation) || this._toDateOnly(fallbackDateTime);
+        const parts = this._parseTimeParts(timeInput) || this._wallClockParts(timeInput);
+        if (!date || !parts) return null;
+        return { date, hms: this._timePartsToHms(parts) };
+    }
+
+    /**
+     * 23/09/2026 : SEDI_ETDIFF accepte plusieurs exécutions le même jour
+     * (restriction StatutTraitement levée — Franck). 1 TempsId = 1 ligne SILOG.
+     * Plus de fusion ni d'UPDATE ETEMPS cumulé.
+     *
+     * @param {number[]} tempsIds
+     * @returns {Promise<{ primaryIds: number[], mergedAwayIds: number[], etempsRepaired: number[], details: object[] }>}
+     */
+    static async reconcileSameKeyCyclesForSilog(tempsIds) {
+        const ids = [...new Set((tempsIds || []).map(Number).filter((n) => Number.isFinite(n) && n > 0))];
+        return {
+            primaryIds: ids,
+            mergedAwayIds: [],
+            etempsRepaired: [],
+            details: ids.length ? [{ mode: 'passthrough-distinct-lines', tempsIds: ids }] : []
+        };
     }
 
     static _normalizeTimeString(input) {
@@ -57,6 +89,33 @@ class MonitoringService {
         if (end >= start) return end - start;
         // Cross midnight
         return (24 * 60 - start) + end;
+    }
+
+    /**
+     * Heure murale SQL (DATETIME sans fuseau).
+     * tedious renvoie ces valeurs comme Date UTC : getHours()/toTimeString()
+     * appliquent le fuseau du process et décalent l'heure (ex. 16:55 → 18:55 à Paris).
+     */
+    static _wallClockParts(value) {
+        if (!value) return null;
+        if (value instanceof Date) {
+            if (Number.isNaN(value.getTime())) return null;
+            return {
+                hh: value.getUTCHours(),
+                mm: value.getUTCMinutes(),
+                ss: value.getUTCSeconds()
+            };
+        }
+        const s = String(value).trim();
+        const asTime = this._parseTimeParts(s);
+        if (asTime) return asTime;
+        const embedded = s.match(/(\d{1,2}):(\d{2})(?::(\d{2}))?/);
+        if (!embedded) return null;
+        const hh = Number.parseInt(embedded[1], 10);
+        const mm = Number.parseInt(embedded[2], 10);
+        const ss = embedded[3] ? Number.parseInt(embedded[3], 10) : 0;
+        if (hh > 23 || mm > 59 || ss > 59) return null;
+        return { hh, mm, ss };
     }
 
     /**
@@ -339,8 +398,8 @@ class MonitoringService {
             `;
             const currentRows = await executeQuery(currentQuery, { tempsId });
             const current = currentRows?.[0] || null;
-            // Date (YYYY-MM-DD) de l'enregistrement pour construire StartTime/EndTime côté SQL (sans décalage timezone)
-            const dateOnly = this._toDateOnly(current?.DateCreation);
+            // Jour de la ligne (DateCreation). Une correction d'heure ne doit jamais glisser sur aujourd'hui.
+            const dateOnly = this._toDateOnly(current?.DateCreation) || this._toDateOnly(current?.StartTime);
             
             // Construire la requête de mise à jour
             const updateFields = [];
@@ -429,29 +488,29 @@ class MonitoringService {
             }
             
             if (corrections.StartTime !== undefined) {
-                const parts = this._parseTimeParts(corrections.StartTime);
-                if (parts && dateOnly) {
-                    updateFields.push("StartTime = DATEADD(SECOND, DATEDIFF(SECOND, '00:00:00', CAST(@startTimeHms AS TIME)), CAST(@date AS DATETIME2))");
-                    updateParams.startTimeHms = this._timePartsToHms(parts);
-                    updateParams.date = dateOnly;
-                } else {
-                    // Fallback: assume full datetime string
-                updateFields.push('StartTime = @startTime');
-                updateParams.startTime = corrections.StartTime;
+                const scheduled = this._clockOnRecordDay(dateOnly, corrections.StartTime);
+                if (!scheduled) {
+                    return {
+                        success: false,
+                        error: 'Heure de début invalide, ou jour de la ligne introuvable'
+                    };
                 }
+                updateFields.push("StartTime = DATEADD(SECOND, DATEDIFF(SECOND, '00:00:00', CAST(@startTimeHms AS TIME)), CAST(@date AS DATETIME2))");
+                updateParams.startTimeHms = scheduled.hms;
+                updateParams.date = scheduled.date;
             }
             
             if (corrections.EndTime !== undefined) {
-                const parts = this._parseTimeParts(corrections.EndTime);
-                if (parts && dateOnly) {
-                    updateFields.push("EndTime = DATEADD(SECOND, DATEDIFF(SECOND, '00:00:00', CAST(@endTimeHms AS TIME)), CAST(@date AS DATETIME2))");
-                    updateParams.endTimeHms = this._timePartsToHms(parts);
-                    updateParams.date = dateOnly;
-                } else {
-                    // Fallback: assume full datetime string
-                updateFields.push('EndTime = @endTime');
-                updateParams.endTime = corrections.EndTime;
+                const scheduled = this._clockOnRecordDay(dateOnly, corrections.EndTime);
+                if (!scheduled) {
+                    return {
+                        success: false,
+                        error: 'Heure de fin invalide, ou jour de la ligne introuvable'
+                    };
                 }
+                updateFields.push("EndTime = DATEADD(SECOND, DATEDIFF(SECOND, '00:00:00', CAST(@endTimeHms AS TIME)), CAST(@date AS DATETIME2))");
+                updateParams.endTimeHms = scheduled.hms;
+                updateParams.date = scheduled.date;
             }
 
             // IMPORTANT: Si StartTime/EndTime sont modifiés, recalculer automatiquement TotalDuration/ProductiveDuration
@@ -463,11 +522,11 @@ class MonitoringService {
             if (shouldRecalculateFromTimes) {
                 const startParts = corrections.StartTime !== undefined
                     ? this._parseTimeParts(corrections.StartTime)
-                    : this._parseTimeParts(current?.StartTime ? new Date(current.StartTime).toTimeString().substring(0, 5) : null);
+                    : this._wallClockParts(current?.StartTime);
 
                 const endParts = corrections.EndTime !== undefined
                     ? this._parseTimeParts(corrections.EndTime)
-                    : this._parseTimeParts(current?.EndTime ? new Date(current.EndTime).toTimeString().substring(0, 5) : null);
+                    : this._wallClockParts(current?.EndTime);
 
                 if (startParts && endParts) {
                     const total = this._minutesBetweenTimes(startParts, endParts);
@@ -676,26 +735,35 @@ class MonitoringService {
      */
     static async setOnHold(tempsId) {
         try {
+            const id = Number.parseInt(tempsId, 10);
+            if (!Number.isFinite(id) || id <= 0) {
+                return { success: false, error: 'TempsId invalide' };
+            }
             const updateQuery = `
                 UPDATE [SEDI_APP_INDEPENDANTE].[dbo].[ABTEMPS_OPERATEURS]
                 SET StatutTraitement = 'A'
                 WHERE TempsId = @tempsId
+                  AND (
+                        StatutTraitement IS NULL
+                     OR StatutTraitement = 'O'
+                     OR StatutTraitement = 'A'
+                  )
             `;
             
-            const result = await executeNonQuery(updateQuery, { tempsId });
+            const result = await executeNonQuery(updateQuery, { tempsId: id });
             
             if (result.rowsAffected > 0) {
-                console.log(`✅ Enregistrement ${tempsId} mis en attente`);
+                console.log(`✅ Enregistrement ${id} mis en attente`);
                 return {
                     success: true,
                     message: 'Enregistrement mis en attente',
-                    tempsId: tempsId,
+                    tempsId: id,
                     statutTraitement: 'A'
                 };
             } else {
                 return {
                     success: false,
-                    error: 'Enregistrement non trouvé'
+                    error: 'Enregistrement non trouvé ou déjà transmis/écarté'
                 };
             }
             
@@ -706,6 +774,97 @@ class MonitoringService {
                 error: error.message
             };
         }
+    }
+
+    /**
+     * Débloquer une ligne en attente (A → NULL) pour la rendre à nouveau transférable.
+     */
+    static async releaseHold(tempsId) {
+        try {
+            const id = Number.parseInt(tempsId, 10);
+            if (!Number.isFinite(id) || id <= 0) {
+                return { success: false, error: 'TempsId invalide' };
+            }
+            const updateQuery = `
+                UPDATE [SEDI_APP_INDEPENDANTE].[dbo].[ABTEMPS_OPERATEURS]
+                SET StatutTraitement = NULL
+                WHERE TempsId = @tempsId
+                  AND StatutTraitement = 'A'
+            `;
+            const result = await executeNonQuery(updateQuery, { tempsId: id });
+            if (result.rowsAffected > 0) {
+                console.log(`✅ Enregistrement ${id} débloqué (A → NULL)`);
+                return {
+                    success: true,
+                    message: 'Enregistrement débloqué',
+                    tempsId: id,
+                    statutTraitement: null
+                };
+            }
+            return {
+                success: false,
+                error: 'Enregistrement non trouvé ou pas en attente (A)'
+            };
+        } catch (error) {
+            console.error('❌ Erreur lors du déblocage:', error);
+            return { success: false, error: error.message };
+        }
+    }
+
+    /**
+     * Mettre plusieurs enregistrements en attente (StatutTraitement = 'A').
+     */
+    static async setOnHoldBatch(tempsIds) {
+        const ids = [...new Set(
+            (Array.isArray(tempsIds) ? tempsIds : [])
+                .map((x) => Number.parseInt(x, 10))
+                .filter((n) => Number.isFinite(n) && n > 0)
+        )];
+        if (ids.length === 0) {
+            return { success: false, error: 'Liste d\'IDs invalide', heldIds: [], failed: [] };
+        }
+        const heldIds = [];
+        const failed = [];
+        for (const id of ids) {
+            const r = await this.setOnHold(id);
+            if (r.success) heldIds.push(id);
+            else failed.push({ tempsId: id, error: r.error });
+        }
+        return {
+            success: heldIds.length > 0,
+            message: `${heldIds.length} ligne(s) bloquée(s)`,
+            heldIds,
+            failed,
+            count: heldIds.length
+        };
+    }
+
+    /**
+     * Débloquer plusieurs enregistrements (A → NULL).
+     */
+    static async releaseHoldBatch(tempsIds) {
+        const ids = [...new Set(
+            (Array.isArray(tempsIds) ? tempsIds : [])
+                .map((x) => Number.parseInt(x, 10))
+                .filter((n) => Number.isFinite(n) && n > 0)
+        )];
+        if (ids.length === 0) {
+            return { success: false, error: 'Liste d\'IDs invalide', releasedIds: [], failed: [] };
+        }
+        const releasedIds = [];
+        const failed = [];
+        for (const id of ids) {
+            const r = await this.releaseHold(id);
+            if (r.success) releasedIds.push(id);
+            else failed.push({ tempsId: id, error: r.error });
+        }
+        return {
+            success: releasedIds.length > 0,
+            message: `${releasedIds.length} ligne(s) débloquée(s)`,
+            releasedIds,
+            failed,
+            count: releasedIds.length
+        };
     }
     
     /**
@@ -954,17 +1113,58 @@ class MonitoringService {
             if (invalidIds.length > 0) {
                 console.warn(`⚠️ ${invalidIds.length} enregistrement(s) invalide(s) ignoré(s)`);
             }
+
+            // 1 TempsId = 1 ligne SILOG (plus de fusion multi-cycles).
+            const recon = await this.reconcileSameKeyCyclesForSilog(validIds);
+            if (recon.details.length) {
+                console.log('🔗 reconcileSameKeyCyclesForSilog:', JSON.stringify(recon.details));
+            }
+
+            const mergedAway = new Set(recon.mergedAwayIds.map(Number));
+            let idsForO = (recon.primaryIds.length ? recon.primaryIds : validIds)
+                .map(Number)
+                .filter((id) => !mergedAway.has(id));
+
+            // Re-vérifier le statut après reconcile (T / M ne doivent plus passer en O)
+            if (idsForO.length > 0) {
+                const ph = idsForO.map((_, i) => `@v${i}`).join(', ');
+                const vp = {};
+                idsForO.forEach((id, i) => { vp[`v${i}`] = id; });
+                const stillOpen = await executeQuery(
+                    `
+                    SELECT TempsId FROM [SEDI_APP_INDEPENDANTE].[dbo].[ABTEMPS_OPERATEURS]
+                    WHERE TempsId IN (${ph})
+                      AND (StatutTraitement IS NULL OR LTRIM(RTRIM(StatutTraitement)) IN ('O', 'A'))
+                    `,
+                    vp
+                );
+                idsForO = stillOpen.map((r) => r.TempsId);
+            }
+
+            if (idsForO.length === 0) {
+                return {
+                    success: true,
+                    message: 'Aucun enregistrement à revalider en O',
+                    count: 0,
+                    validatedIds: [],
+                    mergedAwayIds: recon.mergedAwayIds,
+                    etempsRepaired: recon.etempsRepaired,
+                    fixedCount: fixedIds.length,
+                    invalidCount: invalidIds.length,
+                    invalidIds
+                };
+            }
             
-            // 3. Valider tous les enregistrements valides (StatutTraitement = 'O')
+            // 3. Valider les lignes primaires (StatutTraitement = 'O')
             // ⚠️ Ne pas marquer 'T' ici: l'EDI_JOB doit d'abord consommer les lignes validées via V_REMONTE_TEMPS.
             const validateQuery = `
                 UPDATE [SEDI_APP_INDEPENDANTE].[dbo].[ABTEMPS_OPERATEURS]
                 SET StatutTraitement = 'O'
-                WHERE TempsId IN (${validIds.map((_, i) => `@id${i}`).join(', ')})
+                WHERE TempsId IN (${idsForO.map((_, i) => `@id${i}`).join(', ')})
             `;
             
             const validateParams = {};
-            validIds.forEach((id, i) => {
+            idsForO.forEach((id, i) => {
                 validateParams[`id${i}`] = id;
             });
             
@@ -972,12 +1172,14 @@ class MonitoringService {
             
             return {
                 success: true,
-                message: `${validIds.length} enregistrements validés`,
-                count: validIds.length,
-                validatedIds: validIds,
+                message: `${idsForO.length} enregistrements validés`,
+                count: idsForO.length,
+                validatedIds: idsForO,
+                mergedAwayIds: recon.mergedAwayIds,
+                etempsRepaired: recon.etempsRepaired,
                 fixedCount: fixedIds.length,
                 invalidCount: invalidIds.length,
-                invalidIds: invalidIds.length > 0 ? invalidIds : undefined
+                invalidIds
             };
             
         } catch (error) {
@@ -1106,6 +1308,21 @@ class MonitoringService {
                 params.beforeDate = beforeDate;
             }
 
+            const pendingForMerge = await executeQuery(
+                `
+                SELECT t.TempsId
+                FROM [SEDI_APP_INDEPENDANTE].[dbo].[ABTEMPS_OPERATEURS] t
+                WHERE t.StatutTraitement IS NULL
+                  AND t.ProductiveDuration > 0
+                  AND t.EndTime IS NOT NULL
+                  AND ${dateCond}
+                `,
+                params
+            );
+            if (pendingForMerge.length) {
+                await this.reconcileSameKeyCyclesForSilog(pendingForMerge.map((r) => r.TempsId));
+            }
+
             const incoherentRows = await executeQuery(
                 `
                 SELECT COUNT(*) AS cnt
@@ -1148,9 +1365,21 @@ class MonitoringService {
             return { success: false, error: 'Aucun TempsId valide', validated: 0 };
         }
 
+        await this.reconcileSameKeyCyclesForSilog(ids);
+
         const validIds = [];
         const invalidIds = [];
         for (const tempsId of ids) {
+            const stRows = await executeQuery(
+                `SELECT StatutTraitement FROM [SEDI_APP_INDEPENDANTE].[dbo].[ABTEMPS_OPERATEURS] WHERE TempsId = @tempsId`,
+                { tempsId }
+            );
+            const st = stRows[0]?.StatutTraitement == null
+                ? null
+                : String(stRows[0].StatutTraitement).trim().toUpperCase();
+            if (st === 'T' || st === 'M' || st === 'D') {
+                continue;
+            }
             const validation = await OperationValidationService.validateForSilogValidation(tempsId);
             if (validation.valid) {
                 validIds.push(tempsId);
@@ -1225,15 +1454,33 @@ class MonitoringService {
 
     /**
      * Clôture « dashboard » : pour les journées **strictement avant aujourd'hui**, valider les temps terminés
-     * encore en NULL / A. En mode SILOG planifié, ne pas marquer 'T' ici (SEDI_ETDIFF ~17h15 le fait).
+     * encore en NULL. Les lignes bloquées (`A`) restent hors auto (correction / transfert manuel le lendemain).
+     * En mode SILOG planifié, ne pas marquer 'T' ici (SEDI_ETDIFF ~17h15 le fait).
      */
     static async runMidnightDashboardTransmit() {
-        const { executeNonQuery } = require('../config/database');
+        const { executeNonQuery, executeQuery } = require('../config/database');
         const remoteMode = String(process.env.SILOG_REMOTE_MODE || '').trim().toLowerCase();
         const isScheduledMode = ['scheduled', 'disable', 'disabled', 'none'].includes(remoteMode);
         const OperationValidationService = require('./OperationValidationService');
         const lctcClause = OperationValidationService.getLctcExistsClause('t');
         try {
+            const pendingRows = await executeQuery(
+                `
+                SELECT t.TempsId
+                FROM [SEDI_APP_INDEPENDANTE].[dbo].[ABTEMPS_OPERATEURS] t
+                WHERE CAST(t.DateCreation AS DATE) < CAST(GETDATE() AS DATE)
+                  AND t.EndTime IS NOT NULL
+                  AND t.ProductiveDuration > 0
+                  AND (
+                      t.StatutTraitement IS NULL
+                      OR t.StatutTraitement = 'O'
+                  )
+                `
+            );
+            if (pendingRows.length) {
+                await this.reconcileSameKeyCyclesForSilog(pendingRows.map((r) => r.TempsId));
+            }
+
             const validatePending = `
                 UPDATE t
                 SET StatutTraitement = 'O'
@@ -1244,11 +1491,7 @@ class MonitoringService {
                   AND t.Phase IS NOT NULL
                   AND t.CodeRubrique IS NOT NULL
                   AND ${lctcClause}
-                  AND (
-                      t.StatutTraitement IS NULL
-                      OR t.StatutTraitement = 'A'
-                      OR (t.StatutTraitement IS NOT NULL AND t.StatutTraitement <> 'O' AND t.StatutTraitement <> 'T')
-                  )
+                  AND t.StatutTraitement IS NULL
             `;
             const r1 = await executeNonQuery(validatePending);
 

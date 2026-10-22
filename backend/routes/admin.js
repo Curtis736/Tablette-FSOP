@@ -8,9 +8,65 @@ const { getConcurrencyStats } = require('../middleware/concurrencyManager');
 const SessionService = require('../services/SessionService');
 const { generateRequestId } = require('../middleware/audit');
 const FactorialOperatorMappingService = require('../services/FactorialOperatorMappingService');
+const AiAssistService = require('../services/AiAssistService');
 
 // IMPORTANT: toutes les routes /api/admin doivent être protégées
 router.use(authenticateAdmin);
+
+function mapAiError(error, res) {
+    if (error?.code === 'AI_DISABLED') {
+        return res.status(503).json({ success: false, error: error.message, code: 'AI_DISABLED' });
+    }
+    if (error?.code === 'AI_CONFIG') {
+        return res.status(503).json({ success: false, error: error.message, code: 'AI_CONFIG' });
+    }
+    console.error('❌ AI assist:', error);
+    return res.status(500).json({
+        success: false,
+        error: error?.message || 'Erreur assistance IA'
+    });
+}
+
+// GET /api/admin/ai/status — feature flag (sans appeler le LLM)
+router.get('/ai/status', (req, res) => {
+    res.json({ success: true, data: AiAssistService.status() });
+});
+
+// POST /api/admin/ai/analyze-line — diagnostic ligne monitoring / hold
+router.post('/ai/analyze-line', async (req, res) => {
+    try {
+        const line = req.body?.line || req.body?.operation || req.body;
+        const context = req.body?.context || 'monitoring';
+        if (!line || typeof line !== 'object') {
+            return res.status(400).json({ success: false, error: 'Payload ligne manquant' });
+        }
+        const result = await AiAssistService.analyzeMonitoringLine(line, { context });
+        return res.json(result);
+    } catch (error) {
+        return mapAiError(error, res);
+    }
+});
+
+// POST /api/admin/ai/summarize-support-tech — résumé atelier écarts
+router.post('/ai/summarize-support-tech', async (req, res) => {
+    try {
+        const result = await AiAssistService.summarizeSupportTech(req.body || {});
+        return res.json(result);
+    } catch (error) {
+        return mapAiError(error, res);
+    }
+});
+
+// POST /api/admin/ai/ops-diagnose — runbook logs (maintenance)
+router.post('/ai/ops-diagnose', async (req, res) => {
+    try {
+        const { symptoms, logs, context } = req.body || {};
+        const result = await AiAssistService.diagnoseOps({ symptoms, logs, context });
+        return res.json(result);
+    } catch (error) {
+        return mapAiError(error, res);
+    }
+});
 
 const TIME_HM_RE = /^(\d{1,2}):(\d{2})$/;
 const TIME_HMS_RE = /^(\d{1,2}):(\d{2}):(\d{2})$/;
@@ -381,6 +437,19 @@ function validateSuspiciousTime(timeString, context = '') {
 }
 
 // Fonction pour formater une date en HH:mm (fuseau horaire Paris)
+function formatSqlTimeAsHhMm(dateTime) {
+    // mssql renvoie souvent TIME comme Date 1970-01-01T HH:mm:ss.000Z (heure murale en UTC).
+    // toLocaleTimeString(Europe/Paris) décale alors d'1h/2h — on lit les composants UTC.
+    if (!(dateTime instanceof Date) || Number.isNaN(dateTime.getTime())) return null;
+    const y = dateTime.getUTCFullYear();
+    if (y >= 1969 && y <= 1971) {
+        const hh = String(dateTime.getUTCHours()).padStart(2, '0');
+        const mm = String(dateTime.getUTCMinutes()).padStart(2, '0');
+        return `${hh}:${mm}`;
+    }
+    return null;
+}
+
 function formatDateTime(dateTime) {
     if (!dateTime) {
         console.log('🔍 formatDateTime: dateTime est null/undefined');
@@ -414,6 +483,8 @@ function formatDateTime(dateTime) {
         
         // Si c'est un objet Date, extraire l'heure avec fuseau horaire français
         if (dateTime instanceof Date) {
+            const sqlTime = formatSqlTimeAsHhMm(dateTime);
+            if (sqlTime) return sqlTime;
             const timeString = dateTime.toLocaleTimeString('fr-FR', {
                 timeZone: 'Europe/Paris',
                 hour: '2-digit',
@@ -612,6 +683,8 @@ function extractEventTime(event) {
         return heure.substring(0, 5);
     }
     if (heure && heure instanceof Date) {
+        const sqlTime = formatSqlTimeAsHhMm(heure);
+        if (sqlTime) return sqlTime;
         return heure.toLocaleTimeString('fr-FR', {
             timeZone: 'Europe/Paris',
             hour: '2-digit',
@@ -630,6 +703,8 @@ function extractEventEndTime(event) {
         return heure.substring(0, 5);
     }
     if (heure && heure instanceof Date) {
+        const sqlTime = formatSqlTimeAsHhMm(heure);
+        if (sqlTime) return sqlTime;
         return heure.toLocaleTimeString('fr-FR', {
             timeZone: 'Europe/Paris',
             hour: '2-digit',
@@ -760,13 +835,30 @@ function createPauseRowItem(pauseEvent, repriseEvent, referenceEvent) {
     };
 }
 
+function dedupeHistoriqueEvents(events) {
+    // Garde-fou : un JOIN ABTEMPS multi-cycles peut renvoyer le même NoEnreg N fois.
+    // Sans dédoublonnage, chaque DEBUT dupliqué crée un faux cycle "EN COURS".
+    const seen = new Set();
+    const unique = [];
+    for (const event of events || []) {
+        const id = event?.NoEnreg;
+        const key = id == null
+            ? `${event?.Ident}|${event?.OperatorCode}|${event?.CodeLanctImprod}|${event?.CreatedAt || event?.DateCreation}|${event?.HeureDebut}|${event?.HeureFin}`
+            : String(id);
+        if (seen.has(key)) continue;
+        seen.add(key);
+        unique.push(event);
+    }
+    return unique;
+}
+
 function processLancementEventsWithPauses(events, { includePauseRows = false, includeWorkSegments = false } = {}) {
     const lancementGroups = {};
     
     // 🔒 ISOLATION STRICTE : Regrouper par CodeLanctImprod + OperatorCode + Phase + CodeRubrique
     // Chaque opérateur a son propre historique pour chaque lancement
     // Un même lancement peut avoir plusieurs historiques (un par opérateur)
-    events.forEach(event => {
+    dedupeHistoriqueEvents(events).forEach(event => {
         const phase = (event.Phase || '').toString().trim();
         const rubrique = (event.CodeRubrique || '').toString().trim();
         // Clé unique = Lancement + Opérateur + Étape (garantit l'isolation par fabrication)
@@ -872,6 +964,9 @@ function processLancementEventsWithPauses(events, { includePauseRows = false, in
                         repriseEvents,
                         finEvent
                     );
+                    // Chronologie simple : chaque créneau productif = 1 ligne.
+                    // Fin de ligne = début de pause ; début de ligne suivante = reprise.
+                    // Pas de ligne « pause » séparée.
                     processedItems.push(...segments);
                 } else {
                 processedItems.push(
@@ -905,11 +1000,19 @@ function processLancementEventsWithPauses(events, { includePauseRows = false, in
         if (opA !== opB) return opA.localeCompare(opB, 'fr');
         const dateA = String(a.dateCreation || '').substring(0, 10);
         const dateB = String(b.dateCreation || '').substring(0, 10);
-        const timeA = String(a.startTime || '99:99');
-        const timeB = String(b.startTime || '99:99');
-        const tsA = dateA ? new Date(`${dateA}T${timeA}:00`).getTime() : 0;
-        const tsB = dateB ? new Date(`${dateB}T${timeB}:00`).getTime() : 0;
+        const hmA = String(a.startTime || '99:99').substring(0, 5);
+        const hmB = String(b.startTime || '99:99').substring(0, 5);
+        const tsA = dateA && /^\d{2}:\d{2}$/.test(hmA) ? new Date(`${dateA}T${hmA}:00`).getTime() : 0;
+        const tsB = dateB && /^\d{2}:\d{2}$/.test(hmB) ? new Date(`${dateB}T${hmB}:00`).getTime() : 0;
         if (tsA !== tsB) return tsA - tsB;
+        // Même minute : créneau productif avant la pause, puis reprise
+        const rank = (x) => {
+            if (x?._isPauseRow || x?.type === 'pause') return 1;
+            if (x?._isWorkSegment) return 0;
+            return 2;
+        };
+        const r = rank(a) - rank(b);
+        if (r !== 0) return r;
         return String(a.id || '').localeCompare(String(b.id || ''), 'fr');
     });
 }
@@ -1316,22 +1419,30 @@ async function getAdminStats(date) {
         // IMPORTANT: DateCreation est renvoyé en 'YYYY-MM-DD' (string) pour éviter les décalages timezone.
         let filteredEvents = allEvents.filter(event => String(event.DateCreation || '') === targetDate);
 
-        // Exclure les opérations déjà transmises (StatutTraitement = 'T') pour ne pas les afficher dans le dashboard
+        // Exclure l'historique seulement si tous les ABTEMPS du couple
+        // opérateur+LT+phase+rubrique sont transmis (multi-cycles : un T ne masque pas les autres).
         try {
-            const transmittedQuery = `
-                SELECT OperatorCode, LancementCode, Phase, CodeRubrique
+            const abtempsQuery = `
+                SELECT OperatorCode, LancementCode, Phase, CodeRubrique, StatutTraitement
                 FROM [SEDI_APP_INDEPENDANTE].[dbo].[ABTEMPS_OPERATEURS] WITH (NOLOCK)
-                WHERE StatutTraitement = 'T'
-                  -- ABTEMPS.DateCreation is stored as DATE (see insertion), keep predicate sargable
-                  AND DateCreation = @date
+                WHERE DateCreation = @date
             `;
-            const transmitted = await executeQuery(transmittedQuery, { date: targetDate });
-            const transmittedSet = new Set(
-                transmitted.map(t => `${t.OperatorCode}_${t.LancementCode}_${String(t.Phase || '').trim()}_${String(t.CodeRubrique || '').trim()}`)
-            );
+            const abtempsRows = await executeQuery(abtempsQuery, { date: targetDate });
+            const fullyTransmittedKeys = new Set();
+            const keyStats = new Map();
+            for (const t of abtempsRows) {
+                const k = `${t.OperatorCode}_${t.LancementCode}_${String(t.Phase || '').trim()}_${String(t.CodeRubrique || '').trim()}`;
+                if (!keyStats.has(k)) keyStats.set(k, { hasT: false, hasPending: false });
+                const st = keyStats.get(k);
+                if (String(t.StatutTraitement || '').toUpperCase().trim() === 'T') st.hasT = true;
+                else st.hasPending = true;
+            }
+            for (const [k, st] of keyStats) {
+                if (st.hasT && !st.hasPending) fullyTransmittedKeys.add(k);
+            }
             filteredEvents = filteredEvents.filter(e => {
                 const k = `${e.OperatorCode}_${e.CodeLanctImprod}_${String(e.Phase || '').trim()}_${String(e.CodeRubrique || '').trim()}`;
-                return !transmittedSet.has(k);
+                return !fullyTransmittedKeys.has(k);
             });
         } catch (e) {
             console.warn('⚠️ Impossible de filtrer les opérations transmises pour les stats:', e.message);
@@ -1562,39 +1673,45 @@ async function getAdminOperations(date, page = 1, limit = 25, dateStart = null, 
             filteredEvents = allEvents.filter(event => String(event.DateCreation || '') === targetDate);
         }
 
-        // Exclure les opérations déjà transmises (StatutTraitement = 'T') pour
-        // ne pas les afficher dans le tableau admin. L'historique complet reste
-        // accessible via les endpoints de monitoring dédiés (ABTEMPS_OPERATEURS).
-        // Aligné avec les stats (cf. bloc équivalent dans getAdminStats).
+        // Exclure l'historique seulement quand TOUS les ABTEMPS du même
+        // opérateur+LT+phase+rubrique sont déjà transmis (T).
+        // Si un cycle reste NULL/O, garder l'historique (multi-cycles même jour).
         try {
-            let transmitted = [];
+            let abtempsRows = [];
             if (isRange) {
-                const transmittedRangeQuery = `
-                    SELECT OperatorCode, LancementCode, Phase, CodeRubrique
+                const abtempsRangeQuery = `
+                    SELECT OperatorCode, LancementCode, Phase, CodeRubrique, StatutTraitement
                     FROM [SEDI_APP_INDEPENDANTE].[dbo].[ABTEMPS_OPERATEURS] WITH (NOLOCK)
-                    WHERE StatutTraitement = 'T'
-                      AND DateCreation >= @dStart
+                    WHERE DateCreation >= @dStart
                       AND DateCreation <= @dEnd
                 `;
-                transmitted = await executeQuery(transmittedRangeQuery, { dStart, dEnd });
+                abtempsRows = await executeQuery(abtempsRangeQuery, { dStart, dEnd });
             } else {
-                const transmittedQuery = `
-                    SELECT OperatorCode, LancementCode, Phase, CodeRubrique
+                const abtempsQuery = `
+                    SELECT OperatorCode, LancementCode, Phase, CodeRubrique, StatutTraitement
                     FROM [SEDI_APP_INDEPENDANTE].[dbo].[ABTEMPS_OPERATEURS] WITH (NOLOCK)
-                    WHERE StatutTraitement = 'T'
-                      AND DateCreation = @date
+                    WHERE DateCreation = @date
                 `;
-                transmitted = await executeQuery(transmittedQuery, { date: targetDate });
+                abtempsRows = await executeQuery(abtempsQuery, { date: targetDate });
             }
-            const transmittedSet = new Set(
-                transmitted.map(t => `${t.OperatorCode}_${t.LancementCode}_${String(t.Phase || '').trim()}_${String(t.CodeRubrique || '').trim()}`)
-            );
+            const fullyTransmittedKeys = new Set();
+            const keyStats = new Map();
+            for (const t of abtempsRows) {
+                const k = `${t.OperatorCode}_${t.LancementCode}_${String(t.Phase || '').trim()}_${String(t.CodeRubrique || '').trim()}`;
+                if (!keyStats.has(k)) keyStats.set(k, { hasT: false, hasPending: false });
+                const st = keyStats.get(k);
+                if (String(t.StatutTraitement || '').toUpperCase().trim() === 'T') st.hasT = true;
+                else st.hasPending = true;
+            }
+            for (const [k, st] of keyStats) {
+                if (st.hasT && !st.hasPending) fullyTransmittedKeys.add(k);
+            }
             const beforeFilter = filteredEvents.length;
             filteredEvents = filteredEvents.filter(e => {
                 const k = `${e.OperatorCode}_${e.CodeLanctImprod}_${String(e.Phase || '').trim()}_${String(e.CodeRubrique || '').trim()}`;
-                return !transmittedSet.has(k);
+                return !fullyTransmittedKeys.has(k);
             });
-            console.log(`🔒 Filtre transmitted (T): ${beforeFilter - filteredEvents.length} événements masqués (${filteredEvents.length} restants)`);
+            console.log(`🔒 Filtre transmitted (T complet): ${beforeFilter - filteredEvents.length} événements masqués (${filteredEvents.length} restants)`);
         } catch (e) {
             console.warn('⚠️ Impossible de filtrer les opérations transmises:', e.message);
         }
@@ -3141,14 +3258,19 @@ router.get('/operators/:operatorCode/operations', async (req, res) => {
             FROM [SEDI_APP_INDEPENDANTE].[dbo].[ABHISTORIQUE_OPERATEURS] h
             LEFT JOIN [SEDI_ERP].[dbo].[RESSOURC] r ON h.OperatorCode = r.Coderessource
             LEFT JOIN [SEDI_ERP].[dbo].[LCTE] l ON l.CodeLancement = h.CodeLanctImprod
-            LEFT JOIN [SEDI_APP_INDEPENDANTE].[dbo].[ABTEMPS_OPERATEURS] t 
-                ON t.OperatorCode = h.OperatorCode 
-                AND t.LancementCode = h.CodeLanctImprod
-                -- t.Phase/t.CodeRubrique NULL = clés ERP non résolues : rattachement lancement + date
-                AND (t.Phase IS NULL OR ISNULL(t.Phase, '') = ISNULL(h.Phase, ''))
-                AND (t.CodeRubrique IS NULL OR ISNULL(t.CodeRubrique, '') = ISNULL(h.CodeRubrique, ''))
-                AND CAST(t.DateCreation AS DATE) = CAST(h.DateCreation AS DATE)
-            -- ⚡ OPTIMISATION : Utiliser h.Phase directement (plus simple et fiable)
+            -- OUTER APPLY TOP 1 : évite de dupliquer chaque événement HIST
+            -- quand plusieurs ABTEMPS existent le même jour pour le même LT/étape.
+            OUTER APPLY (
+                SELECT TOP 1 t.StatutTraitement
+                FROM [SEDI_APP_INDEPENDANTE].[dbo].[ABTEMPS_OPERATEURS] t
+                WHERE t.OperatorCode = h.OperatorCode
+                  AND t.LancementCode = h.CodeLanctImprod
+                  AND CAST(t.DateCreation AS DATE) = CAST(h.DateCreation AS DATE)
+                  -- t.Phase/t.CodeRubrique NULL = clés ERP non résolues : rattachement lancement + date
+                  AND (t.Phase IS NULL OR ISNULL(t.Phase, '') = ISNULL(h.Phase, ''))
+                  AND (t.CodeRubrique IS NULL OR ISNULL(t.CodeRubrique, '') = ISNULL(h.CodeRubrique, ''))
+                ORDER BY CASE WHEN t.StatutTraitement = 'T' THEN 1 ELSE 0 END, t.TempsId DESC
+            ) t
             WHERE h.OperatorCode = @operatorCode
             ORDER BY h.DateCreation DESC
         `;
@@ -4599,7 +4721,7 @@ router.post('/monitoring/:tempsId/on-hold', async (req, res) => {
     try {
         const { tempsId } = req.params;
         
-        const result = await MonitoringService.setOnHold(Number.parseInt(tempsId));
+        const result = await MonitoringService.setOnHold(Number.parseInt(tempsId, 10));
         
         if (result.success) {
             res.json({
@@ -4619,6 +4741,68 @@ router.post('/monitoring/:tempsId/on-hold', async (req, res) => {
         res.status(500).json({
             success: false,
             error: 'Erreur serveur lors de la mise en attente'
+        });
+    }
+});
+
+// POST /api/admin/monitoring/:tempsId/release-hold - Débloquer (A → NULL)
+router.post('/monitoring/:tempsId/release-hold', async (req, res) => {
+    try {
+        const { tempsId } = req.params;
+        const result = await MonitoringService.releaseHold(Number.parseInt(tempsId, 10));
+        if (result.success) {
+            return res.json({ success: true, message: result.message, data: result });
+        }
+        return res.status(400).json({ success: false, error: result.error });
+    } catch (error) {
+        console.error('❌ Erreur lors du déblocage:', error);
+        return res.status(500).json({
+            success: false,
+            error: 'Erreur serveur lors du déblocage'
+        });
+    }
+});
+
+// POST /api/admin/monitoring/on-hold-batch - Bloquer plusieurs lignes (A)
+router.post('/monitoring/on-hold-batch', async (req, res) => {
+    try {
+        const { tempsIds } = req.body || {};
+        const result = await MonitoringService.setOnHoldBatch(tempsIds);
+        if (result.success) {
+            return res.json({ success: true, message: result.message, data: result });
+        }
+        return res.status(400).json({
+            success: false,
+            error: result.error || 'Aucune ligne bloquée',
+            data: result
+        });
+    } catch (error) {
+        console.error('❌ Erreur on-hold-batch:', error);
+        return res.status(500).json({
+            success: false,
+            error: 'Erreur serveur lors du blocage batch'
+        });
+    }
+});
+
+// POST /api/admin/monitoring/release-hold-batch - Débloquer plusieurs lignes
+router.post('/monitoring/release-hold-batch', async (req, res) => {
+    try {
+        const { tempsIds } = req.body || {};
+        const result = await MonitoringService.releaseHoldBatch(tempsIds);
+        if (result.success) {
+            return res.json({ success: true, message: result.message, data: result });
+        }
+        return res.status(400).json({
+            success: false,
+            error: result.error || 'Aucune ligne débloquée',
+            data: result
+        });
+    } catch (error) {
+        console.error('❌ Erreur release-hold-batch:', error);
+        return res.status(500).json({
+            success: false,
+            error: 'Erreur serveur lors du déblocage batch'
         });
     }
 });
@@ -4805,6 +4989,8 @@ router.post('/monitoring/validate-and-transmit-batch', async (req, res) => {
                 ? `${result.message} (planifié: tâche SILOG sur SVC_SILOG/runner Windows)`
                 : result.message,
             count: result.count,
+            validatedIds: result.validatedIds || [],
+            invalidIds: result.invalidIds || [],
             ediJob: ediJobResult,
             marked: markResult,
             adminMarkedTransmitted: shouldMarkFromAdmin

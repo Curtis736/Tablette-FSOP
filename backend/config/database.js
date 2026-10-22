@@ -66,6 +66,37 @@ const config = {
     }
 };
 
+/** Nom de base applicative (sans crochets). */
+const SHARED_APP_DATABASE = 'SEDI_APP_INDEPENDANTE';
+const appDatabaseName = String(config.database || SHARED_APP_DATABASE).replace(/[\[\]]/g, '');
+/** Qualifier SQL [NomBase] pour les requêtes 3-parties. */
+const appDb = `[${appDatabaseName}]`;
+
+function isSharedAppDatabase() {
+    return appDatabaseName.toUpperCase() === SHARED_APP_DATABASE;
+}
+
+function isSandboxMode() {
+    return String(process.env.DB_SANDBOX || '').toLowerCase() === 'true';
+}
+
+/**
+ * Bloque les écritures RH sur la base partagée en DEV/test.
+ * Prod OK. Contournement explicite : ALLOW_RH_WRITES_ON_SHARED_DB=true
+ */
+function assertRhWritesAllowed() {
+    if (!isSharedAppDatabase()) return;
+    if (isSandboxMode()) return;
+    if (String(process.env.ALLOW_RH_WRITES_ON_SHARED_DB || '').toLowerCase() === 'true') return;
+    const env = String(process.env.NODE_ENV || 'development').toLowerCase();
+    if (env === 'production') return;
+    throw new Error(
+        'RH_SHARED_DB_WRITE_BLOCKED: refus d\'écrire dans SEDI_APP_INDEPENDANTE depuis le DEV. '
+        + 'Utilisez DB_DATABASE=SEDI_APP_DEV (voir backend/.env.dev.example) '
+        + 'ou ALLOW_RH_WRITES_ON_SHARED_DB=true si vous assumez le risque.'
+    );
+}
+
 // En production : exiger les mots de passe / JWT (jamais de secret en dur dans le code)
 if (process.env.NODE_ENV === 'production') {
     const missing = [];
@@ -81,8 +112,13 @@ if (process.env.NODE_ENV === 'production') {
 console.log('🔧 Configuration finale de la base de données:', {
     server: config.server,
     database: config.database,
+    appDb,
     user: config.user,
-    source: resolveConfigSource(productionConfig)
+    source: resolveConfigSource(productionConfig),
+    rhWritesOnSharedBlocked: isSharedAppDatabase()
+        && !isSandboxMode()
+        && String(process.env.ALLOW_RH_WRITES_ON_SHARED_DB || '').toLowerCase() !== 'true'
+        && String(process.env.NODE_ENV || 'development').toLowerCase() !== 'production'
 });
 
 // Configuration de la base ERP
@@ -110,6 +146,27 @@ const erpConfig = {
         // Note: evictionRunIntervalMillis n'est pas supporté par cette version de tarn
     }
 };
+
+const appDbPort = Number.parseInt(process.env.DB_PORT || '', 10);
+if (Number.isFinite(appDbPort)) config.port = appDbPort;
+const erpDbPort = Number.parseInt(process.env.DB_ERP_PORT || process.env.DB_PORT || '', 10);
+if (Number.isFinite(erpDbPort)) erpConfig.port = erpDbPort;
+
+// DB_SANDBOX=true : SQL Server local jetable (docker/docker-compose.localdb.yml).
+// Refus de démarrer si l'une des connexions sort de la machine.
+if (isSandboxMode()) {
+    const LOCAL_HOSTS = ['127.0.0.1', 'localhost', '::1'];
+    const offenders = [['DB_SERVER', config.server], ['DB_ERP_SERVER', erpConfig.server]]
+        .filter(([, host]) => !LOCAL_HOSTS.includes(String(host || '').toLowerCase()));
+    if (productionConfig || offenders.length) {
+        throw new Error(
+            'DB_SANDBOX=true mais connexion non locale: '
+            + (productionConfig ? 'config-production.js présent ' : '')
+            + offenders.map(([k, v]) => `${k}=${v}`).join(', ')
+        );
+    }
+    console.log(`🧪 MODE SANDBOX : base locale ${config.server}:${config.port || 1433} (aucune écriture sur SERVEURERP)`);
+}
 
 // Pool de connexions
 let pool = null;
@@ -444,6 +501,11 @@ setInterval(() => {
 module.exports = {
     config,
     erpConfig,
+    appDatabaseName,
+    appDb,
+    SHARED_APP_DATABASE,
+    isSharedAppDatabase,
+    assertRhWritesAllowed,
     getConnection,
     getErpConnection,
     executeQuery,

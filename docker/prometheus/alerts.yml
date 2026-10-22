@@ -1,0 +1,90 @@
+groups:
+  - name: fsop_prod
+    interval: 30s
+    rules:
+      - alert: FsopBackendDown
+        expr: up{job="sedi-tablette-backend"} == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Backend tablette prod injoignable"
+          description: "Prometheus ne scrape plus sedi-tablette-backend:3001 depuis 2 min."
+
+      - alert: FsopScrapeTargetDown
+        expr: up{job=~"sedi-tablette-backend|node|redis|cadvisor"} == 0
+        for: 3m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Cible monitoring down ({{ $labels.job }})"
+          description: "Scrape {{ $labels.job }} / {{ $labels.instance }} en échec."
+
+      - alert: FsopHighHttpErrorRate
+        expr: |
+          (
+            sum(rate(sedi_http_errors_total{job="sedi-tablette-backend", route!~"/api/health|/metrics"}[5m]))
+            /
+            clamp_min(sum(rate(sedi_http_requests_total{job="sedi-tablette-backend", route!~"/api/health|/metrics"}[5m])), 0.01)
+          ) > 0.15
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Taux d'erreurs HTTP élevé (backend prod)"
+          description: "Plus de 15 % de requêtes en erreur (hors health/metrics) sur 5 min."
+
+      - alert: FsopHighLatencyP95
+        expr: |
+          histogram_quantile(0.95,
+            sum(rate(sedi_http_request_duration_seconds_bucket{job="sedi-tablette-backend", route!~"/api/health|/metrics"}[5m])) by (le)
+          ) > 5
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Latence p95 élevée (backend prod)"
+          description: "p95 > 5 s sur 10 min (hors health/metrics)."
+
+      - alert: FsopVmDiskCritical
+        expr: |
+          (
+            node_filesystem_avail_bytes{job="node", mountpoint="/", fstype!~"tmpfs|overlay"}
+            /
+            node_filesystem_size_bytes{job="node", mountpoint="/", fstype!~"tmpfs|overlay"}
+          ) < 0.10
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Disque VM presque plein"
+          description: "Moins de 10 % libre sur / (serveur FSOP)."
+
+      - alert: FsopVmMemoryHigh
+        expr: |
+          1 - (node_memory_MemAvailable_bytes{job="node"} / node_memory_MemTotal_bytes{job="node"}) > 0.90
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "RAM VM saturée"
+          description: "Plus de 90 % de RAM utilisée depuis 10 min."
+
+      - alert: FsopVmCpuHigh
+        expr: |
+          100 - (avg(rate(node_cpu_seconds_total{job="node", mode="idle"}[5m])) * 100) > 85
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "CPU VM élevé"
+          description: "CPU > 85 % en moyenne sur 15 min."
+
+      - alert: FsopRedisDown
+        expr: up{job="redis"} == 0
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Redis prod injoignable"
+          description: "redis_exporter ne répond plus pour sedi-tablette-redis."

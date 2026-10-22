@@ -108,6 +108,7 @@ docker-compose.override.yml
 docker/ssl-runtime/nginx-ssl/
 docker/ssl-runtime/tablet/
 docker/ssl-runtime/export-admin/
+docker/ssl-runtime/acme/
 docker/ssl-runtime-test/
 docker/.env.test
 backend/logs-test/
@@ -160,3 +161,8 @@ backend/scripts/maintenance.js
 
 # Crontab
 crontab-*
+
+backend/.env.localdb
+
+# Généré par apply-monitoring.sh (contient le webhook Teams)
+docker/prometheus-msteams.generated.yml
