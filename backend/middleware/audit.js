@@ -137,6 +137,10 @@ function buildAuditPayload(req) {
     return payloadStr.length < 8000 ? payloadStr : null;
 }
 
+// Lectures réussies (GET/HEAD/OPTIONS) non auditées : les tablettes interrogent l'API en continu
+// (compteurs, santé, rafraîchissement admin) et chaque lecture déclenchait un INSERT en base.
+const READ_ONLY_METHODS = new Set(['GET', 'HEAD', 'OPTIONS']);
+
 /**
  * Logger un événement d'audit
  */
@@ -144,6 +148,7 @@ async function logAuditEvent(req, res, startTime, correlationId, requestId, resp
     try {
         const durationMs = Date.now() - startTime;
         const statusCode = res.statusCode || 200;
+        if (READ_ONLY_METHODS.has(req.method) && statusCode < 400) return;
         
         // Extraire les informations de la requête
         const operatorCode = req.body?.operatorId || req.body?.code || req.params?.operatorCode || req.query?.operatorCode || null;
