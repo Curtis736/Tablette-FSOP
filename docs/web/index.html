@@ -31,7 +31,7 @@
 
         <div class="nav-label">Autour</div>
         <a href="#prod-test">Prod ou test ?</a>
-        <a href="#jenkins">Jenkins &amp; Sonar</a>
+        <a href="#sonar">Sonar</a>
         <a href="#pannes">Problèmes fréquents</a>
       </nav>
     </aside>
@@ -130,7 +130,7 @@
         </table>
         <p class="note">
           Les identifiants du mode <strong>Administrateur SEDI Tablette</strong> ne sont pas
-          les mêmes que ceux de Windows, de Jenkins ou de Sonar. Si un mot de passe ne passe
+          les mêmes que ceux de Windows ou de Sonar. Si un mot de passe ne passe
           pas, vérifiez d’abord que vous êtes sur le bon écran et le bon type de compte.
         </p>
       </article>
@@ -147,7 +147,6 @@
             <li><strong>Atelier (production)</strong> — <a href="https://fsop.sedi-ati.com">https://fsop.sedi-ati.com</a></li>
             <li><strong>Secours (même serveur, par IP)</strong> — https://192.168.1.26</li>
             <li><strong>Environnement test</strong> — http://192.168.1.26:8088 (données de test, réservé aux développeurs et à la maintenance)</li>
-            <li><strong>Jenkins</strong> — <a href="http://192.168.1.26:8085" target="_blank" rel="noopener">http://192.168.1.26:8085</a></li>
             <li><strong>SonarQube</strong> — <a href="http://192.168.1.26:9000" target="_blank" rel="noopener">http://192.168.1.26:9000</a></li>
           </ul>
         </div>
@@ -974,7 +973,7 @@
             Saisissez l’identifiant et le mot de passe admin SEDI Tablette fournis par l’IT
             ou le responsable, puis cliquez sur <strong>Se connecter</strong>. Ces comptes
             sont dédiés à l’administration de l’outil : ils ne correspondent ni au matricule
-            opérateur, ni au login Windows, ni à Jenkins.
+            opérateur, ni au login Windows.
           </p>
           <span class="step-ok-label">Quand ça marche</span>
           <figure class="step-shot">
@@ -988,7 +987,7 @@
             <span class="step-fail-label">Si ça ne marche pas</span>
             <p>
               <strong>Pourquoi :</strong> identifiant ou mot de passe incorrect, ou confusion
-              avec un autre type de compte (matricule, Windows, Jenkins…).
+              avec un autre type de compte (matricule, Windows…).
             </p>
             <p>
               <strong>Que faire :</strong> revérifier les identifiants auprès de l’IT /
@@ -1353,53 +1352,28 @@
           <tr>
             <td>Mises à jour</td>
             <td>Sur demande, par la maintenance</td>
-            <td>Automatiques après un passage Jenkins réussi</td>
+            <td>Par la maintenance, avant la production</td>
           </tr>
         </table>
         <p class="note">
           <strong>Ne pointez jamais en test</strong> pour remplacer la production : ces temps
-          n’alimentent pas le SILOG de prod. Si Jenkins est vert mais que l’atelier ne voit
-          pas encore le changement, c’est normal : la production n’a simplement pas encore
-          été mise à jour.
+          n’alimentent pas le SILOG de prod. Si une version est visible en test mais pas encore en atelier, c’est normal : la
+          production n’a simplement pas encore été mise à jour.
         </p>
       </article>
 
-      <article id="jenkins">
-        <h2>Jenkins &amp; Sonar (équipe technique)</h2>
+      <article id="sonar">
+        <h2>Sonar (équipe technique)</h2>
         <p>
-          Jenkins et Sonar tournent sur le même serveur (ports 8085 et 9000).
-          L’atelier n’en a pas besoin pour pointer. Ces outils servent à tester et contrôler
-          le code avant qu’une version n’arrive en production.
+          Sonar tourne sur le même serveur (port 9000). L’atelier n’en a pas besoin pour
+          pointer. Il sert à contrôler la qualité du code avant qu’une version n’arrive en
+          production.
         </p>
 
-        <h3>Jenkins</h3>
-        <p>
-          À chaque push de code sur GitHub, Jenkins enchaîne les tests backend et frontend,
-          l’analyse Sonar, la construction des images Docker, puis le déploiement sur le
-          site <strong>test</strong> (port 8088). Un pipeline vert signifie que la version
-          test est à jour. Un pipeline rouge signifie qu’il faut corriger le code avant de
-          merger.
-        </p>
-        <figure class="step-shot">
-          <img src="images/jenkins-01-login.png" alt="Login Jenkins" loading="lazy">
-          <figcaption>
-            Accès : <a href="http://192.168.1.26:8085" target="_blank" rel="noopener">http://192.168.1.26:8085</a>
-            — se connecter avec le compte Jenkins (IT / dev), pas avec un matricule atelier.
-          </figcaption>
-        </figure>
-        <figure class="step-shot">
-          <img src="images/jenkins-02-job.png" alt="Job Jenkins FSOP" loading="lazy">
-          <figcaption>
-            Job FSOP : badge vert Passed = Quality Gate Sonar OK.
-            Pipeline vert → le site test (:8088) est à jour.
-          </figcaption>
-        </figure>
-
-        <h3>SonarQube</h3>
         <p>
           Sonar mesure la qualité du code source (bugs potentiels, dette technique,
           couverture de tests) sur le projet <em>tablette-fsop</em>. Si la Quality Gate
-          échoue, Jenkins peut bloquer le déploiement de la version test.
+          échoue, le code doit être corrigé avant d’être mergé.
         </p>
         <figure class="step-shot">
           <img src="images/sonar-01-projects.png" alt="Projets Sonar" loading="lazy">
@@ -1410,7 +1384,7 @@
           <figcaption>
             Vue projet :
             <a href="http://192.168.1.26:9000" target="_blank" rel="noopener">http://192.168.1.26:9000</a>
-            — Quality Gate Passed = Jenkins peut continuer le déploiement test.
+            — Quality Gate Passed = le code respecte les critères qualité.
           </figcaption>
         </figure>
       </article>
@@ -1491,7 +1465,7 @@
           <tr>
             <td>Nouvelle version absente en atelier</td>
             <td>
-              Normal si seul Jenkins a mis à jour le site test. Demander un déploiement
+              Normal si seul le site test a été mis à jour. Demander un déploiement
               production à la maintenance.
             </td>
           </tr>
