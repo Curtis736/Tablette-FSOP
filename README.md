@@ -21,7 +21,6 @@ Application web pour l'atelier SEDI : pointage des temps sur les lancements de p
 | `docker/` | Images Docker, Compose prod/test/monitoring |
 | `docs/web/` | Documentation HTML (utilisateur + technique) |
 | `agent/fsop-sync-agent/` | Agent de synchronisation FSOP |
-| `jenkins/` | Pipelines CI |
 
 ## Prérequis
 
@@ -83,7 +82,7 @@ sudo ./docker/scripts/install-systemd-watchdog.sh
 
 - **Frontend** — HTML/CSS/JS, Vitest
 - **Backend** — Express 5, `mssql`, JWT, Redis (optionnel)
-- **Infra** — Docker, Nginx, Prometheus/Grafana, Jenkins, SonarQube
+- **Infra** — Docker, Nginx, Prometheus/Grafana, SonarQube
 
 ## Licence
 

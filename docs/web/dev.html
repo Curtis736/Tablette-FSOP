@@ -30,7 +30,7 @@
 
         <div class="nav-label">Ops</div>
         <a href="#docker">Docker &amp; déploiement</a>
-        <a href="#ci">Jenkins &amp; Sonar</a>
+        <a href="#ci">Tests &amp; Sonar</a>
         <a href="#devlocal">Dev local</a>
       </nav>
     </aside>
@@ -50,7 +50,7 @@
           <tr><td>Frontend</td><td><code>frontend/</code></td><td>SPA vanilla JS, servie par Nginx</td></tr>
           <tr><td>Backend</td><td><code>backend/</code></td><td>Express 5, Node, port <code>3001</code></td></tr>
           <tr><td>Conteneurs</td><td><code>docker/</code></td><td>Compose prod / test / monitoring</td></tr>
-          <tr><td>CI</td><td><code>Jenkinsfile</code></td><td>Tests → Sonar → deploy test uniquement</td></tr>
+          <tr><td>CI</td><td><code>.github/workflows/</code></td><td>Tests, audit npm</td></tr>
           <tr><td>Doc web</td><td><code>docs/web/</code></td><td>Copiée dans l'image front sous <code>/docs/</code></td></tr>
         </table>
         <p>
@@ -96,11 +96,11 @@ Express (sedi-tablette-backend)  :3001 (interne Docker)
           <tr><td>Compose</td><td><code>docker-compose.production.yml</code></td><td><code>docker-compose.test.yml</code></td></tr>
           <tr><td>Projet Docker</td><td><code>sedi-tablette</code></td><td><code>sedi-tablette-test</code></td></tr>
           <tr><td>Images</td><td><code>docker-sedi-*:latest</code></td><td><code>docker-sedi-*:test</code></td></tr>
-          <tr><td>Deploy</td><td><code>docker/deploy.sh</code> (manuel)</td><td><code>docker/scripts/deploy-test.sh</code> (Jenkins)</td></tr>
+          <tr><td>Deploy</td><td><code>docker/deploy.sh</code> (manuel)</td><td><code>docker/scripts/deploy-test.sh</code> (manuel)</td></tr>
           <tr><td>Base ERP</td><td><code>SEDI_ERP</code></td><td><code>SEDI_TESTS</code> (typique)</td></tr>
         </table>
         <p class="note">
-          Jenkins ne touche jamais la prod. Un pipeline vert = test à jour, pas l'atelier.
+          Le déploiement test ne touche jamais la prod.
         </p>
         <p>
           Variables sensibles dans <code>docker/.env</code> (non versionné) :
@@ -282,7 +282,7 @@ RestantH  = TheoH - ConsommeH</code></pre>
           <tr><th>Base</th><th>Usage</th></tr>
           <tr><td><code>SEDI_APP_INDEPENDANTE</code></td><td>Sessions, historique opérateurs, commentaires</td></tr>
           <tr><td><code>SEDI_ERP</code></td><td>Vues lancements, <code>abetemps</code>, pipeline SILOG</td></tr>
-          <tr><td><code>SEDI_TESTS</code></td><td>Environnement test (Jenkins)</td></tr>
+          <tr><td><code>SEDI_TESTS</code></td><td>Environnement test</td></tr>
         </table>
         <p>
           Config : <code>backend/config/database.js</code>.
@@ -330,24 +330,10 @@ docker compose -p sedi-tablette -f docker/docker-compose.production.yml up -d</c
       </article>
 
       <article id="ci">
-        <h2>Jenkins &amp; Sonar</h2>
-        <p>Serveur : <a href="http://192.168.1.26:8085" target="_blank" rel="noopener">http://192.168.1.26:8085</a></p>
-
-        <h3>Pipeline (<code>Jenkinsfile</code>)</h3>
-        <ol>
-          <li>Checkout</li>
-          <li>Backend : <code>npm ci</code> + tests Vitest coverage</li>
-          <li>Backend lint (non bloquant → unstable)</li>
-          <li>Frontend : <code>npm ci</code> + tests + coverage Sonar</li>
-          <li>SonarQube (<code>sedi-sonar</code>, projet <code>tablette-fsop</code>)</li>
-          <li>Quality Gate (bloquant)</li>
-          <li>Build images <code>:test</code></li>
-          <li>Deploy test (<code>deploy-test.sh</code>, branches main/master/feature/*)</li>
-          <li>Smoke <code>http://127.0.0.1:8088/api/health</code></li>
-        </ol>
+        <h2>Tests &amp; Sonar</h2>
         <p>
-          Params : <code>SKIP_SONAR</code>, <code>SKIP_DEPLOY</code>.
           Sonar : <a href="http://192.168.1.26:9000" target="_blank" rel="noopener">http://192.168.1.26:9000</a>
+          (projet <code>tablette-fsop</code>, config <code>sonar-project.properties</code>).
         </p>
 
         <h3>Tests locaux (même commandes que CI)</h3>
