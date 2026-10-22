@@ -534,7 +534,9 @@ describe('OperateurInterface', () => {
         });
 
         it('resumePausedOperation devrait garder le bouton Pause grisé et proposer Reprendre', () => {
-            const pauseStartedAt = new Date(Date.now() - 90 * 1000).toISOString();
+            // Le backend envoie l'heure murale locale suffixée Z (DATETIME SQL) : la reproduire
+            const pauseStart = new Date(Date.now() - 90 * 1000);
+            const pauseStartedAt = new Date(pauseStart.getTime() - pauseStart.getTimezoneOffset() * 60 * 1000).toISOString();
             operInterface.resumePausedOperation({
                 lancementCode: 'LT1234567',
                 startedAt: new Date().toISOString(),
