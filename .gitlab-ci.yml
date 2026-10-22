@@ -136,17 +136,9 @@ deploy-production:
     - set -e
     - echo "📁 Repo dir $PROD_REPO_DIR"
     - cd "$PROD_REPO_DIR"
-    - echo "📦 Gestion des modifications locales..."
-    - git stash || true
-    - git pull
-    - git stash pop || true
-    - |
-      if [ "$(git rev-parse HEAD)" != "$CI_COMMIT_SHA" ]; then
-        echo "⚠️  HEAD serveur ($(git rev-parse --short HEAD)) différent du commit du pipeline ($CI_COMMIT_SHORT_SHA)."
-        echo "    Vérifiez le remote 'origin' du dépôt sur le serveur."
-      fi
-    - echo "🚀 Déploiement orchestré..."
-    - chmod +x docker/deploy.sh
-    - COMPOSE_PROJECT=sedi-tablette MONITOR_PROJECT=sedi-tablette-monitoring NETWORK_NAME=sedi-tablette-network ./docker/deploy.sh
-    - echo "✅ Vérification des conteneurs..."
-    - docker ps --filter "name=sedi-"
+    # Même script que GitHub Actions : fast-forward sur main (retouches locales conservées),
+    # rebuild dans le projet compose en place, attente du backend healthy.
+    - git fetch --quiet origin main
+    - S="$(mktemp)"
+    - git show origin/main:docker/scripts/deploy-ci.sh > "$S"
+    - FSOP_ROOT="$PWD" bash "$S" "$CI_COMMIT_SHA"

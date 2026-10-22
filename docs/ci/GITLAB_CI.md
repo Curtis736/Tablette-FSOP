@@ -99,7 +99,16 @@ secrets GitHub (`PROD_HOST`, `PROD_SSH_KEY`, ...) ne sont pas à recopier.
 
 ### 4. Remote git du dépôt sur le serveur
 
-Le job de déploiement fait `git pull` dans `PROD_REPO_DIR`, comme aujourd'hui.
+Le job de déploiement lance `docker/scripts/deploy-ci.sh` (version de `origin/main`)
+dans `PROD_REPO_DIR`. Le script :
+
+- passe le dépôt sur `main` en fast-forward uniquement, en gardant les retouches
+  locales non commitées (il s'arrête sans rien toucher si elles sont en conflit) ;
+- reconstruit et relance les conteneurs dans le projet compose déjà en place
+  (`docker compose up -d --build`, pas de suppression forcée) ;
+- échoue si le backend n'est pas *healthy* au bout de 3 minutes, avec ses derniers logs.
+
+Il se lance aussi à la main sur le serveur : `docker/scripts/deploy-ci.sh`.
 
 - Avec le **miroir**, le serveur peut continuer à tirer depuis GitHub.
 - Avec une **migration complète**, changer le remote :
@@ -119,6 +128,7 @@ du pipeline (miroir en retard ou mauvais remote).
 
 ## Et GitHub Actions ?
 
-Les workflows `.github/workflows/` sont laissés en place. Une fois le pipeline
-GitLab validé, on pourra supprimer `ci-cd.yml` (ou au moins son job `deploy`)
-pour éviter deux déploiements en parallèle.
+Les workflows `.github/workflows/` gardent les tests, l'audit et le build. Le job
+`deploy` de `ci-cd.yml` a été retiré (22/10/2026) : il échouait à chaque push sur
+`main` (« missing server host », et de toute façon pas d'accès Tailscale), et il
+aurait doublé le déploiement GitLab.

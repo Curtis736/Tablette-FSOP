@@ -127,3 +127,7 @@ webpack.config.js
 
 # SEDI specific
 start.bat
+
+# node_modules des sous-dossiers (backend/, frontend/) : jamais dans l'image.
+# Sinon `COPY backend/ ./` écrase les dépendances de `npm ci` par celles du serveur.
+**/node_modules/
