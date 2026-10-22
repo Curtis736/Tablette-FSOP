@@ -34,8 +34,21 @@ gérer une clé Tailscale et une clé SSH en variables, et la clé Tailscale exp
 
 ### 1. Créer le projet
 
-Fait : le projet est sur https://gitlab.com/Curtis736/Tablette-FSOP
-(synchronisé depuis GitHub). Pour mémoire, les deux options étaient :
+Fait : le projet est sur https://gitlab.com/Curtis736/Tablette-FSOP.
+
+**Synchronisation** : le miroir automatique de GitLab.com (pull mirroring) est une
+option payante, et le dépôt GitLab était resté au 13/10. C'est donc GitHub Actions
+qui pousse chaque branche vers GitLab (job `mirror-gitlab` de `ci-cd.yml`), ce qui
+lance le pipeline GitLab. À faire une fois :
+
+1. GitLab : *Settings > Access tokens > Add new token*, rôle **Maintainer**,
+   scope **write_repository**, avec une date d'expiration.
+2. GitHub : *Settings > Secrets and variables > Actions > New repository secret*,
+   nom `GITLAB_PUSH_TOKEN`, valeur = le token. Le token ne passe jamais par le chat.
+3. Si `main` est protégée dans GitLab, autoriser le rôle Maintainer à y pousser
+   (*Settings > Repository > Protected branches*).
+
+Pour mémoire, les deux options de création étaient :
 
 - **Miroir de GitHub (recommandé pour commencer)** : sur gitlab.com,
   *New project > Run CI/CD for external repository > GitHub*, puis choisir
