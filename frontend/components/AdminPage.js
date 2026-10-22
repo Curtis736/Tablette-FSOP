@@ -1534,6 +1534,13 @@ class AdminPage {
         const defaultOption = createElement('option', { value: '' }, 'Tous les opérateurs');
         this.operatorSelect.appendChild(defaultOption);
         
+        // Trier les opérateurs par ordre alphabétique (nom, puis code)
+        const byName = (a, b) =>
+            String(a?.name || a?.code || '').localeCompare(String(b?.name || b?.code || ''), 'fr', { sensitivity: 'base' }) ||
+            String(a?.code || '').localeCompare(String(b?.code || ''), 'fr', { numeric: true });
+        connectedOperators = [...connectedOperators].sort(byName);
+        allOperators = [...allOperators].sort(byName);
+
         // Créer un Set des codes d'opérateurs connectés pour vérification rapide
         const connectedCodes = new Set(connectedOperators.map(op => op.code));
         
