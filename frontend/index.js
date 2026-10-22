@@ -1,5 +1,5 @@
 // Point d'entrée principal de l'application
-import App from './components/App.js?v=20261020.1';
+import App from './components/App.js?v=20261022.1';
 
 // Initialiser l'application
 document.addEventListener('DOMContentLoaded', () => {
