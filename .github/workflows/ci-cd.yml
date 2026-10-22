@@ -235,3 +235,30 @@ jobs:
   # les runners GitHub ne peuvent pas l'atteindre. Le déploiement de main est fait par
   # GitLab CI (job deploy-production, runner installé sur le serveur) via
   # docker/scripts/deploy-ci.sh. Voir docs/ci/GITLAB_CI.md.
+  #
+  # Ce job recopie la branche poussée sur gitlab.com, ce qui y lance le pipeline
+  # (tests puis déploiement pour main). Secret requis : GITLAB_PUSH_TOKEN
+  # (project access token GitLab, rôle Maintainer, scope write_repository).
+  mirror-gitlab:
+    name: Sync to GitLab
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push'
+    concurrency:
+      group: mirror-gitlab-${{ github.ref }}
+      cancel-in-progress: false
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Push to gitlab.com
+        env:
+          GITLAB_PUSH_TOKEN: ${{ secrets.GITLAB_PUSH_TOKEN }}
+          BRANCH: ${{ github.ref_name }}
+        run: |
+          if [ -z "$GITLAB_PUSH_TOKEN" ]; then
+            echo "::warning title=GitLab non synchronisé::Secret GITLAB_PUSH_TOKEN absent, rien n'est envoyé à GitLab (donc pas de déploiement)."
+            exit 0
+          fi
+          git push "https://oauth2:${GITLAB_PUSH_TOKEN}@gitlab.com/Curtis736/Tablette-FSOP.git" "HEAD:refs/heads/${BRANCH}"
