@@ -11,8 +11,8 @@ export default class Logger {
     static level() {
         const fromStorage = (typeof localStorage !== 'undefined' && localStorage.getItem('LOG_LEVEL')) || '';
         const fromWindow = (typeof window !== 'undefined' && window.LOG_LEVEL) || '';
-        const raw = String(fromStorage || fromWindow || 'info').toLowerCase();
-        return ['debug', 'info', 'warn', 'error'].includes(raw) ? raw : 'info';
+        const raw = String(fromStorage || fromWindow || 'warn').toLowerCase();
+        return ['debug', 'info', 'warn', 'error'].includes(raw) ? raw : 'warn';
     }
 
     static enabled(level) {
