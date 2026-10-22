@@ -86,7 +86,7 @@ Deux options :
 
 | Variable        | Valeur                                       | Obligatoire |
 |-----------------|----------------------------------------------|-------------|
-| `PROD_REPO_DIR` | chemin du dépôt sur le serveur (défaut `/home/maintenance/Tablette-FSOP`) | seulement si le chemin est différent |
+| `PROD_REPO_DIR` | chemin du dépôt sur le serveur (défaut `/home/Tablette-FSOP`) | seulement si le chemin est différent |
 
 Aucun secret SSH n'est nécessaire avec le runner sur le serveur. Les anciens
 secrets GitHub (`PROD_HOST`, `PROD_SSH_KEY`, ...) ne sont pas à recopier.

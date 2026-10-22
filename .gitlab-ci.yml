@@ -14,7 +14,7 @@ variables:
   NODE_IMAGE: "node:20"
   npm_config_cache: "$CI_PROJECT_DIR/.npm"
   # Dossier du dépôt sur serveurproduction (surchargeable dans Settings > CI/CD > Variables)
-  PROD_REPO_DIR: "/home/maintenance/Tablette-FSOP"
+  PROD_REPO_DIR: "/home/Tablette-FSOP"
 
 workflow:
   rules:
