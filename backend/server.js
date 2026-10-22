@@ -145,7 +145,7 @@ app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true }));
 
 // Logging
-app.use(morgan('combined'));
+app.use(morgan('combined', { skip: (req) => req.path === '/api/health' }));
 
 // Audit middleware (doit être avant les routes)
 app.use(auditMiddleware);

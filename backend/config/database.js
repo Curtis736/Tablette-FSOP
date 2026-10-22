@@ -492,7 +492,8 @@ setInterval(() => {
             idle: pool.idleCount || 0,
             waiting: pool.waitingCount || 0
         };
-        if (poolInfo.total > 0) {
+        // Ne journaliser que si des requêtes attendent une connexion (sinon une ligne par minute pour rien)
+        if (poolInfo.waiting > 0) {
             console.log(`📊 Pool SQL: ${poolInfo.total} connexions (${poolInfo.idle} idle, ${poolInfo.waiting} en attente)`);
         }
     }

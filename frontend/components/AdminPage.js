@@ -1083,17 +1083,24 @@ class AdminPage {
                     !op._isWorkSegment &&
                     this.isOperationTerminated(op) && !op.TempsId && (op._isUnconsolidated === true || op.OperatorCode)
                 );
-                if (terminatedWithoutTempsId.length > 0) {
+                // Une ligne qui ne se consolide pas n'est retentée qu'après 10 min
+                // (sinon un POST + un rechargement complet toutes les 30s, indéfiniment)
+                const attempts = this._autoConsolidateAttempts || (this._autoConsolidateAttempts = new Map());
+                const nowMs = Date.now();
+                const seen = new Set();
+                const toConsolidate = terminatedWithoutTempsId
+                    .map(op => ({ OperatorCode: op.OperatorCode, LancementCode: op.LancementCode }))
+                    .filter(({ OperatorCode, LancementCode }) => {
+                        const key = `${OperatorCode}|${LancementCode}`;
+                        if (seen.has(key)) return false;
+                        seen.add(key);
+                        const last = attempts.get(key);
+                        if (last && nowMs - last < 10 * 60 * 1000) return false;
+                        attempts.set(key, nowMs);
+                        return true;
+                    });
+                if (toConsolidate.length > 0) {
                     this._isConsolidating = true;
-                    const seen = new Set();
-                    const toConsolidate = terminatedWithoutTempsId
-                        .map(op => ({ OperatorCode: op.OperatorCode, LancementCode: op.LancementCode }))
-                        .filter(({ OperatorCode, LancementCode }) => {
-                            const key = `${OperatorCode}|${LancementCode}`;
-                            if (seen.has(key)) return false;
-                            seen.add(key);
-                            return true;
-                        });
                     this.apiService.consolidateMonitoringBatch(toConsolidate)
                         .then(async (consolidateResult) => {
                             const ok = consolidateResult?.results?.success || [];
@@ -1528,6 +1535,17 @@ class AdminPage {
             this.selectedOperatorCode ||
             this.operatorSelect?.value ||
             '';
+
+        // Liste identique au dernier rafraîchissement : ne pas reconstruire le menu
+        // (sinon il se referme / clignote toutes les 30s pendant que l'admin l'utilise)
+        const signature = JSON.stringify([
+            connectedOperators.map(op => [op.code, op.name, op.isProperlyLinked, op.isActive, op.resourceCode, op.currentStatus]),
+            allOperators.map(op => [op.code, op.name, op.isConnected, op.type])
+        ]);
+        if (signature === this._operatorSelectSignature && this.operatorSelect?.options?.length > 0) {
+            return;
+        }
+        this._operatorSelectSignature = signature;
         
         // Vider le select et ajouter l'option par défaut
         clearElement(this.operatorSelect);
