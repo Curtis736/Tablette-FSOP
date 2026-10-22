@@ -34,7 +34,8 @@ gérer une clé Tailscale et une clé SSH en variables, et la clé Tailscale exp
 
 ### 1. Créer le projet
 
-Deux options :
+Fait : le projet est sur https://gitlab.com/Curtis736/Tablette-FSOP
+(synchronisé depuis GitHub). Pour mémoire, les deux options étaient :
 
 - **Miroir de GitHub (recommandé pour commencer)** : sur gitlab.com,
   *New project > Run CI/CD for external repository > GitHub*, puis choisir
@@ -43,11 +44,16 @@ Deux options :
 - **Migration complète** : *New project > Import project > GitHub*. Le code,
   les issues et les MR sont importés, et on travaille ensuite dans GitLab.
 
+Pour tester le pipeline avant de fusionner sur `main` : *Build > Pipelines >
+Run pipeline*, choisir la branche. Les jobs de test, d'audit et de build tournent ;
+le déploiement, lui, ne part que sur un push vers `main`/`master`.
+
 ### 2. Installer et enregistrer le runner sur serveurproduction
 
 À faire en SSH sur le serveur (`ssh -p 722 maintenance@100.87.41.0`).
 
-1. Dans GitLab : *Settings > CI/CD > Runners > New project runner*.
+1. Dans GitLab (https://gitlab.com/Curtis736/Tablette-FSOP/-/settings/ci_cd) :
+   *Runners > New project runner*.
    - Tags : `serveurproduction`
    - Décocher *Run untagged jobs* (pour que seul le déploiement tourne ici)
    - Copier le token `glrt-...` affiché.
