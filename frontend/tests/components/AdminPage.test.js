@@ -1112,6 +1112,52 @@ describe('AdminPage', () => {
       expect(adminPage.validateAndFormatTime('08:60')).toBeNull();
     });
   });
+
+  describe('pickCodeRubrique (menu déroulant)', () => {
+    beforeEach(() => {
+      adminPage = new AdminPage(mockApp);
+      // exportToCSV remplace document.createElement / appendChild par des mocks : on restaure.
+      delete document.createElement;
+      delete document.body.appendChild;
+      delete document.body.removeChild;
+      document.body.innerHTML = '';
+    });
+
+    it('liste les codes rubrique du lancement et renvoie le choix', async () => {
+      mockApiService.getLancementSteps = vi.fn().mockResolvedValue({
+        steps: [
+          { Phase: '010', CodeRubrique: 'R1', CodeOperation: 'MONTAGE' },
+          { Phase: '020', CodeRubrique: 'R1', CodeOperation: 'MONTAGE' },
+          { Phase: '040', CodeRubrique: 'R2', CodeOperation: 'CONTROLE' }
+        ]
+      });
+      const pending = adminPage.pickCodeRubrique('LT2500001', 'R1');
+      await vi.waitFor(() => expect(document.querySelector('.code-rubrique-select')).not.toBeNull());
+      const select = document.querySelector('.code-rubrique-select');
+      expect(Array.from(select.options).map(o => o.value)).toEqual(['R1', 'R2']);
+      expect(select.value).toBe('R1');
+      select.value = 'R2';
+      document.querySelector('.code-rubrique-ok').click();
+      await expect(pending).resolves.toBe('R2');
+      expect(document.querySelector('.code-rubrique-select')).toBeNull();
+    });
+
+    it('renvoie null si annulé', async () => {
+      mockApiService.getLancementSteps = vi.fn().mockResolvedValue({
+        steps: [{ Phase: '010', CodeRubrique: 'R1' }]
+      });
+      const pending = adminPage.pickCodeRubrique('LT2500001', 'R1');
+      await vi.waitFor(() => expect(document.querySelector('.code-rubrique-cancel')).not.toBeNull());
+      document.querySelector('.code-rubrique-cancel').click();
+      await expect(pending).resolves.toBeNull();
+    });
+
+    it('revient à la saisie libre si aucune rubrique trouvée', async () => {
+      mockApiService.getLancementSteps = vi.fn().mockResolvedValue({ steps: [] });
+      global.prompt = vi.fn(() => 'R9');
+      await expect(adminPage.pickCodeRubrique('LT2500001', 'R1')).resolves.toBe('R9');
+    });
+  });
 });
 
 
