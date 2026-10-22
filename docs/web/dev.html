@@ -31,7 +31,6 @@
         <div class="nav-label">Ops</div>
         <a href="#docker">Docker &amp; déploiement</a>
         <a href="#ci">Jenkins &amp; Sonar</a>
-        <a href="#terraform">Terraform / Ansible</a>
         <a href="#devlocal">Dev local</a>
       </nav>
     </aside>
@@ -52,7 +51,6 @@
           <tr><td>Backend</td><td><code>backend/</code></td><td>Express 5, Node, port <code>3001</code></td></tr>
           <tr><td>Conteneurs</td><td><code>docker/</code></td><td>Compose prod / test / monitoring</td></tr>
           <tr><td>CI</td><td><code>Jenkinsfile</code></td><td>Tests → Sonar → deploy test uniquement</td></tr>
-          <tr><td>Inventaire</td><td><code>terraform/</code></td><td>Phase 1 : génère inventaire Ansible</td></tr>
           <tr><td>Doc web</td><td><code>docs/web/</code></td><td>Copiée dans l'image front sous <code>/docs/</code></td></tr>
         </table>
         <p>
@@ -355,32 +353,6 @@ docker compose -p sedi-tablette -f docker/docker-compose.production.yml up -d</c
         <h3>Tests locaux (même commandes que CI)</h3>
         <pre><code>cd backend && npm ci && npm run test:vitest:run -- --coverage
 cd frontend && npm ci && npm run test:run && npm run test:coverage:sonar</code></pre>
-      </article>
-
-      <article id="terraform">
-        <h2>Terraform / Ansible</h2>
-        <p>
-          Phase 1 : inventaire uniquement (<code>terraform/</code>).
-          Pas de création VM. Génère
-          <code>ansible/inventories/generated/fsop.yml</code>.
-        </p>
-        <pre><code>cd terraform
-cp terraform.tfvars.example terraform.tfvars
-terraform init -backend-config=backend.local.hcl
-terraform apply
-
-cd ../ansible
-ansible-playbook -i inventories/generated/fsop.yml playbooks/silog-runner-prereqs.yml</code></pre>
-        <table>
-          <tr><th>Hôte</th><th>Rôle</th></tr>
-          <tr><td><code>prod</code></td><td>FSOP prod (192.168.1.26)</td></tr>
-          <tr><td><code>test</code></td><td>Compose test :8088</td></tr>
-          <tr><td><code>ci</code></td><td>Jenkins :8085, Sonar :9000</td></tr>
-          <tr><td><code>silog</code></td><td>Runner Windows EDI (<code>SVC_SILOG</code>)</td></tr>
-        </table>
-        <p class="note">
-          Secrets Ansible (WinRM) : variables d'environnement, jamais dans Terraform.
-        </p>
       </article>
 
       <article id="devlocal">

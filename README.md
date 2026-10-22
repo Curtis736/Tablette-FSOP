@@ -21,7 +21,6 @@ Application web pour l'atelier SEDI : pointage des temps sur les lancements de p
 | `docker/` | Images Docker, Compose prod/test/monitoring |
 | `docs/web/` | Documentation HTML (utilisateur + technique) |
 | `agent/fsop-sync-agent/` | Agent de synchronisation FSOP |
-| `ansible/`, `terraform/` | Provisionnement et inventaires |
 | `jenkins/` | Pipelines CI |
 
 ## Prérequis
