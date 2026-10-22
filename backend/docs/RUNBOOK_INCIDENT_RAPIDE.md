@@ -2,9 +2,7 @@
 
 Objectif: permettre a l'equipe de diagnostiquer et corriger rapidement les incidents critiques sans dependre d'une personne.
 
-## 0) CI interne / environnement test
-
-Voir [`jenkins/ci/README.md`](../../jenkins/ci/README.md) (Jenkins + SonarQube).
+## 0) Environnement test
 
 Déploiement **test** (jamais la prod) :
 
@@ -18,7 +16,7 @@ chmod +x docker/scripts/deploy-test.sh
 - UI test : `http://<host-test>:8088`
 - Health : `http://<host-test>:8088/api/health` (ou via container backend)
 
-La prod (`docker-compose.production.yml` / ports 80-443) n’est **pas** déployée par Jenkins.
+La prod (`docker-compose.production.yml` / ports 80-443) n’est **jamais** touchée par ce script.
 
 ### Alertes Prometheus → Teams (monitoring)
 
