@@ -551,8 +551,9 @@ class MonitoringService {
                 };
             }
             
-            // Réinitialiser le statut de traitement si nécessaire (pour permettre une nouvelle validation)
-            if (existing[0].StatutTraitement === 'O' || existing[0].StatutTraitement === 'A') {
+            // Réinitialiser le statut de traitement si nécessaire (pour permettre une nouvelle validation).
+            // Une ligne bloquée (A) reste bloquée : sinon la validation auto de 20h l'enverrait à SILOG.
+            if (existing[0].StatutTraitement === 'O') {
                 updateFields.push('StatutTraitement = NULL');
             }
             

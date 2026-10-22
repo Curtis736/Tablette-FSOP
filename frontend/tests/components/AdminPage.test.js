@@ -1010,6 +1010,31 @@ describe('AdminPage', () => {
     });
   });
 
+  describe('releaseHoldMonitoringRecord', () => {
+    beforeEach(() => {
+      adminPage = new AdminPage(mockApp);
+      mockApiService.releaseHoldMonitoringTemps = vi.fn().mockResolvedValue({ success: true });
+      adminPage.loadData = vi.fn();
+    });
+
+    it('affiche « BLOQUÉE » pour une ligne en A', () => {
+      expect(adminPage.getMonitoringStatusText('A')).toBe('BLOQUÉE');
+    });
+
+    it('ne débloque pas sans confirmation', async () => {
+      global.confirm = vi.fn(() => false);
+      await adminPage.releaseHoldMonitoringRecord(580);
+      expect(global.confirm).toHaveBeenCalled();
+      expect(mockApiService.releaseHoldMonitoringTemps).not.toHaveBeenCalled();
+    });
+
+    it('débloque après confirmation', async () => {
+      global.confirm = vi.fn(() => true);
+      await adminPage.releaseHoldMonitoringRecord(580);
+      expect(mockApiService.releaseHoldMonitoringTemps).toHaveBeenCalledWith(580);
+    });
+  });
+
   describe('resetConsecutiveErrors', () => {
     beforeEach(() => {
       adminPage = new AdminPage(mockApp);

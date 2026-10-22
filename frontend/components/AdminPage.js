@@ -2319,7 +2319,7 @@ class AdminPage {
                     const releaseBtn = createButton({
                         icon: 'fas fa-lock-open',
                         className: 'btn-release-hold',
-                        title: 'Débloquer (remettre transférable, sans envoyer)',
+                        title: 'Ligne bloquée : cliquer pour la débloquer (elle repartira avec le transfert auto de 20h)',
                         dataset: { tempsId: String(tempsId) }
                     });
                     cell9.appendChild(releaseBtn);
@@ -2376,7 +2376,7 @@ class AdminPage {
         const map = {
             'NULL': 'NON TRAITÉ',
             'O': 'VALIDÉ',
-            'A': 'EN ATTENTE',
+            'A': 'BLOQUÉE',
             'T': 'TRANSMIS',
             'M': 'FUSIONNÉ',
             'D': 'ÉCARTÉ'
@@ -2910,6 +2910,11 @@ class AdminPage {
             this.notificationManager.warning('TempsId manquant');
             return;
         }
+        const ok = confirm(
+            `Débloquer la ligne TempsId ${id} ?\n` +
+            'Elle ne sera plus protégée : le transfert automatique de 20h l\'enverra vers SILOG.'
+        );
+        if (!ok) return;
         try {
             await this.apiService.releaseHoldMonitoringTemps(id);
             this.notificationManager.success(`Ligne ${id} débloquée`);
