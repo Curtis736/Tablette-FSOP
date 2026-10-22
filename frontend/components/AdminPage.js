@@ -3279,6 +3279,90 @@ class AdminPage {
         }
     }
 
+    /**
+     * Menu déroulant des codes rubrique associés au lancement (étapes LCTC / SILOG).
+     * Retourne le code choisi, ou null si annulé (= pas de modification).
+     * Si aucune rubrique n'est trouvée pour le lancement, on revient à la saisie libre.
+     */
+    async pickCodeRubrique(lancementCode, currentCodeRubrique = '') {
+        const current = String(currentCodeRubrique || '').trim();
+        const byRubrique = new Map();
+        try {
+            const res = await this.apiService.getLancementSteps(String(lancementCode || '').trim().toUpperCase());
+            (res?.steps || []).forEach(s => {
+                const rubrique = String(s?.CodeRubrique || '').trim();
+                if (!rubrique) return;
+                if (!byRubrique.has(rubrique)) byRubrique.set(rubrique, { phases: new Set(), ops: new Set() });
+                const entry = byRubrique.get(rubrique);
+                const phase = String(s?.Phase || '').trim();
+                const op = String(s?.CodeOperation || '').trim();
+                if (phase) entry.phases.add(phase);
+                if (op) entry.ops.add(op);
+            });
+        } catch (e) {
+            this.logger.warn('⚠️ Impossible de récupérer les codes rubrique du lancement:', e?.message || e);
+        }
+
+        if (byRubrique.size === 0) {
+            return prompt(`CodeRubrique (actuel: ${current || 'vide'}) :`, current);
+        }
+
+        const esc = (v) => this.escapeHtmlAi(v);
+        const optionsHtml = Array.from(byRubrique.entries()).map(([rubrique, { phases, ops }]) => {
+            const details = [
+                phases.size ? `phase ${Array.from(phases).join(', ')}` : '',
+                ops.size ? Array.from(ops).join(' / ') : ''
+            ].filter(Boolean).join(' — ');
+            const label = `${rubrique}${details ? ` (${details})` : ''}${rubrique === current ? ' — actuel' : ''}`;
+            return `<option value="${esc(rubrique)}" ${rubrique === current ? 'selected' : ''}>${esc(label)}</option>`;
+        });
+        if (current && !byRubrique.has(current)) {
+            optionsHtml.unshift(`<option value="${esc(current)}" selected>${esc(current)} — actuel (hors lancement)</option>`);
+        }
+
+        return new Promise((resolve) => {
+            const modal = createElement('div', {
+                className: 'ai-assist-modal',
+                role: 'dialog',
+                'aria-modal': 'true'
+            });
+            modal.innerHTML = `
+                <div class="ai-assist-modal-card">
+                    <div class="ai-assist-modal-header">
+                        <strong>Code rubrique — ${esc(lancementCode)}</strong>
+                        <button type="button" class="ai-assist-close" aria-label="Fermer">&times;</button>
+                    </div>
+                    <p class="ai-assist-motif">Actuel : <b>${esc(current || 'vide')}</b></p>
+                    <select class="code-rubrique-select" style="width:100%;padding:8px;font-size:1rem;margin-bottom:12px;">
+                        ${optionsHtml.join('')}
+                    </select>
+                    <div class="ai-assist-actions">
+                        <button type="button" class="btn-secondary code-rubrique-cancel">Annuler</button>
+                        <button type="button" class="btn-primary code-rubrique-ok"><i class="fas fa-check"></i> Valider</button>
+                    </div>
+                </div>`;
+
+            const select = modal.querySelector('.code-rubrique-select');
+            const done = (value) => {
+                modal.remove();
+                resolve(value);
+            };
+            modal.querySelector('.ai-assist-close')?.addEventListener('click', () => done(null));
+            modal.querySelector('.code-rubrique-cancel')?.addEventListener('click', () => done(null));
+            modal.querySelector('.code-rubrique-ok')?.addEventListener('click', () => done(select?.value ?? null));
+            modal.addEventListener('click', (e) => {
+                if (e.target === modal) done(null);
+            });
+            modal.addEventListener('keydown', (e) => {
+                if (e.key === 'Escape') done(null);
+                if (e.key === 'Enter') done(select?.value ?? null);
+            });
+
+            document.body.appendChild(modal);
+            select?.focus();
+        });
+    }
+
     async editMonitoringRecord(id) {
         // Convertir l'ID en nombre pour éviter les problèmes de type
         const tempsId = Number.parseInt(id, 10);
@@ -3314,7 +3398,8 @@ class AdminPage {
         // Correction simple via prompts (Phase/CodeRubrique/Start/End)
         const lancementCode = prompt(`Lancement (actuel: ${currentLancementCode || 'vide'}) :`, currentLancementCode);
         const phase = prompt(`Phase (actuel: ${currentPhase || 'vide'}) :`, currentPhase);
-        const codeRubrique = prompt(`CodeRubrique (actuel: ${currentCodeRubrique || 'vide'}) :`, currentCodeRubrique);
+        const targetLancementCode = (lancementCode !== null && lancementCode !== '') ? lancementCode : currentLancementCode;
+        const codeRubrique = await this.pickCodeRubrique(targetLancementCode, currentCodeRubrique);
         const startTime = prompt(`Heure début (actuel: ${currentStartTime || 'vide'}) (YYYY-MM-DDTHH:mm:ss ou HH:mm) :`, currentStartTime);
         const endTime = prompt(`Heure fin (actuel: ${currentEndTime || 'vide'}) (YYYY-MM-DDTHH:mm:ss ou HH:mm) :`, currentEndTime);
 
