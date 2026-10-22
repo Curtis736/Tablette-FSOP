@@ -1,0 +1,210 @@
+services:
+  backend:
+    image: docker-sedi-backend:latest
+    pull_policy: never
+    build:
+      context: ../..
+      dockerfile: docker/prod/Dockerfile.backend
+    container_name: sedi-tablette-backend
+    # By default the image runs as user "node". If your host bind mount is root-owned (common with CIFS),
+    # you can override to run as root: BACKEND_USER=0:0 (in docker/prod/.env).
+    user: ${BACKEND_USER:-node}
+    # Port backend accessible uniquement via nginx (pas d'accès direct)
+    expose:
+      - "3001"
+    # Map SERVEURERP hostname to IP address for DNS resolution inside container
+    # Set DB_SERVER_IP in docker/prod/.env with the actual IP of your SQL Server
+    # Example: DB_SERVER_IP=192.168.1.10
+    # If DB_SERVER_IP is not set, it will try to use the host network gateway
+    extra_hosts:
+      - "SERVEURERP:${DB_SERVER_IP:-172.17.0.1}"
+      # Some clients (including OpenSSH) may lowercase hostnames during resolution.
+      # Add a lowercase alias to avoid "Could not resolve hostname serveurerp".
+      - "serveurerp:${DB_SERVER_IP:-172.17.0.1}"
+    environment:
+      - NODE_ENV=production
+      - TZ=Europe/Paris
+      # Choix du type de pause sur tablette (coupé par défaut)
+      - ENABLE_PAUSE_TYPES=${ENABLE_PAUSE_TYPES:-false}
+      # Mitigation: disable heavy startup cleanup that can lock/timeout on large tables
+      - DISABLE_STARTUP_CLEANUP=true
+      # Admin authentication (override via docker/prod/.env if needed)
+      - ADMIN_USERNAME=${ADMIN_USERNAME:-admin}
+      - ADMIN_PASSWORD=${ADMIN_PASSWORD}
+      - JWT_SECRET=${JWT_SECRET}
+      - SESSION_SECRET=${SESSION_SECRET:-${JWT_SECRET}}
+      # Espace RH (coupé par défaut ; RH_PASSWORD obligatoire si ENABLE_RH=true)
+      - ENABLE_RH=${ENABLE_RH:-false}
+      - RH_USERNAME=${RH_USERNAME:-rh}
+      - RH_PASSWORD=${RH_PASSWORD:-}
+      # Database (override via docker/prod/.env for your VM)
+      # DB principale de l'app (SEDI_APP_INDEPENDANTE) + base ERP (SEDI_ERP)
+      - DB_SERVER=${DB_SERVER:-SERVEURERP}
+      - DB_DATABASE=${DB_DATABASE:-SEDI_APP_INDEPENDANTE}
+      - DB_USER=${DB_USER:-QUALITE}
+      - DB_PASSWORD=${DB_PASSWORD}
+      - DB_ENCRYPT=${DB_ENCRYPT:-false}
+      - DB_TRUST_CERT=${DB_TRUST_CERT:-true}
+      - DB_ERP_SERVER=${DB_ERP_SERVER:-SERVEURERP}
+      - DB_ERP_DATABASE=${DB_ERP_DATABASE:-SEDI_ERP}
+      - DB_ERP_USER=${DB_ERP_USER:-QUALITE}
+      - DB_ERP_PASSWORD=${DB_ERP_PASSWORD}
+      - DB_ERP_ENCRYPT=${DB_ERP_ENCRYPT:-false}
+      - DB_ERP_TRUST_CERT=${DB_ERP_TRUST_CERT:-true}
+      # SQL timeouts/retries (important when SQL Server is temporarily slow)
+      - DB_REQUEST_TIMEOUT_MS=${DB_REQUEST_TIMEOUT_MS:-60000}
+      - DB_CONNECTION_TIMEOUT_MS=${DB_CONNECTION_TIMEOUT_MS:-60000}
+      - DB_QUERY_RETRIES=${DB_QUERY_RETRIES:-2}
+      # Default container paths (override via docker/prod/.env if needed)
+      - TRACEABILITY_DIR=${TRACEABILITY_DIR:-/mnt/services/Tracabilite}
+      - FSOP_SEARCH_DEPTH=${FSOP_SEARCH_DEPTH:-3}
+      # FSOP templates (override in docker/prod/.env for Linux/VM paths)
+      - FSOP_TEMPLATES_DIR=${FSOP_TEMPLATES_DIR:-}
+      - FSOP_TEMPLATES_XLSX_PATH=${FSOP_TEMPLATES_XLSX_PATH:-}
+      # Redis (optionnel)
+      - REDIS_URL=${REDIS_URL:-redis://redis:6379}
+      - REDIS_PASSWORD=${REDIS_PASSWORD:-}
+      - REDIS_DB=${REDIS_DB:-0}
+      # Factorial IN/OUT sync
+      - ENABLE_FACTORIAL_AUTOCLOSE=${ENABLE_FACTORIAL_AUTOCLOSE:-true}
+      - FACTORIAL_API_BASE_URL=${FACTORIAL_API_BASE_URL:-https://api.factorialhr.com}
+      - FACTORIAL_API_TOKEN=${FACTORIAL_API_TOKEN}
+      - FACTORIAL_OPEN_SHIFTS_PATH=${FACTORIAL_OPEN_SHIFTS_PATH:-/resources/attendance/open_shifts}
+      - FACTORIAL_SHIFTS_PATH=${FACTORIAL_SHIFTS_PATH:-/resources/attendance/shifts}
+      - FACTORIAL_SHIFTS_LOOKBACK_DAYS=${FACTORIAL_SHIFTS_LOOKBACK_DAYS:-2}
+      - FACTORIAL_RAW_PAYLOAD_RETENTION_DAYS=${FACTORIAL_RAW_PAYLOAD_RETENTION_DAYS:-30}
+      - FACTORIAL_API_TIMEOUT_MS=${FACTORIAL_API_TIMEOUT_MS:-10000}
+      - FACTORIAL_CHECK_START_HOUR=${FACTORIAL_CHECK_START_HOUR:-17}
+      - FACTORIAL_CHECK_INTERVAL_MINUTES=${FACTORIAL_CHECK_INTERVAL_MINUTES:-30}
+      # =========================
+      # SILOG - Runner distant (Linux -> Windows via SSH)
+      # =========================
+      # Required for Linux backend to trigger SILOG.exe on a Windows runner (OpenSSH Server).
+      # If you do NOT have SSH access to SERVEURERP, use scheduled mode (Windows Scheduled Task).
+      - SILOG_REMOTE_MODE=${SILOG_REMOTE_MODE:-scheduled}
+      # Validation auto des temps terminés → StatutTraitement='O' (V_REMONTE_TEMPS → SILOG)
+      - ENABLE_AUTO_VALIDATE_TEMPS=${ENABLE_AUTO_VALIDATE_TEMPS:-true}
+      - AUTO_VALIDATE_TEMPS_HOUR=${AUTO_VALIDATE_TEMPS_HOUR:-20}
+      - AUTO_VALIDATE_ON_FIN=${AUTO_VALIDATE_ON_FIN:-false}
+      - SILOG_SSH_HOST=${SILOG_SSH_HOST:-SERVEURERP}
+      - SILOG_SSH_USER=${SILOG_SSH_USER:-maintenance}
+      - SILOG_SSH_PORT=${SILOG_SSH_PORT:-22}
+      # SSH key path inside container (mounted read-only below)
+      - SILOG_SSH_KEY_PATH=${SILOG_SSH_KEY_PATH:-/home/maintenance/.ssh/id_ed25519}
+      # Avoid interactive prompts (host key) in automation. Override if you want strict checking.
+      - SILOG_SSH_EXTRA_ARGS=${SILOG_SSH_EXTRA_ARGS:--o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null}
+
+      # SILOG executable path as seen by the Windows runner (local path recommended)
+      - SILOG_EXE_PATH=${SILOG_EXE_PATH:-C:\\SILOG8\\SILOG.exe}
+      - SILOG_WORKDIR=${SILOG_WORKDIR:-C:\\SILOG8}
+      - SILOG_STALE_THRESHOLD_HOURS=${SILOG_STALE_THRESHOLD_HOURS:-24}
+      # Alertes fiabilité (watchdog → Teams / email)
+      - ALERTS_ENABLED=${ALERTS_ENABLED:-true}
+      - ALERT_COOLDOWN_MINUTES=${ALERT_COOLDOWN_MINUTES:-60}
+      - ALERT_EMAIL=${ALERT_EMAIL:-}
+      - TEAMS_WEBHOOK_URL=${TEAMS_WEBHOOK_URL:-}
+      - ALERT_TEAMS_WEBHOOK=${ALERT_TEAMS_WEBHOOK:-}
+      - EMAIL_DISABLED=${EMAIL_DISABLED:-false}
+      - EMAIL_USE_HTTP=${EMAIL_USE_HTTP:-false}
+      - EMAIL_WEBHOOK_URL=${EMAIL_WEBHOOK_URL:-}
+      - SMTP_HOST=${SMTP_HOST:-}
+      - SMTP_PORT=${SMTP_PORT:-587}
+      - SMTP_USER=${SMTP_USER:-}
+      - SMTP_PASS=${SMTP_PASS:-}
+      - SMTP_FROM=${SMTP_FROM:-}
+      # Assistance IA (propose seulement ; off par défaut)
+      - ENABLE_AI_ASSIST=${ENABLE_AI_ASSIST:-false}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      - AI_MODEL_ASSIST=${AI_MODEL_ASSIST:-claude-sonnet-4-5}
+      - AI_MODEL_FAST=${AI_MODEL_FAST:-claude-haiku-4-5}
+    # Limites mémoire : évite qu'un conteneur saturer la RAM hôte
+    mem_limit: ${BACKEND_MEM_LIMIT:-1536m}
+    mem_reservation: ${BACKEND_MEM_RESERVATION:-512m}
+    volumes:
+      # Host mount -> container mount (defaults keep existing behavior)
+      # VM variant example: SERVICES_HOST_PATH=/mnt/partage_fsop and SERVICES_CONTAINER_PATH=/mnt/services/Tracabilite
+      - ${SERVICES_HOST_PATH:-/srv/services}:${SERVICES_CONTAINER_PATH:-/mnt/services}:rw
+      # Optional extra mount for FSOP templates (use when traceability and templates are on different mounts)
+      # Example VM: TEMPLATES_HOST_PATH=/mnt/partage_services/Services and TEMPLATES_CONTAINER_PATH=/mnt/templates
+      - ${TEMPLATES_HOST_PATH:-/srv/services}:${TEMPLATES_CONTAINER_PATH:-/mnt/templates}:rw
+      - ../../backend/logs:/app/logs
+      # SSH key for SILOG runner (read-only). Override SSH_KEY_HOST_DIR in docker/prod/.env if needed.
+      # Note: if the key is 600 and owned by maintenance on host, you may need BACKEND_USER=0:0 to read it inside container.
+      - ${SSH_KEY_HOST_DIR:-/home/maintenance/.ssh}:/home/maintenance/.ssh:ro
+    networks:
+      - sedi-network
+    restart: always
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3001/api/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+  frontend:
+    image: docker-sedi-frontend:latest
+    pull_policy: never
+    build:
+      context: ../..
+      dockerfile: docker/prod/Dockerfile.frontend
+      args:
+        SSL_EXTRA_IP: ${SSL_EXTRA_IP:-}
+    container_name: sedi-tablette-frontend
+    # Ne pas exécuter en root - le Dockerfile gère les permissions
+    # user: "0:0"
+    volumes:
+      # Certificats persistants (régénérer via docker/prod/scripts/regenerate-fsop-ssl.sh)
+      - ./ssl-runtime/nginx-ssl:/etc/nginx/ssl:ro
+      - ./ssl-runtime/tablet:/usr/share/nginx/html/ssl:ro
+    ports:
+      # Keep both bindings for compatibility:
+      # - 80 for domain access (http://fsop.sedi-ati.com)
+      # - 8080 for legacy local access
+      - "80:80"
+      - "443:443"
+      - "8080:80"
+    environment:
+      - TZ=Europe/Paris
+    mem_limit: ${FRONTEND_MEM_LIMIT:-256m}
+    mem_reservation: ${FRONTEND_MEM_RESERVATION:-64m}
+    # Pas de depends_on backend : le front doit démarrer même si l'API est arrêtée (mode dégradé Nginx + UI).
+    networks:
+      - sedi-network
+    restart: always
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:80"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+  # Redis pour le cache partagé (optionnel)
+  redis:
+    image: redis:7-alpine
+    container_name: sedi-tablette-redis
+    # Redis accessible uniquement via sedi-network (pas de port hôte)
+    expose:
+      - "6379"
+    volumes:
+      - redis-data:/data
+    networks:
+      - sedi-network
+    restart: always
+    mem_limit: ${REDIS_MEM_LIMIT:-384m}
+    mem_reservation: ${REDIS_MEM_RESERVATION:-64m}
+    command: redis-server --appendonly yes --maxmemory 256mb --maxmemory-policy allkeys-lru ${REDIS_PASSWORD:+--requirepass ${REDIS_PASSWORD}}
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+
+networks:
+  sedi-network:
+    # Create the network if missing; reuse it if already present.
+    name: sedi-tablette-network
+    external: true
+
+volumes:
+  redis-data:
+    name: sedi-tablette-redis-data

@@ -1,8 +1,11 @@
 /**
  * URL du backend Node en développement local (tablette sur http-server :8080, etc.).
- * Doit rester aligné avec backend/server.js : PORT défaut 3001 ; 3033 si NODE_ENV=development.
+ * Aligné avec backend/server.js : port 3033 si NODE_ENV=development (npm run dev / dev:sandbox).
  *
- * Surcharge optionnelle : localStorage.setItem('sedi_dev_backend_port', '3033')
+ * Surcharge optionnelle : localStorage.setItem('sedi_dev_backend_port', '3001')
+ *
+ * Important : utiliser le MÊME hostname que la page (127.0.0.1 vs localhost),
+ * sinon le navigateur bloque en "Failed to fetch" (CORS / private network).
  */
 export function resolveLocalDevBackendPort() {
     try {
@@ -11,9 +14,12 @@ export function resolveLocalDevBackendPort() {
     } catch (_) {
         /* ignore */
     }
-    return '3001';
+    return '3033';
 }
 
 export function getLocalDevApiBase() {
-    return `http://localhost:${resolveLocalDevBackendPort()}/api`;
+    const host = (typeof window !== 'undefined' && window.location?.hostname)
+        ? window.location.hostname
+        : '127.0.0.1';
+    return `http://${host}:${resolveLocalDevBackendPort()}/api`;
 }

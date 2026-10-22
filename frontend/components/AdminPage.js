@@ -9,6 +9,20 @@ import { debounce } from '../utils/debounce.js';
 import { createElement, createTableCell, createButton, createBadge, clearElement } from '../utils/DOMHelper.js';
 import { ADMIN_CONFIG, STATUS_CODES, STATUS_LABELS } from '../utils/Constants.js';
 
+/**
+ * Recolle une heure corrigée sur le jour de la ligne.
+ * "17:25" ou "2026-10-21T17:25:00" restent sur dayYmd (la veille), pas sur aujourd'hui.
+ */
+function composeClockOnDay(dayYmd, timeInput) {
+    const day = String(dayYmd || '').match(/^(\d{4}-\d{2}-\d{2})/)?.[1];
+    const hm = String(timeInput || '').trim().match(/(\d{1,2}):(\d{2})(?::(\d{2}))?/);
+    if (!day || !hm) return timeInput || '';
+    const hh = hm[1].padStart(2, '0');
+    const mm = hm[2];
+    const ss = String(hm[3] || '00').padStart(2, '0');
+    return `${day}T${hh}:${mm}:${ss}`;
+}
+
 /** Date locale YYYY-MM-DD (alignée avec loadData / SQL jour civil). */
 function toLocalDateOnlyString(d) {
     const x = new Date(d);
@@ -106,6 +120,14 @@ function compareAdminTimelineRows(a, b) {
     const tsA = getAdminRowSortTimestamp(a);
     const tsB = getAdminRowSortTimestamp(b);
     if (tsA !== tsB) return tsA - tsB;
+    // Même minute : créneau productif avant la pause
+    const rank = (x) => {
+        if (x?._isPauseRow || x?.type === 'pause') return 1;
+        if (x?._isWorkSegment) return 0;
+        return 2;
+    };
+    const r = rank(a) - rank(b);
+    if (r !== 0) return r;
     const idA = Number(a?.TempsId ?? a?.EventId ?? a?.id ?? 0) || 0;
     const idB = Number(b?.TempsId ?? b?.EventId ?? b?.id ?? 0) || 0;
     return idA - idB;
@@ -118,7 +140,7 @@ class AdminPage {
         this.notificationManager = app.getNotificationManager();
         
         // Initialiser les utilitaires
-        this.logger = new Logger(true); // logs admin toujours actifs
+        this.logger = new Logger(false);
         this.domCache = new DOMCache();
         this.errorHandler = new ErrorHandler(this.notificationManager, this.logger);
         this.validator = new Validator();
@@ -134,6 +156,8 @@ class AdminPage {
         this.selectedOperatorCode = ''; // persiste le filtre opérateur entre refresh
         this.transferSelectionIds = new Set(); // sélection dans la modale de transfert (TempsId)
         this.selectedTempsIds = new Set(); // sélection de lignes dans le tableau principal (TempsId)
+        this.aiAssistEnabled = false;
+        this._aiAssistLoading = false;
         
         // Flags pour éviter les appels simultanés
         this._isTransferring = false;
@@ -163,6 +187,16 @@ class AdminPage {
         this.initializeElements();
         this.setupEventListeners();
         this.startAutoSave();
+        this.refreshAiAssistStatus();
+    }
+
+    async refreshAiAssistStatus() {
+        try {
+            const res = await this.apiService.getAiAssistStatus();
+            this.aiAssistEnabled = Boolean(res?.data?.enabled && res?.data?.hasApiKey);
+        } catch {
+            this.aiAssistEnabled = false;
+        }
     }
 
     /**
@@ -262,29 +296,85 @@ class AdminPage {
     }
 
     /**
-     * SILOG : si des segments productifs (historique) existent pour opérateur+LT+jour,
-     * masquer la ligne consolidée ABTEMPS qui couvre toute la journée (évite le doublon).
+     * Clé créneau (opérateur + LT + jour + heure début) pour aligner
+     * une ligne ABTEMPS et un segment historique du même cycle.
+     */
+    _getAdminStartSlotKey(op) {
+        const oc = String(op?.OperatorCode || op?.operatorCode || op?.operatorId || '').trim();
+        const lc = String(op?.LancementCode || op?.lancementCode || '').trim().toUpperCase();
+        const ymd = this._parseOpDateCreationLocalYmd(op?.DateCreation) || '';
+        const st = this.formatDateTime(op?.StartTime ?? op?.startTime);
+        const startNorm = st === '-' ? '' : st;
+        return `${oc}|${lc}|${ymd}|${startNorm}`;
+    }
+
+    /**
+     * Si un segment productif couvre le même créneau (opérateur+LT+jour+heure de début),
+     * masquer la ligne ABTEMPS de ce cycle — sinon on voit le cumul et le détail.
+     * Un autre cycle du même jour (autre heure de début) reste visible.
+     * La pause n'est pas une ligne : fin d'une ligne = pause, début suivante = reprise.
      */
     _preferWorkSegmentsOverConsolidated(ops) {
         if (!ops?.length) return ops;
-        const daysWithSegments = new Set();
-        for (const op of ops) {
-            if (op?._isWorkSegment || (op?._isUnconsolidated && op?.EventId && !op?._isPauseRow)) {
-                const ymd = this._parseOpDateCreationLocalYmd(op?.DateCreation);
-                if (!ymd) continue;
-                const lc = String(op?.LancementCode || op?.lancementCode || '').trim().toUpperCase();
-                const oc = String(op?.OperatorCode || op?.operatorCode || op?.operatorId || '').trim();
-                daysWithSegments.add(`${oc}|${lc}|${ymd}`);
+        const segments = ops.filter((op) => op?._isWorkSegment);
+        if (segments.length === 0) {
+            const consolidatedSlots = new Set();
+            for (const op of ops) {
+                if (op?.TempsId == null || String(op.TempsId).trim() === '') continue;
+                if (op?._isPauseRow) continue;
+                consolidatedSlots.add(this._getAdminStartSlotKey(op));
             }
+            if (consolidatedSlots.size === 0) return ops;
+            return ops.filter((op) => {
+                if (op?._isPauseRow) return true;
+                if (op?.TempsId != null && String(op.TempsId).trim() !== '') return true;
+                if (!op?._isUnconsolidated) return true;
+                return !consolidatedSlots.has(this._getAdminStartSlotKey(op));
+            });
         }
-        if (daysWithSegments.size === 0) return ops;
-        return ops.filter((op) => {
-            if (op?.TempsId == null || String(op.TempsId).trim() === '') return true;
-            const ymd = this._parseOpDateCreationLocalYmd(op?.DateCreation);
-            if (!ymd) return true;
-            const lc = String(op?.LancementCode || op?.lancementCode || '').trim().toUpperCase();
+
+        const dayKey = (op) => {
             const oc = String(op?.OperatorCode || op?.operatorCode || op?.operatorId || '').trim();
-            return !daysWithSegments.has(`${oc}|${lc}|${ymd}`);
+            const lc = String(op?.LancementCode || op?.lancementCode || '').trim().toUpperCase();
+            const ymd = this._parseOpDateCreationLocalYmd(op?.DateCreation) || '';
+            return `${oc}|${lc}|${ymd}`;
+        };
+
+        const segmentDays = new Set(segments.map(dayKey));
+        const segmentSlots = new Set(
+            segments.map((op) => this._getAdminStartSlotKey(op)).filter(Boolean)
+        );
+
+        // Attacher les TempsId consolidés aux segments (même créneau) pour le transfert / sélection.
+        const consolidatedBySlot = new Map();
+        for (const op of ops) {
+            if (op?._isWorkSegment || op?._isPauseRow) continue;
+            const tid = op?.TempsId ?? op?.tempsId;
+            if (tid == null || String(tid).trim() === '') continue;
+            if (!segmentDays.has(dayKey(op))) continue;
+            const slot = this._getAdminStartSlotKey(op);
+            if (!slot || consolidatedBySlot.has(slot)) continue;
+            consolidatedBySlot.set(slot, op);
+        }
+        for (const seg of segments) {
+            const match = consolidatedBySlot.get(this._getAdminStartSlotKey(seg));
+            if (!match) continue;
+            seg.TempsId = match.TempsId ?? match.tempsId;
+            if (match.StatutTraitement != null) seg.StatutTraitement = match.StatutTraitement;
+            if (match.TotalDuration != null) seg.TotalDuration = match.TotalDuration;
+            if (match.PauseDuration != null) seg.PauseDuration = match.PauseDuration;
+            if (match.ProductiveDuration != null) seg.ProductiveDuration = match.ProductiveDuration;
+            seg._isUnconsolidated = false;
+        }
+
+        return ops.filter((op) => {
+            if (op?._isPauseRow) return true;
+            if (op?._isWorkSegment) return true;
+            const tid = op?.TempsId ?? op?.tempsId;
+            if (tid != null && String(tid).trim() !== '' && segmentSlots.has(this._getAdminStartSlotKey(op))) {
+                return false;
+            }
+            return true;
         });
     }
 
@@ -357,6 +447,7 @@ class AdminPage {
             transferModalTableBody: 'transferModalTableBody',
             closeTransferModalBtn: 'closeTransferModalBtn',
             transferSelectedConfirmBtn: 'transferSelectedConfirmBtn',
+            transferHoldSelectedBtn: 'transferHoldSelectedBtn',
             transferSelectAll: 'transferSelectAll'
         };
         
@@ -414,6 +505,11 @@ class AdminPage {
                     transferSelectedConfirmBtn.addEventListener('click', () => this.confirmTransferFromModal());
                 }
 
+                const transferHoldSelectedBtn = this.domCache.get('transferHoldSelectedBtn');
+                if (transferHoldSelectedBtn) {
+                    transferHoldSelectedBtn.addEventListener('click', () => this.holdSelectedFromTransferModal());
+                }
+
                 const transferSelectAll = this.domCache.get('transferSelectAll');
                 if (transferSelectAll) {
                     transferSelectAll.addEventListener('change', () => this.toggleTransferSelectAll(transferSelectAll.checked));
@@ -454,14 +550,40 @@ class AdminPage {
                     });
                 }
                 
-                // Filtre de recherche avec debounce
+                // Filtre de recherche : filtrage local immédiat, API en silence (sans vider le tableau)
                 const searchFilter = this.domCache.get('searchFilter');
                 if (searchFilter) {
-                    const debouncedLoadData = debounce(() => {
-                        // Recharger depuis le backend car le filtre lancement peut être appliqué côté API
-                        this.loadData();
+                    const debouncedSearchReload = debounce(() => {
+                        this.loadData(true, { silent: true });
                     }, ADMIN_CONFIG.SEARCH_DEBOUNCE_DELAY);
-                    searchFilter.addEventListener('input', debouncedLoadData);
+                    searchFilter.addEventListener('input', () => {
+                        this.currentPage = 1;
+                        this.updateOperationsTable();
+                        this.updatePaginationInfo();
+                        debouncedSearchReload();
+                    });
+                }
+
+                const operatorCodeSearch = this.domCache.get('operatorCodeSearch');
+                if (operatorCodeSearch) {
+                    const debouncedOperatorCodeFilter = debounce(() => {
+                        this.updateOperationsTable();
+                        this.updatePaginationInfo();
+                    }, 150);
+                    operatorCodeSearch.addEventListener('input', () => {
+                        this.currentPage = 1;
+                        const term = operatorCodeSearch.value.trim();
+                        const hadFetchedOperator = Boolean(this._fetchedOperatorCode);
+                        if (term && (hadFetchedOperator || this.selectedOperatorCode || this.operatorSelect?.value)) {
+                            this.selectedOperatorCode = '';
+                            if (this.operatorSelect) this.operatorSelect.value = '';
+                            if (hadFetchedOperator) {
+                                this.loadData(true, { silent: true });
+                                return;
+                            }
+                        }
+                        debouncedOperatorCodeFilter();
+                    });
                 }
                 
                 // Bouton effacer filtres
@@ -477,6 +599,8 @@ class AdminPage {
                         if (adp) adp.value = '';
                         if (pg) pg.style.display = 'none';
                         if (searchFilter) searchFilter.value = '';
+                        const operatorCodeSearch = this.domCache.get('operatorCodeSearch');
+                        if (operatorCodeSearch) operatorCodeSearch.value = '';
                         this.loadData();
                     });
                 }
@@ -509,6 +633,31 @@ class AdminPage {
                             } else {
                                 await this.deleteMonitoringRecord(tempsId || id);
                             }
+                        } else if (e.target.closest('.btn-hold')) {
+                            e.preventDefault();
+                            e.stopPropagation();
+                            const btn = e.target.closest('.btn-hold');
+                            const tempsId = btn.dataset.tempsId ? Number.parseInt(btn.dataset.tempsId, 10) : null;
+                            if (tempsId) await this.holdMonitoringRecord(tempsId);
+                        } else if (e.target.closest('.btn-release-hold')) {
+                            e.preventDefault();
+                            e.stopPropagation();
+                            const btn = e.target.closest('.btn-release-hold');
+                            const tempsId = btn.dataset.tempsId ? Number.parseInt(btn.dataset.tempsId, 10) : null;
+                            if (tempsId) await this.releaseHoldMonitoringRecord(tempsId);
+                        } else if (e.target.closest('.btn-transmit-one')) {
+                            e.preventDefault();
+                            e.stopPropagation();
+                            const btn = e.target.closest('.btn-transmit-one');
+                            const tempsId = btn.dataset.tempsId ? Number.parseInt(btn.dataset.tempsId, 10) : null;
+                            const wasHold = btn.dataset.onHold === 'true';
+                            if (tempsId) await this.transmitSingleMonitoringRecord(tempsId, { wasHold });
+                        } else if (e.target.closest('.btn-ai-assist')) {
+                            e.preventDefault();
+                            e.stopPropagation();
+                            const btn = e.target.closest('.btn-ai-assist');
+                            const rowId = btn.dataset.id || btn.dataset.operationId;
+                            if (rowId) await this.analyzeLineWithAi(rowId);
                         } else if (e.target.closest('.btn-edit')) {
                             e.preventDefault();
                             e.stopPropagation();
@@ -583,6 +732,33 @@ class AdminPage {
     }
 
     /**
+     * Si le filtre affiche un seul jour (aujourd'hui, hier, calendrier) qui n'est pas
+     * celui de la ligne, basculer sur le jour de la ligne. Mois / semaine inchangés.
+     */
+    _keepAdminPeriodOnRecordDay(recordDay) {
+        if (!recordDay) return;
+        const periodFilter = this.domCache.get('periodFilter') || document.getElementById('periodFilter');
+        const period = periodFilter?.value || 'month';
+        if (period === 'month' || period === 'week') return;
+
+        const today = toLocalDateOnlyString(new Date());
+        const yesterdayDate = new Date();
+        yesterdayDate.setDate(yesterdayDate.getDate() - 1);
+        const yesterday = toLocalDateOnlyString(yesterdayDate);
+        const picker = this.domCache.get('adminDatePicker');
+        const shown = period === 'today'
+            ? today
+            : period === 'yesterday'
+                ? yesterday
+                : (picker?.value || today);
+        if (shown === recordDay) return;
+
+        if (periodFilter) periodFilter.value = 'custom';
+        if (picker) picker.value = recordDay;
+        this.syncAdminDatePickerUI();
+    }
+
+    /**
      * Affiche le sélecteur de date lorsque la période « Un jour » est choisie.
      */
     syncAdminDatePickerUI() {
@@ -605,7 +781,18 @@ class AdminPage {
         }
     }
 
-    async loadData(enableAutoConsolidate = true) {
+    _setOperationsTableRefreshing(isRefreshing) {
+        const container = this.operationsTableBody?.closest('.table-container')
+            || document.getElementById('operationsTable')?.closest('.table-container');
+        if (container) container.classList.toggle('is-refreshing', Boolean(isRefreshing));
+    }
+
+    _hasVisibleOperationRows() {
+        if (!this.operationsTableBody) return false;
+        return Boolean(this.operationsTableBody.querySelector('tr:not(.empty-state-row)'));
+    }
+
+    async loadData(enableAutoConsolidate = true, options = {}) {
         if (this.isLoading) {
             this.logger.log('Chargement déjà en cours, ignorer...');
             return;
@@ -614,9 +801,11 @@ class AdminPage {
         try {
             this.isLoading = true;
             const seq = ++this._loadSeq;
+            const silent = options?.silent === true || this._isAutoRefresh === true;
+            const keepExistingRows = silent || this._hasVisibleOperationRows();
 
-            // Vider immédiatement le tableau pour éviter les mélanges pendant le chargement
-            if (this.operationsTableBody) {
+            this._setOperationsTableRefreshing(keepExistingRows);
+            if (!keepExistingRows && this.operationsTableBody) {
                 clearElement(this.operationsTableBody);
                 const row = createElement('tr', { className: 'empty-state-row' });
                 const cell = createTableCell('', { colspan: '9', className: 'empty-state' });
@@ -729,6 +918,7 @@ class AdminPage {
             const searchFilter = this.domCache.get('searchFilter');
             const operatorCode = this.selectedOperatorCode || operatorFilter?.value || undefined;
             const lancementCode = searchFilter?.value?.trim() || undefined;
+            this._fetchedOperatorCode = operatorCode || '';
 
             const filters = { ...periodRange, includeAllStatuses: true };
             if (operatorCode) filters.operatorCode = operatorCode;
@@ -1031,7 +1221,7 @@ class AdminPage {
             throw error;
         } finally {
             this.isLoading = false;
-            // Masquer l'indicateur de chargement
+            this._setOperationsTableRefreshing(false);
             this.loadingIndicator.hide('loadData');
         }
     }
@@ -1514,6 +1704,10 @@ class AdminPage {
         
         const selectedOperator = this.operatorSelect.value;
         this.selectedOperatorCode = selectedOperator || '';
+        const operatorCodeSearch = this.domCache.get('operatorCodeSearch');
+        if (selectedOperator && operatorCodeSearch?.value) {
+            operatorCodeSearch.value = '';
+        }
         this.logger.log('🔄 Changement d\'opérateur sélectionné:', selectedOperator);
 
         // En mode Monitoring, le filtre opérateur est appliqué via loadMonitoringRecords()
@@ -1731,11 +1925,15 @@ class AdminPage {
 
         if (selectedOpStatus && selectedOpStatus !== '') {
             filteredOperations = filteredOperations.filter(op => {
+                const st = String(op?.StatutTraitement ?? '').toUpperCase().trim();
                 if (selectedOpStatus === 'T') {
-                    return String(op?.StatutTraitement ?? '').toUpperCase().trim() === 'T';
+                    return st === 'T';
                 }
-                // Hors filtre "Transmis" : ne pas mélanger les lignes déjà basculées SILOG
-                if (String(op?.StatutTraitement ?? '').toUpperCase().trim() === 'T') {
+                if (selectedOpStatus === 'A') {
+                    return st === 'A';
+                }
+                // Hors filtres SILOG/attente : ne pas mélanger les lignes déjà basculées
+                if (st === 'T') {
                     return false;
                 }
                 const normalized = this.normalizeOperationStatus(op);
@@ -1770,9 +1968,18 @@ class AdminPage {
             this.logger.log(`📊 Après filtrage recherche: ${filteredOperations.length} opérations`);
         }
 
+        const operatorCodeSearch = this.domCache.get('operatorCodeSearch');
+        const operatorCodeTerm = String(operatorCodeSearch?.value || '').trim();
+        if (operatorCodeTerm) {
+            filteredOperations = filteredOperations.filter(op => {
+                const opCode = (op.OperatorCode || op.operatorCode || op.operatorId || '').toString().trim();
+                return opCode.includes(operatorCodeTerm);
+            });
+        }
+
         // Transmis (T) : visibles et grisés. On masque seulement les overlays
-        // historiques (segments / non consolidés) du même opérateur+LT+jour,
-        // pour éviter les doublons à côté de la ligne consolidée déjà basculée.
+        // historiques (segments / non consolidés) du même opérateur+LT+jour —
+        // jamais les autres TempsId (autres cycles encore NULL/O).
         const transmittedKeys = new Set();
         for (const op of this.operations || []) {
             if (String(op?.StatutTraitement ?? '').toUpperCase().trim() !== 'T') continue;
@@ -1785,6 +1992,8 @@ class AdminPage {
             if (!this.shouldShowAdminDashboardRow(op)) return false;
             const isT = String(op?.StatutTraitement ?? '').toUpperCase().trim() === 'T';
             if (isT) return true;
+            // Autre cycle ABTEMPS (NULL/O/A) : toujours visible même si un frère est T
+            if (op?.TempsId != null && String(op.TempsId).trim() !== '') return true;
             if (transmittedKeys.size === 0) return true;
             const oc = String(op?.OperatorCode || op?.operatorCode || op?.operatorId || '').trim();
             const lc = String(op?.LancementCode || op?.lancementCode || '').trim().toUpperCase();
@@ -1795,9 +2004,12 @@ class AdminPage {
         // Mémoriser pour stats cohérentes avec le tableau
         this._lastFilteredOperationsForStats = filteredOperations;
         this.updateStats(filteredOperations);
+
+        const scrollY = typeof window !== 'undefined' ? window.scrollY : 0;
+        const tableContainer = this.operationsTableBody?.closest('.table-container');
+        const tableScrollTop = tableContainer?.scrollTop || 0;
         
         clearElement(this.operationsTableBody);
-        this.logger.log('🧹 TABLEAU VIDE');
         
         // Déterminer le message à afficher si aucune opération
         let emptyMessage = '';
@@ -1824,6 +2036,9 @@ class AdminPage {
             } else if (searchFilter && searchFilter.value.trim()) {
                 emptyMessage = 'Aucun lancement trouvé';
                 emptySubMessage = `Aucun lancement ne correspond à "${searchFilter.value.trim()}"`;
+            } else if (operatorCodeTerm) {
+                emptyMessage = 'Aucun opérateur trouvé';
+                emptySubMessage = `Aucun enregistrement pour le n° « ${operatorCodeTerm} »`;
             } else if (this.operations.length === 0) {
                 emptyMessage = 'Aucun enregistrement trouvé';
                 emptySubMessage = 'Il n\'y a pas d\'enregistrements pour la date sélectionnée';
@@ -1903,21 +2118,9 @@ class AdminPage {
             if (opCode) ltToOperators.get(lt).add(opCode);
         });
         
-        this.logger.log('🔄 CREATION DES LIGNES POUR', operationsToDisplay.length, 'OPERATIONS');
-        this.logger.log('📋 DONNEES COMPLETES DES OPERATIONS:', operationsToDisplay);
+        const fragment = document.createDocumentFragment();
         
-        operationsToDisplay.forEach((operation, index) => {
-            // Debug pour voir les données reçues (Monitoring)
-            this.logger.log(`🔍 Enregistrement ${index + 1}:`, {
-                TempsId: operation.TempsId,
-                OperatorName: operation.OperatorName,
-                OperatorCode: operation.OperatorCode,
-                LancementCode: operation.LancementCode,
-                LancementName: operation.LancementName,
-                StartTime: operation.StartTime,
-                EndTime: operation.EndTime,
-                StatutTraitement: operation.StatutTraitement
-            });
+        operationsToDisplay.forEach((operation) => {
             
             const formattedStartTime = this.formatDateTime(operation.StartTime);
             const formattedEndTime = this.formatDateTime(operation.EndTime);
@@ -1935,26 +2138,22 @@ class AdminPage {
                 }
             }
             
-            this.logger.log(`⏰ Heures formatées pour ${operation.LancementCode}:`, {
-                startTime: `${operation.StartTime} -> ${formattedStartTime}`,
-                endTime: `${operation.EndTime} -> ${formattedEndTime}`,
-                warning: timeWarning ? 'Heures incohérentes détectées' : 'OK'
-            });
-            
             const row = createElement('tr');
             const isPauseRow = operation._isPauseRow === true || operation.type === 'pause';
-            const isTransmitted = String(operation.StatutTraitement || '').toUpperCase() === 'T';
+            const stTrait = String(operation.StatutTraitement || '').toUpperCase().trim();
+            const isTransmitted = stTrait === 'T';
+            const isOnHold = stTrait === 'A';
 
             if (isPauseRow) {
                 row.classList.add('pause-row');
-                const pauseStatusCode = String(operation.StatusCode || operation.statusCode || '').toUpperCase();
-                if (pauseStatusCode === 'PAUSE_TERMINEE') {
-                    row.classList.add('pause-terminee');
-                }
             }
             if (isTransmitted) {
                 row.classList.add('row-transmitted');
                 row.title = 'Transmis à SILOG (StatutTraitement = T)';
+            }
+            if (isOnHold) {
+                row.classList.add('row-on-hold');
+                row.title = 'Bloquée / en attente (StatutTraitement = A) — hors transfert';
             }
             
             // Identifiants (ne pas confondre):
@@ -1972,12 +2171,15 @@ class AdminPage {
             row.dataset.unconsolidated = isUnconsolidated ? 'true' : 'false';
 
             // Déterminer le statut à afficher :
-            // Priorité au basculement SILOG (T) pour que l'admin voie clairement ce qui est déjà transmis.
+            // Priorité au basculement SILOG (T) / blocage (A).
             let statutCode, statutLabel;
 
             if (isTransmitted) {
                 statutCode = 'T';
                 statutLabel = STATUS_LABELS[STATUS_CODES.TRANSMIS] || 'TRANSMIS';
+            } else if (isOnHold) {
+                statutCode = 'A';
+                statutLabel = this.getMonitoringStatusText('A');
             }
             // Sinon statut opération (Status/StatusCode)
             else if (operation.StatusCode || operation.statusCode || operation.Status || operation.status) {
@@ -2032,7 +2234,8 @@ class AdminPage {
             row.appendChild(cell2);
             
             // Cellule 3: Nom lancement
-            const cell3 = createTableCell(operation.LancementName || '-');
+            const cell3 = createTableCell(operation.LancementName || '-', { className: 'designation-cell' });
+            cell3.title = operation.LancementName || '';
             row.appendChild(cell3);
             
             const { stepCode, stepLabel } = getAdminStepColumnDisplay(operation);
@@ -2097,14 +2300,76 @@ class AdminPage {
             });
             cell9.appendChild(editBtn);
             cell9.appendChild(deleteBtn);
+            if (this.aiAssistEnabled && !isPauseRow) {
+                const aiBtn = createButton({
+                    icon: 'fas fa-magic',
+                    className: 'btn-ai-assist',
+                    title: 'Assistance IA : expliquer / proposer bloquer · corriger · transférer',
+                    dataset: {
+                        id: String(rowId),
+                        operationId: String(rowId),
+                        tempsId: tempsId ? String(tempsId) : '',
+                        eventId: eventId ? String(eventId) : ''
+                    }
+                });
+                cell9.appendChild(aiBtn);
+            }
+            if (tempsId && !isUnconsolidated) {
+                if (isOnHold) {
+                    const releaseBtn = createButton({
+                        icon: 'fas fa-lock-open',
+                        className: 'btn-release-hold',
+                        title: 'Débloquer (remettre transférable, sans envoyer)',
+                        dataset: { tempsId: String(tempsId) }
+                    });
+                    cell9.appendChild(releaseBtn);
+                    const transmitOneBtn = createButton({
+                        icon: 'fas fa-paper-plane',
+                        className: 'btn-transmit-one',
+                        title: 'Transférer uniquement cette ligne (débloque + envoie vers SILOG)',
+                        dataset: { tempsId: String(tempsId), onHold: 'true' }
+                    });
+                    cell9.appendChild(transmitOneBtn);
+                } else {
+                    const holdBtn = createButton({
+                        icon: 'fas fa-lock',
+                        className: 'btn-hold',
+                        title: 'Bloquer (hors auto 20h / transfert, le temps de corriger)',
+                        dataset: { tempsId: String(tempsId) }
+                    });
+                    cell9.appendChild(holdBtn);
+                    if (this.isOperationTerminated(operation) && stTrait !== 'T' && stTrait !== 'D') {
+                        const transmitOneBtn = createButton({
+                            icon: 'fas fa-paper-plane',
+                            className: 'btn-transmit-one',
+                            title: 'Transférer uniquement cette ligne vers SILOG',
+                            dataset: { tempsId: String(tempsId), onHold: 'false' }
+                        });
+                        cell9.appendChild(transmitOneBtn);
+                    }
+                }
+            } else if (!isPauseRow && this.isOperationTerminated(operation)) {
+                // Pas de TempsId = pas encore consolidé en ABTEMPS → blocage/transfert impossibles
+                const holdHint = createButton({
+                    icon: 'fas fa-lock',
+                    className: 'btn-hold-disabled',
+                    title: 'Pas de cadenas : ligne non consolidée (pas de TempsId). Lance « Transfert » une fois, ou attends la consolidation auto, puis recharge.'
+                });
+                holdHint.disabled = true;
+                cell9.appendChild(holdHint);
+            }
             }
             row.appendChild(cell9);
-            
-            this.operationsTableBody.appendChild(row);
+            fragment.appendChild(row);
             
             // Afficher les problèmes détectés pour cette opération
             this.showOperationIssues(operation, row);
         });
+        this.operationsTableBody.appendChild(fragment);
+        if (tableContainer) tableContainer.scrollTop = tableScrollTop;
+        if (typeof window !== 'undefined' && Number.isFinite(scrollY)) {
+            window.scrollTo(0, scrollY);
+        }
     }
 
     getMonitoringStatusText(code) {
@@ -2112,7 +2377,9 @@ class AdminPage {
             'NULL': 'NON TRAITÉ',
             'O': 'VALIDÉ',
             'A': 'EN ATTENTE',
-            'T': 'TRANSMIS'
+            'T': 'TRANSMIS',
+            'M': 'FUSIONNÉ',
+            'D': 'ÉCARTÉ'
         };
         return map[code] || code;
     }
@@ -2188,16 +2455,19 @@ class AdminPage {
         });
     }
 
-    _upsertTransferEligibleByKey(eligibleByKey, op) {
+    _upsertTransferEligibleByTempsId(eligibleByTempsId, op) {
         if (!op?.TempsId) return;
         if (!this.isOperationTerminated(op)) return;
-        if (op.StatutTraitement === 'T') return;
-        eligibleByKey.set(this._getLancementKey(op), op);
+        const st = String(op.StatutTraitement ?? '').toUpperCase().trim();
+        // T = déjà transmis ; A = bloqué / en attente correction
+        if (st === 'T' || st === 'A') return;
+        eligibleByTempsId.set(String(op.TempsId), op);
     }
 
     /**
      * Résout les opérations transférables en s'appuyant sur ABTEMPS (TempsId),
      * indépendamment de l'affichage SILOG qui masque parfois les lignes consolidées.
+     * Un créneau productif = un TempsId (pause = fin de ligne) ; multi-cycles le même LT OK.
      */
     async _resolveTransferEligibleOperations() {
         const filters = this._getAdminMonitoringFilters();
@@ -2205,23 +2475,55 @@ class AdminPage {
         const consolidatedOps = (monitoringResult?.success ? monitoringResult.data : this._consolidatedOpsRaw) || [];
         this._consolidatedOpsRaw = consolidatedOps;
 
-        const eligibleByKey = new Map();
-        consolidatedOps.forEach((op) => this._upsertTransferEligibleByKey(eligibleByKey, op));
+        const eligibleByTempsId = new Map();
+        consolidatedOps.forEach((op) => this._upsertTransferEligibleByTempsId(eligibleByTempsId, op));
+
+        const tempsIdsByLancement = new Map();
+        for (const op of eligibleByTempsId.values()) {
+            const lk = this._getLancementKey(op);
+            if (!lk || lk === '|') continue;
+            if (!tempsIdsByLancement.has(lk)) tempsIdsByLancement.set(lk, new Set());
+            tempsIdsByLancement.get(lk).add(String(op.TempsId));
+        }
 
         const seenLancements = new Set();
         const toConsolidate = [];
         for (const op of (this.operations || [])) {
-            if (op._isPauseRow || op.StatutTraitement === 'T') continue;
+            if (op._isPauseRow || String(op.StatutTraitement ?? '').toUpperCase().trim() === 'T') continue;
             const key = this._getLancementKey(op);
             if (!key || key === '|' || seenLancements.has(key)) continue;
             seenLancements.add(key);
-            if (eligibleByKey.has(key)) continue;
             const [operatorCode, lancementCode] = key.split('|');
             if (this._isLancementStillActiveInDisplay(operatorCode, lancementCode)) continue;
             if (!this.isOperationTerminated(op) &&
                 !consolidatedOps.some((c) => this._getLancementKey(c) === key && this.isOperationTerminated(c))) {
                 continue;
             }
+            // Consolider si aucun TempsId pour ce LT, ou si l'affichage a une ligne terminée sans TempsId
+            // (nouveau cycle après un cycle déjà consolidé le même jour).
+            const hasAbtemps = (tempsIdsByLancement.get(key)?.size || 0) > 0;
+            const abtempsCount = tempsIdsByLancement.get(key)?.size || 0;
+            // Segments productifs affichés (_isWorkSegment) remplacent parfois la ligne ABTEMPS à l'écran
+            // mais le TempsId est déjà dans monitoring — ne pas re-consolider pour ça.
+            // En revanche une vraie ligne terminée sans TempsId (nouveau cycle) doit déclencher la consolidation.
+            // Si plus de créneaux affichés que de TempsId (ancien ABTEMPS cumulé DEBUT→FIN), forcer
+            // la reconsolidation en 1 TempsId / créneau pour le transfert SILOG.
+            const displaySegmentCount = (this.operations || []).filter((row) =>
+                row._isWorkSegment
+                && this._getLancementKey(row) === key
+                && this.isOperationTerminated(row)
+                && String(row.StatutTraitement ?? '').toUpperCase().trim() !== 'T'
+            ).length;
+            const needsSegmentSplit = displaySegmentCount > 1 && displaySegmentCount > abtempsCount;
+            const hasUnconsolidatedTerminated = (this.operations || []).some((row) =>
+                !row._isPauseRow
+                && !row._isWorkSegment
+                && this._getLancementKey(row) === key
+                && this.isOperationTerminated(row)
+                && (row.TempsId == null || String(row.TempsId).trim() === '')
+                && String(row.StatutTraitement ?? '').toUpperCase().trim() !== 'T'
+            );
+            if (hasAbtemps && !hasUnconsolidatedTerminated && !needsSegmentSplit) continue;
             toConsolidate.push({ OperatorCode: operatorCode, LancementCode: lancementCode });
         }
 
@@ -2234,7 +2536,7 @@ class AdminPage {
 
             for (const item of consolidateResult?.results?.success || []) {
                 if (!item?.TempsId) continue;
-                this._upsertTransferEligibleByKey(eligibleByKey, {
+                this._upsertTransferEligibleByTempsId(eligibleByTempsId, {
                     OperatorCode: item.OperatorCode,
                     LancementCode: item.LancementCode,
                     TempsId: item.TempsId,
@@ -2245,7 +2547,7 @@ class AdminPage {
             }
             for (const item of skipped) {
                 if (!item?.TempsId) continue;
-                this._upsertTransferEligibleByKey(eligibleByKey, {
+                this._upsertTransferEligibleByTempsId(eligibleByTempsId, {
                     OperatorCode: item.OperatorCode,
                     LancementCode: item.LancementCode,
                     TempsId: item.TempsId,
@@ -2255,19 +2557,15 @@ class AdminPage {
                 });
             }
 
-            const missingAfterBatch = toConsolidate.filter(
-                (op) => !eligibleByKey.has(`${op.OperatorCode}|${String(op.LancementCode || '').trim().toUpperCase()}`)
-            );
-            if (missingAfterBatch.length > 0) {
-                const refresh = await this.apiService.getMonitoringTemps(filters);
-                const refreshed = (refresh?.success ? refresh.data : []) || [];
-                refreshed.forEach((op) => this._upsertTransferEligibleByKey(eligibleByKey, op));
-                this._consolidatedOpsRaw = refreshed;
-            }
+            // Toujours recharger ABTEMPS : un LT peut avoir plusieurs TempsId (multi-cycles).
+            const refresh = await this.apiService.getMonitoringTemps(filters);
+            const refreshed = (refresh?.success ? refresh.data : []) || [];
+            refreshed.forEach((op) => this._upsertTransferEligibleByTempsId(eligibleByTempsId, op));
+            this._consolidatedOpsRaw = refreshed.length > 0 ? refreshed : this._consolidatedOpsRaw;
         }
 
         return {
-            eligible: Array.from(eligibleByKey.values()),
+            eligible: Array.from(eligibleByTempsId.values()),
             skipped,
             errors,
             attemptedConsolidation: toConsolidate.length
@@ -2454,15 +2752,27 @@ class AdminPage {
         if (!modal || !body) return;
 
         this.transferSelectionIds.clear();
-        if (selectAll) selectAll.checked = true;
+        // Ne pré-sélectionner que les lignes non bloquées (A)
+        const transferable = (records || []).filter((r) => {
+            const st = String(r?.StatutTraitement ?? '').toUpperCase().trim();
+            return st !== 'A' && st !== 'T';
+        });
+        if (selectAll) selectAll.checked = transferable.length > 0;
 
         clearElement(body);
         for (const r of records) {
             const id = r.TempsId;
             const key = String(id);
-            this.transferSelectionIds.add(key); // pré-sélectionner tout
+            const st = String(r?.StatutTraitement ?? '').toUpperCase().trim();
+            const isBlocked = st === 'A';
+            const preSelect = !isBlocked && st !== 'T';
+            if (preSelect) this.transferSelectionIds.add(key);
 
             const tr = createElement('tr');
+            if (isBlocked) {
+                tr.classList.add('row-on-hold');
+                tr.title = 'Ligne bloquée (A) — hors transfert';
+            }
             
             // Cellule checkbox
             const cell1 = createTableCell('', { 
@@ -2472,7 +2782,8 @@ class AdminPage {
                 type: 'checkbox',
                 className: 'transfer-row',
                 dataset: { id: id },
-                checked: true
+                checked: preSelect,
+                disabled: isBlocked
             });
             cell1.appendChild(checkbox);
             tr.appendChild(cell1);
@@ -2546,6 +2857,260 @@ class AdminPage {
         });
     }
 
+    async holdSelectedFromTransferModal() {
+        const ids = Array.from(this.transferSelectionIds)
+            .map((x) => Number.parseInt(x, 10))
+            .filter((n) => Number.isFinite(n) && n > 0);
+        if (ids.length === 0) {
+            this.notificationManager.warning('Aucune ligne sélectionnée à bloquer');
+            return;
+        }
+        const ok = confirm(
+            `Bloquer ${ids.length} ligne(s) ?\n\n` +
+            `Ces enregistrements passeront en « En attente » (A) et ne seront pas basculés vers SILOG.\n` +
+            `Vous pourrez les débloquer après correction.`
+        );
+        if (!ok) return;
+        try {
+            const result = await this.apiService.onHoldMonitoringBatch(ids);
+            const data = result?.data || result;
+            const count = data?.count ?? data?.heldIds?.length ?? ids.length;
+            this.notificationManager.success(`${count} ligne(s) bloquée(s)`);
+            this.hideTransferModal();
+            await this.loadData();
+        } catch (error) {
+            this.errorHandler.handle(error, 'holdSelectedFromTransferModal', error.message || 'Erreur lors du blocage');
+        }
+    }
+
+    async holdMonitoringRecord(tempsId) {
+        const id = Number.parseInt(tempsId, 10);
+        if (!Number.isFinite(id) || id <= 0) {
+            this.notificationManager.warning('TempsId manquant');
+            return;
+        }
+        const ok = confirm(
+            `Bloquer la ligne TempsId ${id} ?\n` +
+            `Elle restera hors auto 20h et hors transfert global.\n` +
+            `Tu pourras la corriger le lendemain puis la transférer seule.`
+        );
+        if (!ok) return;
+        try {
+            await this.apiService.onHoldMonitoringTemps(id);
+            this.notificationManager.success(`Ligne ${id} bloquée`);
+            await this.loadData();
+        } catch (error) {
+            this.errorHandler.handle(error, 'holdMonitoringRecord', error.message || 'Erreur blocage');
+        }
+    }
+
+    async releaseHoldMonitoringRecord(tempsId) {
+        const id = Number.parseInt(tempsId, 10);
+        if (!Number.isFinite(id) || id <= 0) {
+            this.notificationManager.warning('TempsId manquant');
+            return;
+        }
+        try {
+            await this.apiService.releaseHoldMonitoringTemps(id);
+            this.notificationManager.success(`Ligne ${id} débloquée`);
+            await this.loadData();
+        } catch (error) {
+            this.errorHandler.handle(error, 'releaseHoldMonitoringRecord', error.message || 'Erreur déblocage');
+        }
+    }
+
+    /**
+     * Transfert d'une seule ligne (après correction d'un blocage).
+     * Si la ligne est en A : débloque puis valide/envoie uniquement ce TempsId.
+     */
+    async transmitSingleMonitoringRecord(tempsId, { wasHold = false } = {}) {
+        const id = Number.parseInt(tempsId, 10);
+        if (!Number.isFinite(id) || id <= 0) {
+            this.notificationManager.warning('TempsId manquant');
+            return;
+        }
+        const ok = confirm(
+            wasHold
+                ? `Transférer uniquement la ligne TempsId ${id} ?\nElle sera débloquée puis envoyée vers SILOG (les autres lignes ne sont pas touchées).`
+                : `Transférer uniquement la ligne TempsId ${id} vers SILOG ?`
+        );
+        if (!ok) return;
+        try {
+            if (wasHold) {
+                await this.apiService.releaseHoldMonitoringTemps(id);
+            }
+            const result = await this.apiService.validateAndTransmitMonitoringBatch([id], {
+                triggerEdiJob: true,
+                adminMarkTransmitted: false
+            });
+            if (result?.success) {
+                this.notificationManager.success(
+                    this._formatTransferResultMessage(result, 1) || `Ligne ${id} transférée`
+                );
+                if (result.ediJob?.success === false) {
+                    this.notificationManager.warning(
+                        result.ediJob.error || result.ediJob.message || 'EDI_JOB a échoué — ligne en O'
+                    );
+                }
+                await this.loadData(false);
+            } else {
+                this.notificationManager.error(result?.error || `Échec transfert ligne ${id}`);
+            }
+        } catch (error) {
+            this.errorHandler.handle(error, 'transmitSingleMonitoringRecord', error.message || 'Erreur transfert ligne');
+        }
+    }
+
+    /**
+     * Demande un diagnostic IA pour une ligne (propose seulement — n'applique rien).
+     */
+    async analyzeLineWithAi(rowId) {
+        if (!this.aiAssistEnabled) {
+            this.notificationManager.warning('Assistance IA désactivée (ENABLE_AI_ASSIST / clé API)');
+            return;
+        }
+        if (this._aiAssistLoading) return;
+
+        const operation = this.operations.find((op) => {
+            const tid = op.TempsId != null ? String(op.TempsId) : '';
+            const eid = op.EventId != null ? String(op.EventId) : (op.id != null ? String(op.id) : '');
+            const key = String(rowId);
+            return tid === key || eid === key || String(op.id) === key;
+        });
+        if (!operation) {
+            this.notificationManager.warning('Ligne introuvable — rechargez le tableau');
+            return;
+        }
+
+        const lt = String(operation.LancementCode || '').trim().toUpperCase();
+        let multiOperatorsOnLt = null;
+        if (lt) {
+            const names = new Set(
+                this.operations
+                    .filter((o) => String(o.LancementCode || '').trim().toUpperCase() === lt)
+                    .map((o) => String(o.OperatorCode || o.OperatorName || '').trim())
+                    .filter(Boolean)
+            );
+            multiOperatorsOnLt = names.size > 1 ? names.size : 1;
+        }
+
+        const knownIssues = [];
+        try {
+            const validation = this.validateOperationBeforeEdit(operation);
+            if (validation?.errors?.length) knownIssues.push(...validation.errors);
+            if (validation?.warnings?.length) knownIssues.push(...validation.warnings);
+        } catch {
+            /* ignore */
+        }
+
+        const stTrait = String(operation.StatutTraitement || '').toUpperCase().trim();
+        const context = stTrait === 'A' ? 'hold_corrector' : 'monitoring';
+
+        this._aiAssistLoading = true;
+        try {
+            this.notificationManager.info('Analyse IA en cours…');
+            const result = await this.apiService.analyzeMonitoringLineAi(
+                { ...operation, knownIssues, multiOperatorsOnLt },
+                { context }
+            );
+            if (!result?.success || !result.data) {
+                this.notificationManager.error(result?.error || 'Réponse IA invalide');
+                return;
+            }
+            this.showAiAssistPanel(operation, result.data);
+        } catch (error) {
+            this.errorHandler.handle(error, 'analyzeLineWithAi', error.message || 'Erreur assistance IA');
+        } finally {
+            this._aiAssistLoading = false;
+        }
+    }
+
+    showAiAssistPanel(operation, advice) {
+        const existing = document.getElementById('aiAssistModal');
+        if (existing) existing.remove();
+
+        const tempsId = operation.TempsId ?? null;
+        const rowId = tempsId || operation.EventId || operation.id;
+        const issuesHtml = (advice.issues || [])
+            .map((i) => `<li>${this.escapeHtmlAi(i)}</li>`)
+            .join('');
+        const hintsHtml = (advice.correctionHints || [])
+            .map((h) => `<li>${this.escapeHtmlAi(h)}</li>`)
+            .join('');
+
+        const modal = createElement('div', {
+            id: 'aiAssistModal',
+            className: 'ai-assist-modal',
+            role: 'dialog',
+            'aria-modal': 'true'
+        });
+        modal.innerHTML = `
+            <div class="ai-assist-modal-card">
+                <div class="ai-assist-modal-header">
+                    <strong><i class="fas fa-magic"></i> Assistance ligne</strong>
+                    <button type="button" class="ai-assist-close" aria-label="Fermer">&times;</button>
+                </div>
+                <p class="ai-assist-summary">${this.escapeHtmlAi(advice.summary || '')}</p>
+                <p class="ai-assist-motif"><b>Motif :</b> ${this.escapeHtmlAi(advice.motif || '')}</p>
+                ${issuesHtml ? `<ul class="ai-assist-list">${issuesHtml}</ul>` : ''}
+                ${hintsHtml ? `<p class="ai-assist-hints-title">Pistes</p><ul class="ai-assist-list">${hintsHtml}</ul>` : ''}
+                <p class="ai-assist-conf">Confiance ${(Math.round((advice.confidence || 0) * 100))}%</p>
+                <div class="ai-assist-actions">
+                    <button type="button" class="btn-secondary ai-act-block" ${tempsId ? '' : 'disabled'}>
+                        <i class="fas fa-lock"></i> Bloquer
+                    </button>
+                    <button type="button" class="btn-secondary ai-act-correct">
+                        <i class="fas fa-edit"></i> Corriger
+                    </button>
+                    <button type="button" class="btn-primary ai-act-apply">
+                        <i class="fas fa-check"></i> ${this.escapeHtmlAi(advice.actionLabel || 'Appliquer')}
+                    </button>
+                </div>
+            </div>`;
+
+        const close = () => modal.remove();
+        modal.querySelector('.ai-assist-close')?.addEventListener('click', close);
+        modal.addEventListener('click', (e) => {
+            if (e.target === modal) close();
+        });
+
+        modal.querySelector('.ai-act-block')?.addEventListener('click', async () => {
+            close();
+            if (tempsId) await this.holdMonitoringRecord(tempsId);
+        });
+        modal.querySelector('.ai-act-correct')?.addEventListener('click', async () => {
+            close();
+            if (tempsId) await this.editMonitoringRecord(tempsId);
+            else await this.editOperation(rowId);
+        });
+        modal.querySelector('.ai-act-apply')?.addEventListener('click', async () => {
+            close();
+            const action = advice.recommendedAction;
+            if (action === 'block' && tempsId) await this.holdMonitoringRecord(tempsId);
+            else if (action === 'release_hold' && tempsId) await this.releaseHoldMonitoringRecord(tempsId);
+            else if (action === 'transmit' && tempsId) {
+                await this.transmitSingleMonitoringRecord(tempsId, {
+                    wasHold: String(operation.StatutTraitement || '').toUpperCase() === 'A'
+                });
+            } else if (action === 'correct') {
+                if (tempsId) await this.editMonitoringRecord(tempsId);
+                else await this.editOperation(rowId);
+            } else {
+                this.notificationManager.info('Aucune action automatique pour cette recommandation');
+            }
+        });
+
+        document.body.appendChild(modal);
+    }
+
+    escapeHtmlAi(str) {
+        return String(str ?? '')
+            .replaceAll('&', '&amp;')
+            .replaceAll('<', '&lt;')
+            .replaceAll('>', '&gt;')
+            .replaceAll('"', '&quot;');
+    }
+
     async confirmTransferFromModal() {
         const ids = Array.from(this.transferSelectionIds).map(x => Number.parseInt(x, 10)).filter(n => !Number.isNaN(n));
         if (ids.length === 0) {
@@ -2586,21 +3151,35 @@ class AdminPage {
 
     /**
      * Message admin selon le résultat EDI (ssh immédiat vs scheduled).
+     * Inclut le détail par TempsId quand le backend le renvoie.
      */
     _formatTransferResultMessage(result, fallbackCount) {
-        const n = result.count || fallbackCount;
+        const validatedIds = Array.isArray(result?.validatedIds) ? result.validatedIds : [];
+        const invalidIds = Array.isArray(result?.invalidIds) ? result.invalidIds : [];
+        const n = validatedIds.length || result.count || fallbackCount;
         const edi = result.ediJob;
+        let base;
         if (!edi) {
-            return `${n} opération(s) validée(s) (statut O)`;
-        }
-        if (edi.skipped) {
-            return `${n} validée(s) (O) — EDI non lancé ici (${edi.message || 'mode planifié'}). Attente tâche Windows.`;
-        }
-        if (edi.success) {
+            base = `${n} opération(s) validée(s) (statut O)`;
+        } else if (edi.skipped) {
+            base = `${n} validée(s) (O) — EDI non lancé ici (${edi.message || 'mode planifié'}). Attente tâche Windows.`;
+        } else if (edi.success) {
             const sec = edi.elapsedMs ? ` en ${Math.round(edi.elapsedMs / 1000)}s` : '';
-            return `${n} validée(s) (O) — EDI SILOG déclenché${sec}. Passage en TRANSMIS (T) après intégration.`;
+            base = `${n} validée(s) (O) — EDI SILOG déclenché${sec}. Passage en TRANSMIS (T) après intégration.`;
+        } else {
+            base = `${n} validée(s) (O) — EDI en erreur (lignes restent en attente)`;
         }
-        return `${n} validée(s) (O) — EDI en erreur (lignes restent en attente)`;
+        if (validatedIds.length > 0) {
+            base += ` | OK TempsId: ${validatedIds.join(', ')}`;
+        }
+        if (invalidIds.length > 0) {
+            const detail = invalidIds.map((inv) => {
+                const err = Array.isArray(inv.errors) ? inv.errors.join(', ') : (inv.errors || inv.error || '?');
+                return `${inv.tempsId}: ${err}`;
+            }).join(' ; ');
+            base += ` | Échec: ${detail}`;
+        }
+        return base;
     }
 
     async deleteOperation(id) {
@@ -2728,25 +3307,26 @@ class AdminPage {
                 
                 // Mettre à jour l'enregistrement en mémoire immédiatement
                 if (record) {
+                    const recordDay = this._parseOpDateCreationLocalYmd(record.DateCreation)
+                        || this._parseOpDateCreationLocalYmd(record.StartTime);
                     if (corrections.LancementCode !== undefined) record.LancementCode = corrections.LancementCode;
                     if (corrections.Phase !== undefined) record.Phase = corrections.Phase;
                     if (corrections.CodeRubrique !== undefined) record.CodeRubrique = corrections.CodeRubrique;
-                    if (corrections.StartTime !== undefined) record.StartTime = corrections.StartTime;
-                    if (corrections.EndTime !== undefined) record.EndTime = corrections.EndTime;
+                    if (corrections.StartTime !== undefined) {
+                        record.StartTime = composeClockOnDay(recordDay, corrections.StartTime);
+                    }
+                    if (corrections.EndTime !== undefined) {
+                        record.EndTime = composeClockOnDay(recordDay, corrections.EndTime);
+                    }
                     
                     // Mettre à jour la ligne dans le tableau sans tout recharger
                     this.updateMonitoringRowInTable(tempsId, record);
+                    this._keepAdminPeriodOnRecordDay(recordDay);
                 }
                 
-                // Recharger les données après un court délai pour s'assurer que tout est synchronisé
-                setTimeout(async () => {
-                    // Utiliser la date locale pour correspondre à la date SQL (évite les décalages UTC).
-                    const d = new Date();
-                    const y = d.getFullYear();
-                    const m = String(d.getMonth() + 1).padStart(2, '0');
-                    const day = String(d.getDate()).padStart(2, '0');
-                    await this.loadMonitoringRecords(`${y}-${m}-${day}`);
-                    this.updateOperationsTable();
+                this.lastEditTime = Date.now();
+                setTimeout(() => {
+                    this.loadData(true, { silent: true });
                 }, 500);
             } else {
                 this.notificationManager.error(result?.error || 'Erreur correction');
@@ -2791,7 +3371,7 @@ class AdminPage {
         }
         
         // Vérifier les durées pour les opérations consolidées
-        if (operation.TempsId && !operation._isUnconsolidated) {
+        if (operation.TempsId && !operation._isUnconsolidated && operation.TotalDuration != null) {
             const totalDuration = operation.TotalDuration || 0;
             const pauseDuration = operation.PauseDuration || 0;
             const productiveDuration = operation.ProductiveDuration || 0;
@@ -4242,6 +4822,7 @@ export {
     getAdminStepColumnDisplay,
     compareAdminTimelineRows,
     getAdminRowSortTimestamp,
-    formatAdminRowDate
+    formatAdminRowDate,
+    composeClockOnDay
 };
 export default AdminPage;

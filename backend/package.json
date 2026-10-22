@@ -5,8 +5,12 @@
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
-    "dev": "nodemon server.js",
+    "dev": "node server.js dotenv_config_path=.env.localdb",
+    "dev:sandbox": "node server.js dotenv_config_path=.env.localdb",
+    "dev:watch": "nodemon server.js dotenv_config_path=.env.localdb",
     "test:email": "node test-email-simple.js",
+    "report:support-tech": "node scripts/send-support-technique-indicator.js",
+    "report:support-tech:sept": "node scripts/send-support-technique-indicator.js --year 2026 --month 9 --test --outlook",
     "test": "node tests/native-tests.js",
     "test:complete": "node tests/complete-tests.js",
     "test:all": "npm run test && npm run test:complete",
@@ -37,7 +41,9 @@
   "author": "SEDI",
   "license": "MIT",
   "dependencies": {
+    "@ai-sdk/anthropic": "^4.0.82",
     "adm-zip": "^0.6.1",
+    "ai": "^7.0.143",
     "axios": "^1.20.0",
     "compression": "^1.8.2",
     "cors": "^2.8.5",
@@ -56,7 +62,8 @@
     "prom-client": "^15.1.0",
     "redis": "^4.6.12",
     "yauzl": "^3.2.0",
-    "yazl": "^3.3.1"
+    "yazl": "^3.3.1",
+    "zod": "^4.6.7"
   },
   "devDependencies": {
     "@vitest/coverage-v8": "4.1.12",

@@ -4,6 +4,10 @@ import { fileURLToPath } from 'node:url';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
+// Les tablettes tournent à l'heure de Paris : figer le fuseau pour que les tests
+// d'horaires donnent le même résultat en local (Mac) et en CI (UTC).
+process.env.TZ = 'Europe/Paris';
+
 export default defineConfig({
   test: {
     environment: 'jsdom',

@@ -7,6 +7,9 @@ const { executeQuery, executeNonQuery, getConnection } = require('../config/data
 const OperationValidationService = require('./OperationValidationService');
 const DurationCalculationService = require('./DurationCalculationService');
 
+/** Qualifier SQL [DB] — suit DB_DATABASE en DEV sans dépendre du module RH. */
+const appDb = `[${String(process.env.DB_DATABASE || 'SEDI_APP_INDEPENDANTE').replace(/[\[\]]/g, '')}]`;
+
 class ConsolidationService {
     /**
      * Retourne une clé de date locale YYYY-MM-DD (évite les décalages UTC sur les champs SQL DATE)
@@ -23,28 +26,54 @@ class ConsolidationService {
 
     /**
      * Validation SILOG (NULL → 'O') après consolidation hors transaction.
+     * Accepte un TempsId ou une liste (créneaux productifs).
      */
     static async _finishConsolidation(result, options = {}) {
         if (
             result?.success &&
-            result?.tempsId &&
             !options?.db &&
             options?.skipSilogValidate !== true
         ) {
-            try {
-                const MonitoringService = require('./MonitoringService');
-                const v = await MonitoringService.validateTempsIdForSilog(result.tempsId);
-                if (v) {
-                    result.silogValidated = v.validated === true;
-                    if (v.reason && !v.validated) {
-                        result.silogValidateReason = v.reason;
+            const ids = Array.isArray(result.tempsIds) && result.tempsIds.length > 0
+                ? result.tempsIds
+                : (result.tempsId ? [result.tempsId] : []);
+            if (ids.length > 0) {
+                try {
+                    const MonitoringService = require('./MonitoringService');
+                    let allOk = true;
+                    let lastReason = null;
+                    for (const id of ids) {
+                        const v = await MonitoringService.validateTempsIdForSilog(id);
+                        if (v && v.validated !== true) {
+                            allOk = false;
+                            lastReason = v.reason || lastReason;
+                        }
                     }
+                    result.silogValidated = allOk;
+                    if (lastReason && !allOk) {
+                        result.silogValidateReason = lastReason;
+                    }
+                } catch (e) {
+                    console.warn('Validation SILOG auto après consolidation (non bloquant):', e?.message || e);
                 }
-            } catch (e) {
-                console.warn('Validation SILOG auto après consolidation (non bloquant):', e?.message || e);
             }
         }
         return result;
+    }
+
+    /**
+     * Compare deux datetime à la minute près (SILOG / ABTEMPS).
+     */
+    static _sameMinute(a, b) {
+        if (!a || !b) return false;
+        const da = a instanceof Date ? a : new Date(a);
+        const db = b instanceof Date ? b : new Date(b);
+        if (Number.isNaN(da.getTime()) || Number.isNaN(db.getTime())) return false;
+        return da.getFullYear() === db.getFullYear()
+            && da.getMonth() === db.getMonth()
+            && da.getDate() === db.getDate()
+            && da.getHours() === db.getHours()
+            && da.getMinutes() === db.getMinutes();
     }
 
     /**
@@ -159,7 +188,7 @@ class ConsolidationService {
             // 1. Récupérer tous les événements (on scoper ensuite sur le dernier cycle)
             const eventsQuery = `
                 SELECT * 
-                FROM [SEDI_APP_INDEPENDANTE].[dbo].[ABHISTORIQUE_OPERATEURS]
+                FROM ${appDb}.[dbo].[ABHISTORIQUE_OPERATEURS]
                 WHERE OperatorCode = @operatorCode 
                   AND CodeLanctImprod = @lancementCode
                 ORDER BY DateCreation ASC, NoEnreg ASC
@@ -223,8 +252,20 @@ class ConsolidationService {
                 };
             }
 
-            // 4. Calculer les durées (sur le cycle sélectionné)
-            const durations = DurationCalculationService.calculateDurations(events);
+            // 4. Créneaux productifs (1 ABTEMPS / créneau = même découpage que l'écran admin)
+            // Pause = fin de ligne, reprise = début suivante. PauseDuration toujours 0 sur chaque ligne.
+            const workSegments = DurationCalculationService.buildClosedWorkSegments(events);
+            if (!workSegments.length) {
+                return {
+                    success: false,
+                    tempsId: null,
+                    tempsIds: [],
+                    error: 'Aucun créneau productif fermé à consolider',
+                    warnings: validation.warnings || []
+                };
+            }
+
+            const cycleDurations = DurationCalculationService.calculateDurations(events);
             
             // IMPORTANT: la "date de travail" doit rester celle des événements (pas la date de consolidation),
             // sinon le filtre "transféré" côté opérateur (JOIN ABTEMPS.DateCreation = ABHISTO.DateCreation) ne matche pas
@@ -283,7 +324,7 @@ class ConsolidationService {
                     let rows = await db.executeQuery(
                         `
                         SELECT TOP 1 Phase, CodeRubrique
-                        FROM [SEDI_APP_INDEPENDANTE].[dbo].[V_LCTC]
+                        FROM ${appDb}.[dbo].[V_LCTC]
                         WHERE CodeLancement = @lancementCode
                         `,
                         { lancementCode }
@@ -320,6 +361,7 @@ class ConsolidationService {
                             skipped: true,
                             skipReason: 'VLCTC_MISSING',
                             tempsId: null,
+                            tempsIds: [],
                             error: null,
                             message: `Clés ERP introuvables pour ${lancementCode} — consolidation reportée (FIN enregistrée)`,
                             warnings: ['Phase/CodeRubrique non résolus — pas d\'insertion ABTEMPS (colonnes NOT NULL)']
@@ -332,6 +374,7 @@ class ConsolidationService {
                         skipped: true,
                         skipReason: 'VLCTC_MISSING',
                         tempsId: null,
+                        tempsIds: [],
                         error: null,
                         message: `Erreur résolution clés ERP pour ${lancementCode} — consolidation reportée`,
                         warnings: [error.message]
@@ -369,7 +412,10 @@ class ConsolidationService {
                 // 2) Use DateCreation as date + HeureDebut/HeureFin as time
                 const base = new Date(event.DateCreation || event.dateCreation);
                 if (!Number.isNaN(base.getTime())) {
-                    const t = extractTime(kind === 'start' ? event.HeureDebut : event.HeureFin);
+                    const timeField = kind === 'start'
+                        ? (event.HeureDebut || event.HeureFin)
+                        : (event.HeureFin || event.HeureDebut);
+                    const t = extractTime(timeField);
                     if (t) {
                         base.setHours(t.hour, t.minute, 0, 0);
                         return base;
@@ -382,161 +428,198 @@ class ConsolidationService {
                 return new Date();
             };
 
-            startTime = buildDateTime(debutEvent, 'start');
-            const endTime = buildDateTime(finEvent, 'end');
+            const resolvedSegments = workSegments.map((seg) => {
+                const segStart = buildDateTime(seg.startEvent, 'start');
+                const segEnd = buildDateTime(seg.endEvent, seg.endIsFin ? 'end' : 'start');
+                const minutes = Math.max(0, Math.floor((segEnd - segStart) / (1000 * 60)));
+                return {
+                    startTime: segStart,
+                    endTime: segEnd,
+                    totalDuration: minutes,
+                    pauseDuration: 0,
+                    productiveDuration: minutes
+                };
+            }).filter((seg) => seg.startTime && seg.endTime && seg.endTime >= seg.startTime);
 
-            // 8bis. Vérifier si déjà consolidé selon la contrainte UNIQUE réelle (souvent basée sur StartTime)
-            // Certains environnements ont une contrainte UNIQUE sur (OperatorCode, LancementCode, StartTime).
-            // Si on ne check pas ça, on peut échouer avec "Cannot insert duplicate key".
-            if (!force && startTime) {
+            if (!resolvedSegments.length) {
+                return {
+                    success: false,
+                    tempsId: null,
+                    tempsIds: [],
+                    error: 'Créneaux productifs invalides (heures)',
+                    warnings: validation.warnings || []
+                };
+            }
+
+            // Conservé pour gestion d'erreur UNIQUE (premier créneau)
+            startTime = resolvedSegments[0].startTime;
+
+            const tempsIds = [];
+            let insertedCount = 0;
+            let updatedCount = 0;
+
+            for (const seg of resolvedSegments) {
+                const durationParams = {
+                    operatorCode,
+                    lancementCode,
+                    startTime: seg.startTime,
+                    endTime: seg.endTime,
+                    totalDuration: seg.totalDuration,
+                    pauseDuration: seg.pauseDuration,
+                    productiveDuration: seg.productiveDuration,
+                    eventsCount: 1,
+                    phase,
+                    codeRubrique,
+                    dateCreation: opDate
+                };
+
+                if (seg.productiveDuration <= 0) {
+                    console.warn(`⚠️ Segment productif à 0 min ignoré (${operatorCode}/${lancementCode} ${seg.startTime?.toISOString?.() || seg.startTime})`);
+                    continue;
+                }
+
+                let existing = null;
                 try {
                     const byStartQuery = `
-                        SELECT TOP 1 TempsId
-                        FROM [SEDI_APP_INDEPENDANTE].[dbo].[ABTEMPS_OPERATEURS]
+                        SELECT TOP 1 TempsId, EndTime, PauseDuration, StatutTraitement, ProductiveDuration
+                        FROM ${appDb}.[dbo].[ABTEMPS_OPERATEURS]
                         WHERE OperatorCode = @operatorCode
                           AND LancementCode = @lancementCode
                           AND StartTime = @startTime
                         ORDER BY TempsId DESC
                     `;
-                    const rows = await db.executeQuery(byStartQuery, { operatorCode, lancementCode, startTime });
-                    if (rows && rows.length > 0) {
-                        console.log(`ℹ️ Opération déjà consolidée (StartTime match): TempsId=${rows[0].TempsId}`);
-                        return await ConsolidationService._finishConsolidation({
-                            success: true,
-                            tempsId: rows[0].TempsId,
-                            error: null,
-                            warnings: ['Opération déjà consolidée (StartTime)'],
-                            alreadyExists: true
-                        }, options);
-                    }
+                    const rows = await db.executeQuery(byStartQuery, {
+                        operatorCode,
+                        lancementCode,
+                        startTime: seg.startTime
+                    });
+                    existing = rows && rows.length > 0 ? rows[0] : null;
                 } catch (e) {
-                    // best-effort: ne pas bloquer si ce check échoue
+                    // best-effort
                 }
-            }
 
-            // 8. Vérifier si déjà consolidé (sur les clés complètes : opérateur + LT + phase + rubrique + date)
-            if (!force) {
-                const existingQuery = `
-                    SELECT TempsId 
-                    FROM [SEDI_APP_INDEPENDANTE].[dbo].[ABTEMPS_OPERATEURS]
-                    WHERE OperatorCode = @operatorCode 
-                      AND LancementCode = @lancementCode
-                      AND ISNULL(LTRIM(RTRIM(Phase)), '') = ISNULL(LTRIM(RTRIM(@phase)), '')
-                      AND ISNULL(LTRIM(RTRIM(CodeRubrique)), '') = ISNULL(LTRIM(RTRIM(@codeRubrique)), '')
-                      AND DateCreation = @dateCreation
-                `;
-                const existing = await db.executeQuery(existingQuery, {
-                    operatorCode,
-                    lancementCode,
-                    phase,
-                    codeRubrique,
-                    dateCreation: opDate
-                });
-                if (existing.length > 0) {
-                    console.log(`ℹ️ Opération déjà consolidée: TempsId=${existing[0].TempsId}`);
-                    return await ConsolidationService._finishConsolidation({
-                        success: true,
-                        tempsId: existing[0].TempsId,
-                        error: null,
-                        warnings: ['Opération déjà consolidée'],
-                        alreadyExists: true
-                    }, options);
-                }
-            }
-            
-            // 7. Vérifier que ProductiveDuration > 0 (SILOG n'accepte pas les temps à 0)
-            if (durations.productiveDuration <= 0) {
-                console.warn(`⚠️ ProductiveDuration = ${durations.productiveDuration} (Total=${durations.totalDuration}, Pause=${durations.pauseDuration})`);
-                console.warn(`⚠️ SILOG n'accepte pas les enregistrements avec ProductiveDuration = 0`);
-                // Ne pas bloquer la consolidation, mais logger un avertissement
-                // L'admin pourra corriger manuellement si nécessaire
-            }
-            
-            // 8. Insérer ou mettre à jour dans ABTEMPS_OPERATEURS
-            // En mode force, on UPDATE la ligne existante au lieu d'en créer une nouvelle.
-            const durationParams = {
-                operatorCode,
-                lancementCode,
-                startTime,
-                endTime,
-                totalDuration: durations.totalDuration,
-                pauseDuration: durations.pauseDuration,
-                productiveDuration: durations.productiveDuration,
-                eventsCount: durations.eventsCount,
-                phase,
-                codeRubrique,
-                dateCreation: opDate
-            };
+                if (existing) {
+                    const st = String(existing.StatutTraitement ?? '').toUpperCase().trim();
+                    const locked = st === 'T' || st === 'O';
+                    const sameEnd = ConsolidationService._sameMinute(existing.EndTime, seg.endTime);
+                    const alreadySegment = sameEnd && Number(existing.PauseDuration || 0) === 0;
 
-            let tempsId = null;
+                    if (alreadySegment && !force) {
+                        tempsIds.push(existing.TempsId);
+                        continue;
+                    }
 
-            if (force) {
-                const existingForUpdate = await db.executeQuery(
-                    `SELECT TOP 1 TempsId
-                     FROM [SEDI_APP_INDEPENDANTE].[dbo].[ABTEMPS_OPERATEURS]
-                     WHERE OperatorCode = @operatorCode AND LancementCode = @lancementCode
-                       AND CAST(DateCreation AS DATE) = CAST(@dateCreation AS DATE)
-                     ORDER BY TempsId DESC`,
-                    { operatorCode, lancementCode, dateCreation: opDate }
-                );
-                if (existingForUpdate && existingForUpdate.length > 0) {
-                    tempsId = existingForUpdate[0].TempsId;
+                    if (locked && !force) {
+                        // Déjà validé/transféré : ne pas recouper
+                        tempsIds.push(existing.TempsId);
+                        continue;
+                    }
+
                     await db.executeNonQuery(
-                        `UPDATE [SEDI_APP_INDEPENDANTE].[dbo].[ABTEMPS_OPERATEURS]
+                        `UPDATE ${appDb}.[dbo].[ABTEMPS_OPERATEURS]
                          SET StartTime = @startTime, EndTime = @endTime,
                              TotalDuration = @totalDuration, PauseDuration = @pauseDuration,
                              ProductiveDuration = @productiveDuration, EventsCount = @eventsCount,
-                             -- Ne pas écraser des clés ERP déjà corrigées par une reconsolidation sans V_LCTC
                              Phase = COALESCE(@phase, Phase),
                              CodeRubrique = COALESCE(@codeRubrique, CodeRubrique)
                          WHERE TempsId = @tempsId`,
-                        { ...durationParams, tempsId }
+                        { ...durationParams, tempsId: existing.TempsId }
                     );
-                    console.log(`✅ Reconsolidation (UPDATE): TempsId=${tempsId}, Durée=${durations.totalDuration}min (${durations.productiveDuration}min productif)`);
+                    tempsIds.push(existing.TempsId);
+                    updatedCount += 1;
+                    console.log(`✅ Segment ABTEMPS mis à jour: TempsId=${existing.TempsId}, ${seg.productiveDuration}min`);
+                    continue;
                 }
-            }
 
-            if (!tempsId) {
+                if (force) {
+                    // force sans ligne existante → INSERT ci-dessous
+                }
+
                 const insertQuery = `
-                    INSERT INTO [SEDI_APP_INDEPENDANTE].[dbo].[ABTEMPS_OPERATEURS]
+                    INSERT INTO ${appDb}.[dbo].[ABTEMPS_OPERATEURS]
                     (OperatorCode, LancementCode, StartTime, EndTime, TotalDuration, PauseDuration, ProductiveDuration, EventsCount, Phase, CodeRubrique, DateCreation, StatutTraitement)
                     OUTPUT INSERTED.TempsId
                     VALUES (@operatorCode, @lancementCode, @startTime, @endTime, @totalDuration, @pauseDuration, @productiveDuration, @eventsCount, @phase, @codeRubrique, CAST(@dateCreation AS DATE), NULL)
                 `;
-                const insertResult = await db.executeQuery(insertQuery, durationParams);
-                tempsId = insertResult && insertResult[0] ? insertResult[0].TempsId : null;
+                try {
+                    const insertResult = await db.executeQuery(insertQuery, durationParams);
+                    const newId = insertResult && insertResult[0] ? insertResult[0].TempsId : null;
+                    if (!newId) {
+                        return {
+                            success: false,
+                            tempsId: tempsIds[0] || null,
+                            tempsIds,
+                            error: 'Échec de l\'insertion - aucun TempsId retourné',
+                            warnings: []
+                        };
+                    }
+                    tempsIds.push(newId);
+                    insertedCount += 1;
+                    console.log(`✅ Segment ABTEMPS créé: TempsId=${newId}, ${seg.productiveDuration}min`);
+                } catch (error) {
+                    // Contrainte UNIQUE (StartTime) : récupérer l'existant
+                    if (error.number === 2627 || error.originalError?.number === 2627) {
+                        try {
+                            const byStart = await db.executeQuery(
+                                `SELECT TOP 1 TempsId
+                                 FROM ${appDb}.[dbo].[ABTEMPS_OPERATEURS]
+                                 WHERE OperatorCode = @operatorCode
+                                   AND LancementCode = @lancementCode
+                                   AND StartTime = @startTime
+                                 ORDER BY TempsId DESC`,
+                                { operatorCode, lancementCode, startTime: seg.startTime }
+                            );
+                            if (byStart && byStart.length > 0) {
+                                tempsIds.push(byStart[0].TempsId);
+                                continue;
+                            }
+                        } catch (e) {
+                            // ignore
+                        }
+                    }
+                    throw error;
+                }
             }
 
-            if (!tempsId) {
+            if (!tempsIds.length) {
                 return {
                     success: false,
                     tempsId: null,
-                    error: 'Échec de l\'insertion - aucun TempsId retourné',
-                    warnings: []
+                    tempsIds: [],
+                    error: 'Aucun créneau productif consolidé (durées à 0 ?)',
+                    warnings: validation.warnings || []
                 };
             }
-            
-            console.log(`✅ Consolidation réussie: TempsId=${tempsId}, Durée=${durations.totalDuration}min (${durations.productiveDuration}min productif)`);
-            
+
+            const primaryTempsId = tempsIds[0];
+            const alreadyExists = insertedCount === 0 && updatedCount === 0;
+            console.log(
+                `✅ Consolidation segments: ${tempsIds.length} TempsId(s) [${tempsIds.join(',')}] ` +
+                `(insert=${insertedCount}, update=${updatedCount}, cycleProductif=${cycleDurations.productiveDuration}min)`
+            );
+
             return await ConsolidationService._finishConsolidation({
                 success: true,
-                tempsId,
+                tempsId: primaryTempsId,
+                tempsIds,
                 error: null,
                 warnings: validation.warnings || [],
-                durations
+                durations: cycleDurations,
+                alreadyExists,
+                segmentsCount: resolvedSegments.length
             }, options);
             
         } catch (error) {
             console.error(`❌ Erreur lors de la consolidation de ${operatorCode}/${lancementCode}:`, error);
             
-            // Vérifier si c'est une erreur de contrainte unique (doublon)
+            // Vérifier si c'est une erreur de contrainte unique (doublon StartTime)
             if (error.number === 2627 || error.originalError?.number === 2627) {
-                // Récupérer le TempsId existant (commencer par la clé de contrainte la plus probable: StartTime)
+                // Récupérer le TempsId existant via la clé UNIQUE (OperatorCode, LancementCode, StartTime)
                 try {
                     if (startTime) {
                         const byStartQuery = `
                             SELECT TOP 1 TempsId
-                            FROM [SEDI_APP_INDEPENDANTE].[dbo].[ABTEMPS_OPERATEURS]
+                            FROM ${appDb}.[dbo].[ABTEMPS_OPERATEURS]
                             WHERE OperatorCode = @operatorCode
                               AND LancementCode = @lancementCode
                               AND StartTime = @startTime
@@ -547,6 +630,7 @@ class ConsolidationService {
                             return await ConsolidationService._finishConsolidation({
                                 success: true,
                                 tempsId: byStart[0].TempsId,
+                                tempsIds: [byStart[0].TempsId],
                                 error: null,
                                 warnings: ['Opération déjà consolidée (détecté via StartTime après erreur UNIQUE)'],
                                 alreadyExists: true
@@ -556,43 +640,12 @@ class ConsolidationService {
                 } catch (e) {
                     // ignore
                 }
-
-                // Fallback: clé historique (phase/rubrique/date)
-                const existingQuery = `
-                    SELECT TempsId 
-                    FROM [SEDI_APP_INDEPENDANTE].[dbo].[ABTEMPS_OPERATEURS]
-                    WHERE OperatorCode = @operatorCode 
-                      AND LancementCode = @lancementCode
-                      AND ISNULL(LTRIM(RTRIM(Phase)), '') = ISNULL(LTRIM(RTRIM(@phase)), '')
-                      AND ISNULL(LTRIM(RTRIM(CodeRubrique)), '') = ISNULL(LTRIM(RTRIM(@codeRubrique)), '')
-                      AND DateCreation = @dateCreation
-                `;
-                
-                try {
-                    const existing = await db.executeQuery(existingQuery, {
-                        operatorCode,
-                        lancementCode,
-                        phase,
-                        codeRubrique,
-                        dateCreation: opDate
-                    });
-                    if (existing.length > 0) {
-                        return await ConsolidationService._finishConsolidation({
-                            success: true,
-                            tempsId: existing[0].TempsId,
-                            error: null,
-                            warnings: ['Opération déjà consolidée (détecté après erreur)'],
-                            alreadyExists: true
-                        }, options);
-                    }
-                } catch (queryError) {
-                    // Ignorer l'erreur de requête
-                }
             }
             
             return {
                 success: false,
                 tempsId: null,
+                tempsIds: [],
                 error: `Erreur lors de la consolidation: ${error.message}`,
                 warnings: []
             };
@@ -625,22 +678,30 @@ class ConsolidationService {
             
             try {
                 const result = await this.consolidateOperation(OperatorCode, LancementCode, options);
+                const ids = Array.isArray(result.tempsIds) && result.tempsIds.length > 0
+                    ? result.tempsIds
+                    : (result.tempsId ? [result.tempsId] : []);
                 
                 if (result.success) {
                     if (result.alreadyExists) {
-                        results.skipped.push({
-                            OperatorCode,
-                            LancementCode,
-                            TempsId: result.tempsId,
-                            reason: 'Déjà consolidé'
-                        });
+                        for (const id of ids) {
+                            results.skipped.push({
+                                OperatorCode,
+                                LancementCode,
+                                TempsId: id,
+                                reason: 'Déjà consolidé'
+                            });
+                        }
                     } else {
-                        results.success.push({
-                            OperatorCode,
-                            LancementCode,
-                            TempsId: result.tempsId,
-                            durations: result.durations
-                        });
+                        for (const id of ids) {
+                            results.success.push({
+                                OperatorCode,
+                                LancementCode,
+                                TempsId: id,
+                                durations: result.durations,
+                                segmentsCount: result.segmentsCount || ids.length
+                            });
+                        }
                     }
                 } else {
                     if (result.skipped) {
@@ -689,7 +750,7 @@ class ConsolidationService {
             // Récupérer l'enregistrement consolidé
             const recordQuery = `
                 SELECT OperatorCode, LancementCode
-                FROM [SEDI_APP_INDEPENDANTE].[dbo].[ABTEMPS_OPERATEURS]
+                FROM ${appDb}.[dbo].[ABTEMPS_OPERATEURS]
                 WHERE TempsId = @tempsId
             `;
             
@@ -708,7 +769,7 @@ class ConsolidationService {
             // Récupérer les événements
             const eventsQuery = `
                 SELECT * 
-                FROM [SEDI_APP_INDEPENDANTE].[dbo].[ABHISTORIQUE_OPERATEURS]
+                FROM ${appDb}.[dbo].[ABHISTORIQUE_OPERATEURS]
                 WHERE OperatorCode = @operatorCode 
                   AND CodeLanctImprod = @lancementCode
                 ORDER BY DateCreation ASC, NoEnreg ASC
@@ -730,7 +791,7 @@ class ConsolidationService {
             
             // Mettre à jour l'enregistrement
             const updateQuery = `
-                UPDATE [SEDI_APP_INDEPENDANTE].[dbo].[ABTEMPS_OPERATEURS]
+                UPDATE ${appDb}.[dbo].[ABTEMPS_OPERATEURS]
                 SET TotalDuration = @totalDuration,
                     PauseDuration = @pauseDuration,
                     ProductiveDuration = @productiveDuration,

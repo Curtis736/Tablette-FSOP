@@ -2,7 +2,8 @@ import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest';
 import AdminPage, {
   getAdminStepColumnDisplay,
   compareAdminTimelineRows,
-  getAdminRowSortTimestamp
+  getAdminRowSortTimestamp,
+  composeClockOnDay
 } from '../../components/AdminPage.js';
 
 // Mock des dépendances
@@ -24,6 +25,13 @@ vi.mock('../../utils/TimeUtils.js', () => ({
     })
   }
 }));
+
+describe('composeClockOnDay', () => {
+  it('keeps a corrected time on yesterday even if the input date is today', () => {
+    expect(composeClockOnDay('2026-10-20', '17:25')).toBe('2026-10-20T17:25:00');
+    expect(composeClockOnDay('2026-10-20', '2026-10-21T17:25:00')).toBe('2026-10-20T17:25:00');
+  });
+});
 
 describe('getAdminStepColumnDisplay', () => {
   it('shows Phase as step code and Fabrication as label', () => {
@@ -165,7 +173,7 @@ describe('AdminPage', () => {
       <span id="activeLancements"></span>
       <span id="pausedLancements"></span>
       <span id="completedLancements"></span>
-      <table><tbody id="operationsTableBody"></tbody></table>
+      <div class="table-container"><table id="operationsTable"><tbody id="operationsTableBody"></tbody></table></div>
       <select id="operatorFilter"></select>
       <select id="statusFilter">
         <option value=""></option>
@@ -175,6 +183,7 @@ describe('AdminPage', () => {
         <option value="T">Transmis SILOG</option>
       </select>
       <input id="searchFilter" />
+      <input id="operatorCodeSearch" />
       <button id="clearFiltersBtn"></button>
       <button id="transferBtn"></button>
       <button id="addOperationBtn"></button>
@@ -319,6 +328,23 @@ describe('AdminPage', () => {
       expect(adminPage.operations.length).toBe(1);
     });
 
+    it('keeps existing rows while a silent refresh is in flight', async () => {
+      adminPage.operationsTableBody.innerHTML = '<tr data-operation-id="keep"><td>Myriam</td></tr>';
+      let resolveAdmin;
+      mockApiService.getAdminData.mockImplementation(() => new Promise((resolve) => {
+        resolveAdmin = resolve;
+      }));
+      mockApiService.getConnectedOperators.mockResolvedValue({ success: true, operators: [] });
+      mockApiService.getAllOperators.mockResolvedValue({ success: true, operators: [] });
+      mockApiService.getMonitoringTemps.mockResolvedValue({ success: true, data: [], count: 0 });
+
+      const pending = adminPage.loadData(true, { silent: true });
+      expect(adminPage.operationsTableBody.querySelector('tr[data-operation-id="keep"]')).toBeTruthy();
+      expect(adminPage.operationsTableBody.textContent).not.toContain('Chargement...');
+      resolveAdmin({ operations: [], stats: {}, pagination: { currentPage: 1, totalPages: 1 } });
+      await pending;
+    });
+
     it('should increment consecutive errors', async () => {
       mockApiService.getAdminData.mockRejectedValue(new Error('Error'));
       await adminPage.loadData().catch(() => {});
@@ -420,6 +446,69 @@ describe('AdminPage', () => {
       expect(out).toHaveLength(1);
       expect(out[0].TempsId).toBe(10);
     });
+
+    it('masque ABTEMPS quand des segments productifs couvrent le même cycle (pas de chevauchement)', () => {
+      const ops = [
+        {
+          TempsId: 450,
+          OperatorCode: '865',
+          LancementCode: 'LT2600636',
+          DateCreation: '2026-09-30',
+          StartTime: '2026-09-30T08:14:11',
+          EndTime: '2026-09-30T14:52:51'
+        },
+        {
+          OperatorCode: '865',
+          LancementCode: 'LT2600636',
+          DateCreation: '2026-09-30',
+          StartTime: '08:14',
+          EndTime: '10:01',
+          _isWorkSegment: true,
+          _isUnconsolidated: true
+        },
+        {
+          OperatorCode: '865',
+          LancementCode: 'LT2600636',
+          DateCreation: '2026-09-30',
+          StartTime: '10:16',
+          EndTime: '12:57',
+          _isWorkSegment: true,
+          _isUnconsolidated: true
+        },
+        {
+          OperatorCode: '865',
+          LancementCode: 'LT2600636',
+          DateCreation: '2026-09-30',
+          StartTime: '13:49',
+          EndTime: '14:52',
+          _isWorkSegment: true,
+          _isUnconsolidated: true
+        },
+        {
+          TempsId: 451,
+          OperatorCode: '865',
+          LancementCode: 'LT2600632',
+          DateCreation: '2026-09-30',
+          StartTime: '2026-09-30T14:53:17',
+          EndTime: '2026-09-30T15:38:06'
+        },
+        {
+          TempsId: 607,
+          OperatorCode: '865',
+          LancementCode: 'LT2600636',
+          DateCreation: '2026-09-30',
+          StartTime: '2026-09-30T16:55:40',
+          EndTime: '2026-09-30T17:25:00'
+        }
+      ];
+      const out = adminPage._preferWorkSegmentsOverConsolidated(ops);
+      // Ligne ABTEMPS cumulée masquée ; TempsId éventuellement reporté sur le 1er segment
+      expect(out.find((o) => o.TempsId === 450 && !o._isWorkSegment)).toBeUndefined();
+      expect(out.filter((o) => o._isWorkSegment)).toHaveLength(3);
+      expect(out.find((o) => o.TempsId === 451)).toBeTruthy();
+      // Autre cycle le même jour (heure de début différente) : reste visible
+      expect(out.find((o) => o.TempsId === 607 && !o._isWorkSegment)).toBeTruthy();
+    });
   });
 
   describe('résolution transfert (segments SILOG)', () => {
@@ -462,11 +551,126 @@ describe('AdminPage', () => {
           StatutTraitement: null
         }]
       });
+      mockApiService.consolidateMonitoringBatch.mockResolvedValue({
+        success: true,
+        results: { success: [], skipped: [], errors: [] }
+      });
 
       const result = await adminPage._resolveTransferEligibleOperations();
-      expect(result.eligible).toHaveLength(1);
-      expect(result.eligible[0].TempsId).toBe(501);
+      // 2 segments affichés / 1 TempsId cumulé → force reconsolidation segmentaire
+      expect(mockApiService.consolidateMonitoringBatch).toHaveBeenCalled();
+      expect(result.eligible.map((o) => o.TempsId)).toContain(501);
+    });
+
+    it('attache les TempsId segmentaires aux lignes affichées', () => {
+      const out = adminPage._preferWorkSegmentsOverConsolidated([
+        {
+          TempsId: 501,
+          OperatorCode: '865',
+          LancementCode: 'LT2600636',
+          DateCreation: '2026-09-30',
+          StartTime: '2026-09-30T08:14:00',
+          EndTime: '2026-09-30T10:01:00',
+          StatutTraitement: null
+        },
+        {
+          TempsId: 502,
+          OperatorCode: '865',
+          LancementCode: 'LT2600636',
+          DateCreation: '2026-09-30',
+          StartTime: '2026-09-30T10:16:00',
+          EndTime: '2026-09-30T12:57:00',
+          StatutTraitement: null
+        },
+        {
+          OperatorCode: '865',
+          LancementCode: 'LT2600636',
+          DateCreation: '2026-09-30',
+          StartTime: '08:14',
+          EndTime: '10:01',
+          _isWorkSegment: true,
+          _isUnconsolidated: true
+        },
+        {
+          OperatorCode: '865',
+          LancementCode: 'LT2600636',
+          DateCreation: '2026-09-30',
+          StartTime: '10:16',
+          EndTime: '12:57',
+          _isWorkSegment: true,
+          _isUnconsolidated: true
+        }
+      ]);
+      const segs = out.filter((o) => o._isWorkSegment);
+      expect(segs).toHaveLength(2);
+      expect(segs.map((s) => s.TempsId).sort()).toEqual([501, 502]);
+      expect(out.find((o) => !o._isWorkSegment && o.TempsId)).toBeUndefined();
+    });
+
+    it('conserve tous les TempsId multi-cycles du même LT (pas un seul par lancement)', async () => {
+      adminPage.operations = [
+        {
+          TempsId: 429,
+          OperatorCode: '865',
+          LancementCode: 'LT2600401',
+          StatusCode: 'TERMINE',
+          Status: 'Terminé',
+          StartTime: '2026-09-16T09:12:30',
+          EndTime: '2026-09-16T09:15:07',
+          ProductiveDuration: 3,
+          StatutTraitement: null
+        },
+        {
+          TempsId: 434,
+          OperatorCode: '865',
+          LancementCode: 'LT2600401',
+          StatusCode: 'TERMINE',
+          Status: 'Terminé',
+          StartTime: '2026-09-16T09:15:17',
+          EndTime: '2026-09-16T09:48:23',
+          ProductiveDuration: 33,
+          StatutTraitement: null
+        }
+      ];
+      mockApiService.getMonitoringTemps.mockResolvedValue({
+        success: true,
+        data: [
+          {
+            TempsId: 429,
+            OperatorCode: '865',
+            LancementCode: 'LT2600401',
+            StatusCode: 'TERMINE',
+            Status: 'Terminé',
+            ProductiveDuration: 3,
+            StatutTraitement: null
+          },
+          {
+            TempsId: 434,
+            OperatorCode: '865',
+            LancementCode: 'LT2600401',
+            StatusCode: 'TERMINE',
+            Status: 'Terminé',
+            ProductiveDuration: 33,
+            StatutTraitement: null
+          }
+        ]
+      });
+
+      const result = await adminPage._resolveTransferEligibleOperations();
+      expect(result.eligible).toHaveLength(2);
+      expect(result.eligible.map((o) => o.TempsId).sort((a, b) => a - b)).toEqual([429, 434]);
       expect(mockApiService.consolidateMonitoringBatch).not.toHaveBeenCalled();
+    });
+
+    it('détaille les TempsId OK/échec dans le message de transfert', () => {
+      const msg = adminPage._formatTransferResultMessage({
+        count: 2,
+        validatedIds: [429, 434],
+        invalidIds: [{ tempsId: 435, errors: ['ProductiveDuration doit être > 0'] }],
+        ediJob: { skipped: true, message: 'mode planifié' }
+      }, 3);
+      expect(msg).toContain('OK TempsId: 429, 434');
+      expect(msg).toContain('Échec: 435:');
     });
 
     it('utilise le TempsId renvoyé quand la consolidation répond "Déjà consolidé"', async () => {
@@ -558,6 +762,18 @@ describe('AdminPage', () => {
       expect(row).toBeTruthy();
       expect(row.textContent).toContain('TRANSMIS');
       expect(row.querySelector('.transmitted-lock')).toBeTruthy();
+    });
+
+    it('should filter by operator number', () => {
+      adminPage.operations = [
+        { TempsId: 1, OperatorCode: '754', LancementCode: 'LT2600960', StatutTraitement: null, DateCreation: '2026-10-09' },
+        { TempsId: 2, OperatorCode: '890', LancementCode: 'LT2600960', StatutTraitement: null, DateCreation: '2026-10-09' }
+      ];
+      document.getElementById('operatorCodeSearch').value = '754';
+      adminPage.updateOperationsTable();
+      const text = adminPage.operationsTableBody.textContent;
+      expect(text).toContain('754');
+      expect(text).not.toContain('890');
     });
 
     it('should filter by search', () => {

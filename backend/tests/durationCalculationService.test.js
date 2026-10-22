@@ -128,6 +128,67 @@ describe('processLancementEventsWithPauses pause rows', () => {
     expect(pauseRows[0].statusCode).toBe('PAUSE_TERMINEE');
     expect(pauseRows[0].editable).toBe(false);
   });
+
+  it('dedupes duplicated NoEnreg from multi-ABTEMPS JOIN (no fake EN_COURS)', () => {
+    // Simule le bug Mon Historique : 2 ABTEMPS le même jour → chaque événement HIST x2
+    const duplicated = [
+      {
+        NoEnreg: 1546,
+        Ident: 'DEBUT',
+        OperatorCode: '009',
+        CodeLanctImprod: 'LT2601054',
+        Phase: '010',
+        CodeRubrique: 'CONNECT',
+        HeureDebut: '13:51:00',
+        DateCreation: '2026-09-22',
+        CreatedAt: '2026-09-22T13:51:00.000Z',
+        Article: 'Patchcord'
+      },
+      {
+        NoEnreg: 1546,
+        Ident: 'DEBUT',
+        OperatorCode: '009',
+        CodeLanctImprod: 'LT2601054',
+        Phase: '010',
+        CodeRubrique: 'CONNECT',
+        HeureDebut: '13:51:00',
+        DateCreation: '2026-09-22',
+        CreatedAt: '2026-09-22T13:51:00.000Z',
+        Article: 'Patchcord'
+      },
+      {
+        NoEnreg: 1547,
+        Ident: 'FIN',
+        OperatorCode: '009',
+        CodeLanctImprod: 'LT2601054',
+        Phase: '010',
+        CodeRubrique: 'CONNECT',
+        HeureFin: '13:55:00',
+        DateCreation: '2026-09-22',
+        CreatedAt: '2026-09-22T13:55:00.000Z',
+        Article: 'Patchcord'
+      },
+      {
+        NoEnreg: 1547,
+        Ident: 'FIN',
+        OperatorCode: '009',
+        CodeLanctImprod: 'LT2601054',
+        Phase: '010',
+        CodeRubrique: 'CONNECT',
+        HeureFin: '13:55:00',
+        DateCreation: '2026-09-22',
+        CreatedAt: '2026-09-22T13:55:00.000Z',
+        Article: 'Patchcord'
+      }
+    ];
+
+    const items = processLancementEventsWithPauses(duplicated);
+    expect(items).toHaveLength(1);
+    expect(items[0].statusCode).toBe('TERMINE');
+    expect(items[0].startTime).toMatch(/13:51/);
+    expect(items[0].endTime).toMatch(/13:55/);
+    expect(items.filter((i) => i.statusCode === 'EN_COURS')).toHaveLength(0);
+  });
 });
 
 describe('processLancementEventsWithPauses work segments (SILOG)', () => {
@@ -186,7 +247,7 @@ describe('processLancementEventsWithPauses work segments (SILOG)', () => {
     }
   ];
 
-  it('emits productive segments instead of full cycle + pause rows', () => {
+  it('emits productive segments only (pause = fin de ligne, reprise = début suivante)', () => {
     const items = processLancementEventsWithPauses(baseEvents, { includeWorkSegments: true });
     expect(items.filter((i) => i._isPauseRow)).toHaveLength(0);
     expect(items.filter((i) => i._isWorkSegment)).toHaveLength(2);
@@ -216,5 +277,45 @@ describe('processLancementEventsWithPauses work segments (SILOG)', () => {
     expect(items[0].endTime).toBe('12:00');
     expect(items[0].statusCode).toBe('EN_PAUSE');
     expect(items[0].status).toBe('En pause');
+  });
+});
+
+describe('DurationCalculationService.buildClosedWorkSegments', () => {
+  it('returns one segment without pauses', () => {
+    const events = [
+      { Ident: 'DEBUT', CreatedAt: '2026-09-30T08:00:00', DateCreation: '2026-09-30', NoEnreg: 1 },
+      { Ident: 'FIN', CreatedAt: '2026-09-30T10:00:00', DateCreation: '2026-09-30', NoEnreg: 2 }
+    ];
+    const segs = DurationCalculationService.buildClosedWorkSegments(events);
+    expect(segs).toHaveLength(1);
+    expect(segs[0].endIsFin).toBe(true);
+  });
+
+  it('splits at pause/reprise for SILOG transfer', () => {
+    const events = [
+      { Ident: 'DEBUT', CreatedAt: '2026-09-30T08:14:00', DateCreation: '2026-09-30', NoEnreg: 1 },
+      { Ident: 'PAUSE', CreatedAt: '2026-09-30T10:01:00', DateCreation: '2026-09-30', NoEnreg: 2 },
+      { Ident: 'REPRISE', CreatedAt: '2026-09-30T10:16:00', DateCreation: '2026-09-30', NoEnreg: 3 },
+      { Ident: 'FIN', CreatedAt: '2026-09-30T12:57:00', DateCreation: '2026-09-30', NoEnreg: 4 }
+    ];
+    const segs = DurationCalculationService.buildClosedWorkSegments(events);
+    expect(segs).toHaveLength(2);
+    expect(segs[0].startEvent.Ident).toBe('DEBUT');
+    expect(segs[0].endEvent.Ident).toBe('PAUSE');
+    expect(segs[0].endIsFin).toBe(false);
+    expect(segs[1].startEvent.Ident).toBe('REPRISE');
+    expect(segs[1].endEvent.Ident).toBe('FIN');
+    expect(segs[1].endIsFin).toBe(true);
+  });
+
+  it('does not emit a post-pause segment when FIN arrives during pause', () => {
+    const events = [
+      { Ident: 'DEBUT', CreatedAt: '2026-09-30T08:00:00', DateCreation: '2026-09-30', NoEnreg: 1 },
+      { Ident: 'PAUSE', CreatedAt: '2026-09-30T09:00:00', DateCreation: '2026-09-30', NoEnreg: 2 },
+      { Ident: 'FIN', CreatedAt: '2026-09-30T10:00:00', DateCreation: '2026-09-30', NoEnreg: 3 }
+    ];
+    const segs = DurationCalculationService.buildClosedWorkSegments(events);
+    expect(segs).toHaveLength(1);
+    expect(segs[0].endEvent.Ident).toBe('PAUSE');
   });
 });
