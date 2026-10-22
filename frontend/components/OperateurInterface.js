@@ -67,8 +67,13 @@ class OperateurInterface {
 
         // Synchronisation périodique UI ↔ DB (toutes les 30s)
         this._syncInterval = setInterval(() => this._syncStateFromDB(), 30000);
-        // Stream compteurs toutes les 8s (soft = pas de collapse UI)
-        this._presenceInterval = setInterval(() => this.loadOperatorCounters({ soft: true }), 8000);
+        // Compteurs serveur toutes les 60s (soft = pas de collapse UI). Le temps réel est calculé
+        // localement chaque seconde (renderTodayCountersLive) et les compteurs sont rechargés après
+        // chaque action : inutile d'interroger la base plus souvent. Rien quand l'écran est en veille.
+        this._presenceInterval = setInterval(() => {
+            if (typeof document !== 'undefined' && document.hidden) return;
+            this.loadOperatorCounters({ soft: true });
+        }, 60000);
     }
 
     // ─── Nettoyage / destruction propre ───────────────────────────────────────
