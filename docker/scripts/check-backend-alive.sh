@@ -12,23 +12,59 @@ HEALTH_URL="${HEALTH_URL:-http://127.0.0.1:3001/api/health}"
 AUTO_RESTART_BACKEND="${AUTO_RESTART_BACKEND:-false}"
 MAX_RESTART_ATTEMPTS="${MAX_RESTART_ATTEMPTS:-2}"
 RESTART_COOLDOWN_SEC="${RESTART_COOLDOWN_SECONDS:-900}"
-RESTART_STATE_FILE="${RESTART_STATE_FILE:-/var/tmp/sedi-backend-restart.state}"
+# États / logs sous le repo (écriture OK pour root et maintenance) — évite /var/tmp root-only.
+STATE_DIR="${STATE_DIR:-$ROOT/docker/logs}"
+RESTART_STATE_FILE="${RESTART_STATE_FILE:-$STATE_DIR/sedi-backend-restart.state}"
 # Via nginx si le port backend n'est pas exposé :
 # HEALTH_URL=https://127.0.0.1/api/health  (ou http://127.0.0.1/api/health)
-LOG_DIR="${LOG_DIR:-/var/log}"
+LOG_DIR="${LOG_DIR:-$STATE_DIR}"
 ALERT_LOG="${ALERT_LOG:-$LOG_DIR/sedi-watchdog-alert.log}"
-STATE_FILE="${STATE_FILE:-/var/tmp/sedi-backend-health.state}"
+STATE_FILE="${STATE_FILE:-$STATE_DIR/sedi-backend-health.state}"
 COOLDOWN_SEC="${ALERT_COOLDOWN_SECONDS:-3600}"
+mkdir -p "$STATE_DIR" 2>/dev/null || true
 
-if [[ -f "$ENV_FILE" ]]; then
-  # shellcheck disable=SC1090
-  set -a
-  # shellcheck disable=SC1090
-  source "$ENV_FILE"
-  set +a
-fi
+# Ne PAS `source` le .env entier : chemins avec espaces (ex. "A disposition/DOSSIER...")
+# cassent bash. On charge uniquement les clés utiles à ce script.
+load_env_keys() {
+  [[ -f "$ENV_FILE" ]] || return 0
+  local line key val
+  local -a wanted=(
+    TEAMS_WEBHOOK_URL ALERT_TEAMS_WEBHOOK
+    AUTO_RESTART_BACKEND MAX_RESTART_ATTEMPTS RESTART_COOLDOWN_SECONDS
+    HEALTH_URL ALERT_COOLDOWN_SECONDS LOG_DIR
+    FSOP_ROOT COMPOSE_DIR COMPOSE_FILE
+  )
+  local want_re
+  want_re="$(IFS='|'; echo "${wanted[*]}")"
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    line="${line%%#*}"
+    line="${line//$'\r'/}"
+    [[ "$line" =~ ^[[:space:]]*$ ]] && continue
+    [[ "$line" =~ ^([A-Za-z_][A-Za-z0-9_]*)=(.*)$ ]] || continue
+    key="${BASH_REMATCH[1]}"
+    val="${BASH_REMATCH[2]}"
+    [[ "$key" =~ ^($want_re)$ ]] || continue
+    # strip quotes optionnelles
+    if [[ "$val" =~ ^\"(.*)\"$ ]]; then val="${BASH_REMATCH[1]}"; fi
+    if [[ "$val" =~ ^\'(.*)\'$ ]]; then val="${BASH_REMATCH[1]}"; fi
+    export "$key=$val"
+  done < "$ENV_FILE"
+}
+load_env_keys
 
 TEAMS_URL="${TEAMS_WEBHOOK_URL:-${ALERT_TEAMS_WEBHOOK:-}}"
+# Re-apply defaults after env load (env may override)
+AUTO_RESTART_BACKEND="${AUTO_RESTART_BACKEND:-false}"
+MAX_RESTART_ATTEMPTS="${MAX_RESTART_ATTEMPTS:-2}"
+RESTART_COOLDOWN_SEC="${RESTART_COOLDOWN_SECONDS:-900}"
+HEALTH_URL="${HEALTH_URL:-http://127.0.0.1:3001/api/health}"
+COOLDOWN_SEC="${ALERT_COOLDOWN_SECONDS:-3600}"
+STATE_DIR="${STATE_DIR:-$ROOT/docker/logs}"
+LOG_DIR="${LOG_DIR:-$STATE_DIR}"
+ALERT_LOG="${ALERT_LOG:-$LOG_DIR/sedi-watchdog-alert.log}"
+STATE_FILE="${STATE_FILE:-$STATE_DIR/sedi-backend-health.state}"
+RESTART_STATE_FILE="${RESTART_STATE_FILE:-$STATE_DIR/sedi-backend-restart.state}"
+mkdir -p "$STATE_DIR" 2>/dev/null || true
 TS="$(date -Iseconds)"
 
 log() { echo "[$TS] $*" | tee -a "$ALERT_LOG" 2>/dev/null || echo "[$TS] $*"; }
@@ -101,18 +137,40 @@ if [[ "${AUTO_RESTART_BACKEND}" == "true" || "${AUTO_RESTART_BACKEND}" == "1" ]]
   if (( restart_attempts < MAX_RESTART_ATTEMPTS )); then
     restart_attempts=$((restart_attempts + 1))
     echo "attempts=${restart_attempts} last=${NOW}" >"$RESTART_STATE_FILE" 2>/dev/null || true
-    log "AUTO_RESTART attempt ${restart_attempts}/${MAX_RESTART_ATTEMPTS}..."
+    log "AUTO_RESTART attempt ${restart_attempts}/${MAX_RESTART_ATTEMPTS} (container_ok=${container_ok})..."
     if [[ -f "$COMPOSE_DIR/$COMPOSE_FILE" ]]; then
-      if (cd "$COMPOSE_DIR" && docker compose --env-file "$ENV_FILE" -f "$COMPOSE_FILE" restart backend); then
+      # Conteneur absent / Exited → up -d (recreate). Conteneur Up mais health KO → restart puis up -d en secours.
+      bring_up_ok=0
+      if [[ "$container_ok" -eq 0 ]]; then
+        log "AUTO_RESTART using compose up -d backend (container missing/stopped)"
+        if (cd "$COMPOSE_DIR" && docker compose --env-file "$ENV_FILE" -f "$COMPOSE_FILE" up -d backend); then
+          bring_up_ok=1
+        else
+          log "AUTO_RESTART docker compose up -d backend failed"
+        fi
+      else
+        if (cd "$COMPOSE_DIR" && docker compose --env-file "$ENV_FILE" -f "$COMPOSE_FILE" restart backend); then
+          bring_up_ok=1
+        else
+          log "AUTO_RESTART restart failed — fallback up -d backend"
+          if (cd "$COMPOSE_DIR" && docker compose --env-file "$ENV_FILE" -f "$COMPOSE_FILE" up -d backend); then
+            bring_up_ok=1
+          else
+            log "AUTO_RESTART docker compose up -d backend failed"
+          fi
+        fi
+      fi
+
+      if [[ "$bring_up_ok" -eq 1 ]]; then
         sleep 15
         if docker exec sedi-tablette-backend curl -fsS --max-time 8 http://localhost:3001/api/health >/dev/null 2>&1; then
-          log "AUTO_RESTART_OK backend healthy after restart"
+          log "AUTO_RESTART_OK backend healthy after bring-up"
           echo ok >"$STATE_FILE" 2>/dev/null || true
+          # Reset compteur après succès
+          echo "attempts=0 last=${NOW}" >"$RESTART_STATE_FILE" 2>/dev/null || true
           exit 0
         fi
-        log "AUTO_RESTART health still KO after restart"
-      else
-        log "AUTO_RESTART docker compose restart failed"
+        log "AUTO_RESTART health still KO after bring-up"
       fi
     else
       log "AUTO_RESTART compose file missing: $COMPOSE_DIR/$COMPOSE_FILE"
@@ -120,6 +178,8 @@ if [[ "${AUTO_RESTART_BACKEND}" == "true" || "${AUTO_RESTART_BACKEND}" == "1" ]]
   else
     log "AUTO_RESTART skipped (max attempts ${MAX_RESTART_ATTEMPTS} in ${RESTART_COOLDOWN_SEC}s)"
   fi
+else
+  log "AUTO_RESTART disabled — set AUTO_RESTART_BACKEND=true in $ENV_FILE"
 fi
 
 exit 1
