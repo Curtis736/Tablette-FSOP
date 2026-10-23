@@ -166,3 +166,6 @@ backend/.env.localdb
 
 # Généré par apply-monitoring.sh (contient le webhook Teams)
 docker/prometheus-msteams.generated.yml
+
+# Configuration locale d'assistant de code (jamais versionnee)
+.claude/
