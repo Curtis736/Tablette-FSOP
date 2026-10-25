@@ -259,9 +259,9 @@ describe('TimeUtils', () => {
 
   describe('getAgeInDays', () => {
     it('should calculate age in days', () => {
-      const date = new Date();
-      date.setDate(date.getDate() - 5);
-      expect(TimeUtils.getAgeInDays(date)).toBe(5);
+      // Éviter setDate() : au changement d'heure (25 oct 2026) ça décale d'1h et Math.ceil passe à 6.
+      const fiveDaysAgo = new Date(Date.now() - 5 * 24 * 60 * 60 * 1000);
+      expect(TimeUtils.getAgeInDays(fiveDaysAgo)).toBe(5);
     });
 
     it('should handle invalid dates', () => {

@@ -58,7 +58,7 @@
     "morgan": "^1.12.1",
     "mssql": "^12.7.5",
     "node-fetch": "^2.7.0",
-    "nodemailer": "^10.1.0",
+    "nodemailer": "^10.2.1",
     "prom-client": "^15.1.0",
     "redis": "^4.6.12",
     "yauzl": "^3.2.0",
@@ -74,6 +74,8 @@
   },
   "overrides": {
     "adm-zip": "^0.6.1",
+    "body-parser": "^2.4.0",
+    "@azure/msal-node": "^7.1.1",
     "uuid": "^11.1.1",
     "brace-expansion": "^5.0.12",
     "braces": "^3.0.3",

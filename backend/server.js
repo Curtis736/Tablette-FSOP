@@ -50,6 +50,11 @@ const allowedOrigins = [
     'https://localhost:8443',
     'http://fsop.sedi-ati.com',
     'https://fsop.sedi-ati.com',
+    // Accès distant via Tailscale (serveurproduction)
+    'http://100.87.41.0',
+    'https://100.87.41.0',
+    'http://100.87.41.0:8080',
+    'https://100.87.41.0:8443',
     process.env.FRONTEND_URL
 ].filter(Boolean);
 
