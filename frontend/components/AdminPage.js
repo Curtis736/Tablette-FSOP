@@ -379,6 +379,18 @@ class AdminPage {
             if (match.TotalDuration != null) seg.TotalDuration = match.TotalDuration;
             if (match.PauseDuration != null) seg.PauseDuration = match.PauseDuration;
             if (match.ProductiveDuration != null) seg.ProductiveDuration = match.ProductiveDuration;
+            // Afficher les heures / LT corrigés dans ABTEMPS (sinon reload → anciennes heures historiques)
+            if (match.StartTime != null) {
+                seg.StartTime = match.StartTime;
+                seg.startTime = match.StartTime;
+            }
+            if (match.EndTime != null) {
+                seg.EndTime = match.EndTime;
+                seg.endTime = match.EndTime;
+            }
+            if (match.LancementCode != null) seg.LancementCode = match.LancementCode;
+            if (match.Phase != null) seg.Phase = match.Phase;
+            if (match.CodeRubrique != null) seg.CodeRubrique = match.CodeRubrique;
             seg._isUnconsolidated = false;
         }
 
@@ -3514,9 +3526,9 @@ class AdminPage {
                 }
                 
                 this.lastEditTime = Date.now();
-                setTimeout(() => {
-                    this.loadData(true, { silent: true });
-                }, 500);
+                // Rechargement immédiat (pas silent différé) : sinon les segments historiques
+                // masquent encore l'ancienne heure tant que le cache UI n'est pas rafraîchi.
+                await this.loadData(false);
             } else {
                 this.notificationManager.error(result?.error || 'Erreur correction');
             }
@@ -3841,7 +3853,8 @@ class AdminPage {
     }
 
     updateMonitoringRowInTable(tempsId, record) {
-        const row = document.querySelector(`tr[data-operation-id="${tempsId}"]`);
+        const row = document.querySelector(`tr[data-operation-id="${tempsId}"]`)
+            || document.querySelector(`tr[data-temps-id="${tempsId}"]`);
         if (!row) {
             this.logger.warn(`⚠️ Ligne non trouvée pour TempsId ${tempsId}, rechargement complet`);
             this.updateOperationsTable();
@@ -3850,6 +3863,21 @@ class AdminPage {
 
         const cells = row.querySelectorAll('td');
         if (cells.length >= 8) {
+            // Cellule 2 = lancement (peut contenir un sous-div)
+            if (record.LancementCode != null && cells[1]) {
+                const codeNode = cells[1].querySelector('div') || cells[1];
+                // Garder d'éventuelles icônes ; remplacer le texte du LT
+                const textParts = [];
+                codeNode.childNodes.forEach((n) => {
+                    if (n.nodeType === Node.TEXT_NODE) textParts.push(n);
+                });
+                if (textParts.length > 0) {
+                    textParts[textParts.length - 1].textContent = ` ${record.LancementCode}`;
+                } else {
+                    cells[1].textContent = record.LancementCode;
+                }
+            }
+
             // Mettre à jour les heures (cellules 5 et 6)
             const formattedStartTime = this.formatDateTime(record.StartTime);
             const formattedEndTime = this.formatDateTime(record.EndTime);
@@ -3858,6 +3886,7 @@ class AdminPage {
             cells[6].textContent = formattedEndTime;
             
             this.logger.log(`✅ Ligne ${tempsId} mise à jour dans le tableau:`, {
+                LancementCode: record.LancementCode,
                 StartTime: formattedStartTime,
                 EndTime: formattedEndTime
             });

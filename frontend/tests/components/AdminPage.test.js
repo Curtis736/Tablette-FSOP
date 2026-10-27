@@ -610,6 +610,34 @@ describe('AdminPage', () => {
       expect(out.find((o) => !o._isWorkSegment && o.TempsId)).toBeUndefined();
     });
 
+    it('reporte les heures corrigées ABTEMPS sur le segment affiché', () => {
+      const out = adminPage._preferWorkSegmentsOverConsolidated([
+        {
+          TempsId: 501,
+          OperatorCode: '865',
+          LancementCode: 'LT2600636',
+          DateCreation: '2026-09-30',
+          StartTime: '2026-09-30T08:14:00',
+          EndTime: '2026-09-30T11:30:00',
+          StatutTraitement: null
+        },
+        {
+          OperatorCode: '865',
+          LancementCode: 'LT2600636',
+          DateCreation: '2026-09-30',
+          StartTime: '08:14',
+          EndTime: '10:01',
+          _isWorkSegment: true,
+          _isUnconsolidated: true
+        }
+      ]);
+      const seg = out.find((o) => o._isWorkSegment);
+      expect(seg).toBeTruthy();
+      expect(seg.TempsId).toBe(501);
+      expect(seg.EndTime).toBe('2026-09-30T11:30:00');
+      expect(seg.StartTime).toBe('2026-09-30T08:14:00');
+    });
+
     it('conserve tous les TempsId multi-cycles du même LT (pas un seul par lancement)', async () => {
       adminPage.operations = [
         {

@@ -119,6 +119,73 @@ class MonitoringService {
     }
 
     /**
+     * Après correction ABTEMPS Start/End : aligner les événements ABHISTORIQUE du même créneau.
+     * Sans ça, l'admin masque ABTEMPS au profit des segments historiques (anciennes heures).
+     */
+    static async _syncHistoriqueTimesForCorrection({ current, corrections, dateOnly, newLancementCode } = {}) {
+        const operatorCode = String(current?.OperatorCode || '').trim();
+        const oldLt = String(current?.LancementCode || '').trim().toUpperCase();
+        const lt = String(newLancementCode || oldLt || '').trim().toUpperCase();
+        const phase = String((corrections?.Phase ?? current?.Phase ?? '')).trim();
+        const codeRubrique = String((corrections?.CodeRubrique ?? current?.CodeRubrique ?? '')).trim();
+        const date = dateOnly || this._toDateOnly(current?.DateCreation);
+        if (!operatorCode || !lt || !date) return;
+
+        const oldStartHms = this._timePartsToHms(this._wallClockParts(current?.StartTime));
+        const oldEndHms = this._timePartsToHms(this._wallClockParts(current?.EndTime));
+        const oldStartHhmm = oldStartHms ? oldStartHms.slice(0, 5) : null;
+        const oldEndHhmm = oldEndHms ? oldEndHms.slice(0, 5) : null;
+
+        const baseParams = {
+            operatorCode,
+            oldLt,
+            lt,
+            phase: phase || null,
+            codeRubrique: codeRubrique || null,
+            date
+        };
+
+        if (corrections?.StartTime !== undefined && oldStartHhmm) {
+            const scheduled = this._clockOnRecordDay(date, corrections.StartTime);
+            if (scheduled?.hms) {
+                await executeNonQuery(
+                    `UPDATE [SEDI_APP_INDEPENDANTE].[dbo].[ABHISTORIQUE_OPERATEURS]
+                     SET HeureDebut = @newStart
+                     WHERE OperatorCode = @operatorCode
+                       AND CodeLanctImprod IN (@oldLt, @lt)
+                       AND ISNULL(LTRIM(RTRIM(Phase)), '') = ISNULL(LTRIM(RTRIM(@phase)), '')
+                       AND ISNULL(LTRIM(RTRIM(CodeRubrique)), '') = ISNULL(LTRIM(RTRIM(@codeRubrique)), '')
+                       AND CAST(DateCreation AS DATE) = @date
+                       AND UPPER(LTRIM(RTRIM(Ident))) IN ('DEBUT', 'REPRISE', 'CONNECT')
+                       AND CONVERT(VARCHAR(5), HeureDebut, 108) = @oldStartHhmm`,
+                    { ...baseParams, newStart: scheduled.hms, oldStartHhmm }
+                );
+            }
+        }
+
+        if (corrections?.EndTime !== undefined && oldEndHhmm) {
+            const scheduled = this._clockOnRecordDay(date, corrections.EndTime);
+            if (scheduled?.hms) {
+                await executeNonQuery(
+                    `UPDATE [SEDI_APP_INDEPENDANTE].[dbo].[ABHISTORIQUE_OPERATEURS]
+                     SET HeureFin = @newEnd
+                     WHERE OperatorCode = @operatorCode
+                       AND CodeLanctImprod IN (@oldLt, @lt)
+                       AND ISNULL(LTRIM(RTRIM(Phase)), '') = ISNULL(LTRIM(RTRIM(@phase)), '')
+                       AND ISNULL(LTRIM(RTRIM(CodeRubrique)), '') = ISNULL(LTRIM(RTRIM(@codeRubrique)), '')
+                       AND CAST(DateCreation AS DATE) = @date
+                       AND UPPER(LTRIM(RTRIM(Ident))) IN ('FIN', 'PAUSE')
+                       AND (
+                         CONVERT(VARCHAR(5), HeureFin, 108) = @oldEndHhmm
+                         OR (HeureFin IS NULL AND CONVERT(VARCHAR(5), HeureDebut, 108) = @oldEndHhmm)
+                       )`,
+                    { ...baseParams, newEnd: scheduled.hms, oldEndHhmm }
+                );
+            }
+        }
+    }
+
+    /**
      * Réparer StartTime/EndTime/durations depuis ABHISTORIQUE_OPERATEURS (utile si Start/End = 00:00)
      * @param {number} tempsId
      * @returns {Promise<{success:boolean,message?:string,error?:string,data?:any}>}
@@ -564,6 +631,20 @@ class MonitoringService {
             `;
             
             const result = await executeNonQuery(updateQuery, updateParams);
+
+            // Aligner ABHISTORIQUE sur les heures corrigées (sinon l'admin réaffiche les anciens segments)
+            if (current && (corrections.StartTime !== undefined || corrections.EndTime !== undefined)) {
+                try {
+                    await this._syncHistoriqueTimesForCorrection({
+                        current,
+                        corrections,
+                        dateOnly,
+                        newLancementCode: requestedLancementCodeTrimmed
+                    });
+                } catch (e) {
+                    console.warn(`⚠️ Sync heures historique (best-effort): ${e.message}`);
+                }
+            }
 
             // Si le lancement a changé, déplacer aussi les événements ABHISTORIQUE de la même étape (opérateur+phase+rubrique+jour)
             if (requestedLancementCodeTrimmed !== undefined && current) {

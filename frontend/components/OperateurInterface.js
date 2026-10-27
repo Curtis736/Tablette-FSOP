@@ -285,6 +285,7 @@ class OperateurInterface {
         this.counterAutreToday = document.getElementById('counterAutreToday');
         this.counterFormationToday = document.getElementById('counterFormationToday');
         this.pauseTypes = [];
+        this.pauseTypesEnabled = false;
         this.currentPauseTypeLabel = null;
         this.currentPauseTypeCode = null;
         this.countersSnapshot = null;

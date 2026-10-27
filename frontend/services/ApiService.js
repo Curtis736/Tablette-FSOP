@@ -537,6 +537,14 @@ class ApiService {
                 console.debug(`Health check échoué (serveur non accessible): ${url}`);
                 throw new Error('SERVER_NOT_ACCESSIBLE');
             }
+
+            if (isNetworkError) {
+                console.error(`Erreur API ${endpoint}:`, error);
+                const netErr = new Error('Connexion au serveur impossible. Vérifiez le Wi‑Fi puis réessayez.');
+                netErr.errorCode = 'NETWORK_UNAVAILABLE';
+                netErr.cause = error;
+                throw netErr;
+            }
             
             console.error(`Erreur API ${endpoint}:`, error);
             throw error;
@@ -847,20 +855,41 @@ class ApiService {
         }
 
         // Last fallback: recreate server session silently
-        const relog = await this.directOperatorLogin(code);
-        const newSessionId = relog?.operator?.sessionId || relog?.operator?.SessionId || null;
-        this.setOperatorSessionActive(code, true);
-        if (newSessionId) this.setCurrentOperatorContext(code, newSessionId);
         try {
-            const raw = window?.localStorage?.getItem('currentOperator');
-            const saved = raw ? JSON.parse(raw) : {};
-            window.localStorage?.setItem('currentOperator', JSON.stringify({
-                ...saved,
-                ...(relog?.operator || {}),
-                code
-            }));
-        } catch (_) {
-            // ignore
+            const relog = await this.directOperatorLogin(code);
+            const newSessionId = relog?.operator?.sessionId || relog?.operator?.SessionId || null;
+            this.setOperatorSessionActive(code, true);
+            if (newSessionId) this.setCurrentOperatorContext(code, newSessionId);
+            try {
+                const raw = window?.localStorage?.getItem('currentOperator');
+                const saved = raw ? JSON.parse(raw) : {};
+                window.localStorage?.setItem('currentOperator', JSON.stringify({
+                    ...saved,
+                    ...(relog?.operator || {}),
+                    code
+                }));
+            } catch (_) {
+                // ignore
+            }
+        } catch (e) {
+            const isNetwork =
+                e?.name === 'TypeError' ||
+                String(e?.message || '').includes('Failed to fetch') ||
+                String(e?.message || '').includes('NetworkError');
+            // Si on a encore une session locale, laisser l'action métier trancher
+            // (évite un "Failed to fetch" sur Pause alors que le POST pourrait passer).
+            if (candidateSessionId && isNetwork) {
+                this.setCurrentOperatorContext(code, candidateSessionId);
+                this.setOperatorSessionActive(code, true);
+                console.warn('⚠️ Relogin silencieux indisponible, tentative avec session locale');
+                return;
+            }
+            if (isNetwork) {
+                const err = new Error('Connexion au serveur impossible. Vérifiez le Wi‑Fi puis réessayez.');
+                err.errorCode = 'NETWORK_UNAVAILABLE';
+                throw err;
+            }
+            throw e;
         }
     }
 
