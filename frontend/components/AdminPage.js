@@ -268,12 +268,27 @@ class AdminPage {
      */
     _dedupeAdminConsolidatedOverlay(ops) {
         if (!ops?.length) return ops;
+        const consolidatedBySlot = new Map();
         const consolidatedCountBySlot = new Map();
         for (const op of ops) {
             const tid = op?.TempsId ?? op?.tempsId;
             if (tid == null || String(tid).trim() === '') continue;
             const slot = this._getAdminMergeDedupSlotKey(op);
             consolidatedCountBySlot.set(slot, (consolidatedCountBySlot.get(slot) || 0) + 1);
+            if (!consolidatedBySlot.has(slot)) consolidatedBySlot.set(slot, op);
+        }
+        // Une ligne affichée peut masquer l'historique : rattacher EventId pour tout supprimer d'un coup.
+        for (const op of ops) {
+            if (!op?._isUnconsolidated || op?._isPauseRow) continue;
+            const tid = op?.TempsId ?? op?.tempsId;
+            if (tid != null && String(tid).trim() !== '') continue;
+            const eid = op.EventId ?? op.id;
+            if (eid == null || String(eid).trim() === '') continue;
+            const cons = consolidatedBySlot.get(this._getAdminMergeDedupSlotKey(op));
+            if (!cons) continue;
+            if (cons.EventId == null || String(cons.EventId).trim() === '') {
+                cons.EventId = eid;
+            }
         }
         const out = [];
         for (const op of ops) {
@@ -626,13 +641,11 @@ class AdminPage {
                             const tempsId = btn.dataset.tempsId ? Number.parseInt(btn.dataset.tempsId, 10) : null;
                             const eventId = btn.dataset.eventId ? btn.dataset.eventId : null;
                             const id = btn.dataset.id || btn.dataset.operationId;
-                            const isUnconsolidated = (btn.dataset.unconsolidated === 'true') || !tempsId;
-
-                            if (isUnconsolidated) {
-                                await this.deleteOperation(eventId || id);
-                            } else {
-                                await this.deleteMonitoringRecord(tempsId || id);
-                            }
+                            await this.deleteAdminLine({
+                                tempsId: Number.isFinite(tempsId) && !Number.isNaN(tempsId) ? tempsId : null,
+                                eventId: eventId || null,
+                                fallbackId: id || null
+                            });
                         } else if (e.target.closest('.btn-hold')) {
                             e.preventDefault();
                             e.stopPropagation();
@@ -3212,71 +3225,132 @@ class AdminPage {
         return base;
     }
 
-    async deleteOperation(id) {
-        // Supprimer une opération non consolidée (depuis ABHISTORIQUE_OPERATEURS)
-        if (!confirm('Supprimer cette opération ? Tous les événements associés seront supprimés.')) return;
-        
-        try {
-            const result = await this.apiService.deleteOperation(id);
-            if (result && result.success) {
-                this.notificationManager.success('Opération supprimée avec succès');
-                await this.loadData();
-            } else {
-                this.notificationManager.error(result?.error || 'Erreur lors de la suppression');
+    /**
+     * Une ligne admin peut fusionner ABTEMPS (TempsId) + ABHISTORIQUE (EventId).
+     * Les supprimer ensemble évite de devoir cliquer deux fois pour faire disparaître la ligne.
+     */
+    async deleteAdminLine({ tempsId = null, eventId = null, fallbackId = null } = {}) {
+        let resolvedTempsId = tempsId != null && String(tempsId).trim() !== ''
+            ? Number.parseInt(tempsId, 10)
+            : null;
+        if (Number.isNaN(resolvedTempsId)) resolvedTempsId = null;
+
+        let resolvedEventId = eventId != null && String(eventId).trim() !== ''
+            ? String(eventId).trim()
+            : null;
+
+        const matchOp = (this.operations || []).find((op) => {
+            if (resolvedTempsId != null && Number(op?.TempsId) === resolvedTempsId) return true;
+            if (resolvedEventId != null && String(op?.EventId ?? op?.id) === resolvedEventId) return true;
+            if (fallbackId != null && String(op?.TempsId ?? op?.EventId ?? op?.id) === String(fallbackId)) return true;
+            return false;
+        });
+
+        if (matchOp) {
+            if (resolvedTempsId == null && matchOp.TempsId != null && String(matchOp.TempsId).trim() !== '') {
+                const tid = Number.parseInt(matchOp.TempsId, 10);
+                if (!Number.isNaN(tid)) resolvedTempsId = tid;
             }
-        } catch (error) {
-            this.logger.error('❌ Erreur suppression opération:', error);
-            this.notificationManager.error('Erreur lors de la suppression');
-        }
-    }
-
-    async deleteMonitoringRecord(id) {
-        // Supprimer un enregistrement consolidé (depuis ABTEMPS_OPERATEURS)
-        // Valider l'ID
-        if (!this.validator.validateId(id)) {
-            this.notificationManager.error('ID invalide');
-            return;
-        }
-        
-        // Convertir l'ID en nombre pour éviter les problèmes de type
-        const tempsId = Number.parseInt(id, 10);
-        if (Number.isNaN(tempsId)) {
-            this.logger.error('❌ ID invalide:', id);
-            this.notificationManager.error('ID d\'enregistrement invalide');
-            return;
-        }
-
-        if (!confirm('Supprimer cet enregistrement de temps ?')) return;
-        
-        try {
-            // Afficher un indicateur de chargement
-            this.loadingIndicator.show('deleteMonitoring', null, 'Suppression en cours...');
-            
-            const result = await this.apiService.deleteMonitoringTemps(tempsId);
-            if (result && result.success) {
-                this.notificationManager.success('Enregistrement supprimé');
-                this.selectedTempsIds.delete(String(id));
-                await this.loadData();
-            } else {
-                // Si l'enregistrement n'existe pas, rafraîchir les données (peut-être déjà supprimé)
-                if (result?.error && result.error.includes('non trouvé')) {
-                    this.notificationManager.warning('Cet enregistrement n\'existe plus (peut-être déjà supprimé). Actualisation...');
-                    await this.loadData();
-                } else {
-                    this.notificationManager.error(result?.error || 'Erreur lors de la suppression');
+            if (!resolvedEventId && (matchOp.EventId != null || matchOp.id != null)) {
+                resolvedEventId = String(matchOp.EventId ?? matchOp.id);
+            }
+            // Si le TempsId a été greffé sur un segment, récupérer aussi via le raw consolidé.
+            if (resolvedTempsId == null && Array.isArray(this._consolidatedOpsRaw)) {
+                const slot = this._getAdminStartSlotKey(matchOp);
+                const cons = this._consolidatedOpsRaw.find((op) => this._getAdminStartSlotKey(op) === slot);
+                if (cons?.TempsId != null) {
+                    const tid = Number.parseInt(cons.TempsId, 10);
+                    if (!Number.isNaN(tid)) resolvedTempsId = tid;
                 }
             }
-        } catch (error) {
-            const msg = String(error?.message || '');
-            if (msg.includes('déjà transmis')) {
-                this.notificationManager.warning('Cet enregistrement a déjà été transmis à SILOG : il ne peut plus être supprimé. Actualisation...');
-                await this.loadData();
+        }
+
+        if (resolvedTempsId == null && !resolvedEventId && fallbackId != null) {
+            const fb = Number.parseInt(fallbackId, 10);
+            if (!Number.isNaN(fb) && this.validator.validateId(fb)) {
+                resolvedTempsId = fb;
             } else {
-                this.errorHandler.handle(error, 'deleteMonitoringRecord', 'Erreur lors de la suppression');
+                resolvedEventId = String(fallbackId);
             }
+        }
+
+        if (resolvedTempsId == null && !resolvedEventId) {
+            this.notificationManager.error('Impossible d\'identifier la ligne à supprimer');
+            return;
+        }
+
+        if (!confirm('Supprimer cette ligne ? Les temps consolidés et l\'historique associés seront retirés.')) {
+            return;
+        }
+
+        try {
+            this.loadingIndicator.show('deleteMonitoring', null, 'Suppression en cours...');
+
+            let deletedSomething = false;
+            let hardError = null;
+            let alreadyTransmitted = false;
+
+            if (resolvedTempsId != null) {
+                try {
+                    const result = await this.apiService.deleteMonitoringTemps(resolvedTempsId);
+                    if (result?.success) {
+                        deletedSomething = true;
+                        this.selectedTempsIds.delete(String(resolvedTempsId));
+                    } else if (result?.error && String(result.error).includes('non trouvé')) {
+                        // déjà absent : continuer avec l'historique
+                    } else if (result?.error) {
+                        hardError = result.error;
+                    }
+                } catch (error) {
+                    const msg = String(error?.message || '');
+                    if (msg.includes('déjà transmis')) {
+                        alreadyTransmitted = true;
+                    } else if (!msg.includes('non trouvé')) {
+                        hardError = msg || 'Erreur suppression temps';
+                    }
+                }
+            }
+
+            if (resolvedEventId) {
+                try {
+                    const result = await this.apiService.deleteOperation(resolvedEventId);
+                    if (result?.success) {
+                        deletedSomething = true;
+                    } else if (result?.error && !String(result.error).includes('non trouv')) {
+                        hardError = hardError || result.error;
+                    }
+                } catch (error) {
+                    const msg = String(error?.message || '');
+                    if (!msg.includes('non trouv')) {
+                        hardError = hardError || msg || 'Erreur suppression historique';
+                    }
+                }
+            }
+
+            if (alreadyTransmitted && !deletedSomething) {
+                this.notificationManager.warning('Cet enregistrement a déjà été transmis à SILOG : il ne peut plus être supprimé. Actualisation...');
+            } else if (deletedSomething) {
+                this.notificationManager.success('Ligne supprimée');
+            } else if (hardError) {
+                this.notificationManager.error(hardError);
+            } else {
+                this.notificationManager.warning('Cette ligne n\'existe plus. Actualisation...');
+            }
+
+            await this.loadData();
+        } catch (error) {
+            this.errorHandler.handle(error, 'deleteAdminLine', 'Erreur lors de la suppression');
         } finally {
             this.loadingIndicator.hide('deleteMonitoring');
         }
+    }
+
+    async deleteOperation(id) {
+        return this.deleteAdminLine({ eventId: id, fallbackId: id });
+    }
+
+    async deleteMonitoringRecord(id) {
+        return this.deleteAdminLine({ tempsId: id, fallbackId: id });
     }
 
     /**

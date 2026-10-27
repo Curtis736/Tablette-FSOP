@@ -1,14 +1,14 @@
 // Classe principale de l'application
-import { FRONTEND_RELEASE } from '../version.js?v=20261022.3';
+import { FRONTEND_RELEASE } from '../version.js?v=20261026.1';
 // ?v= aligné sur FRONTEND_RELEASE (frontend/version.js) pour invalidation navigateur
-import OperateurInterface from './OperateurInterface.js?v=20261022.3';
-import AdminPage from './AdminPage.js?v=20261022.3';
-import RhPage from './RhPage.js?v=20261022.3';
-import ApiService from '../services/ApiService.js?v=20261022.3';
-import StorageService from '../services/StorageService.js?v=20261022.3';
-import notificationManager from '../utils/NotificationManager.js?v=20261022.3';
+import OperateurInterface from './OperateurInterface.js?v=20261026.1';
+import AdminPage from './AdminPage.js?v=20261026.1';
+import RhPage from './RhPage.js?v=20261026.1';
+import ApiService from '../services/ApiService.js?v=20261026.1';
+import StorageService from '../services/StorageService.js?v=20261026.1';
+import notificationManager from '../utils/NotificationManager.js?v=20261026.1';
 import { ADMIN_CONFIG } from '../utils/Constants.js';
-import { clearOfflineApiCache } from '../utils/OfflineApiCache.js?v=20261022.3';
+import { clearOfflineApiCache } from '../utils/OfflineApiCache.js?v=20261026.1';
 
 // Quand FRONTEND_RELEASE change, purge des caches locaux (voir initializeApp)
 const APP_BUILD_ID = FRONTEND_RELEASE;

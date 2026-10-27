@@ -433,6 +433,8 @@ describe('AdminPage', () => {
           EndTime: '10:00'
         },
         {
+          EventId: 99,
+          id: 99,
           OperatorCode: '922',
           LancementCode: 'LT001',
           Phase: null,
@@ -445,6 +447,7 @@ describe('AdminPage', () => {
       const out = adminPage._dedupeAdminConsolidatedOverlay(ops);
       expect(out).toHaveLength(1);
       expect(out[0].TempsId).toBe(10);
+      expect(out[0].EventId).toBe(99);
     });
 
     it('masque ABTEMPS quand des segments productifs couvrent le même cycle (pas de chevauchement)', () => {
@@ -898,22 +901,32 @@ describe('AdminPage', () => {
     });
   });
 
-  describe.skip('deleteOperation', () => {
+  describe('deleteAdminLine', () => {
     beforeEach(() => {
       adminPage = new AdminPage(mockApp);
+      adminPage.loadData = vi.fn().mockResolvedValue(undefined);
+      adminPage.loadingIndicator = { show: vi.fn(), hide: vi.fn() };
+      adminPage.validator = { validateId: (id) => Number.isFinite(Number(id)) };
+      adminPage.selectedTempsIds = new Set();
       global.confirm = vi.fn(() => true);
     });
 
-    it('should delete operation', async () => {
+    it('supprime ABTEMPS et historique en une seule action', async () => {
+      mockApiService.deleteMonitoringTemps.mockResolvedValue({ success: true });
       mockApiService.deleteOperation.mockResolvedValue({ success: true });
-      adminPage.loadData = vi.fn();
-      await adminPage.deleteOperation(1);
-      expect(mockApiService.deleteOperation).toHaveBeenCalledWith(1);
+
+      await adminPage.deleteAdminLine({ tempsId: 10, eventId: '99' });
+
+      expect(mockApiService.deleteMonitoringTemps).toHaveBeenCalledWith(10);
+      expect(mockApiService.deleteOperation).toHaveBeenCalledWith('99');
+      expect(adminPage.loadData).toHaveBeenCalledTimes(1);
+      expect(mockNotificationManager.success).toHaveBeenCalled();
     });
 
-    it('should not delete if cancelled', async () => {
+    it('ne fait rien si annulé', async () => {
       global.confirm = vi.fn(() => false);
-      await adminPage.deleteOperation(1);
+      await adminPage.deleteAdminLine({ tempsId: 10, eventId: '99' });
+      expect(mockApiService.deleteMonitoringTemps).not.toHaveBeenCalled();
       expect(mockApiService.deleteOperation).not.toHaveBeenCalled();
     });
   });

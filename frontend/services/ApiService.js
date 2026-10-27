@@ -874,8 +874,11 @@ class ApiService {
         return this.post('/operators/pause', { operatorId, lancementCode, codeOperation, pauseTypeCode });
     }
 
-    async getPauseTypes() {
-        return this.get('/operators/pause-types');
+    async getPauseTypes({ operatorCode, operatorName } = {}) {
+        const params = {};
+        if (operatorCode) params.operatorCode = operatorCode;
+        if (operatorName) params.operatorName = operatorName;
+        return this.get('/operators/pause-types', params);
     }
 
     async getOperatorCounters(operatorCode, weekStart = null) {

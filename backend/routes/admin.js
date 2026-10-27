@@ -7,7 +7,6 @@ const dataValidation = require('../services/DataValidationService');
 const { getConcurrencyStats } = require('../middleware/concurrencyManager');
 const SessionService = require('../services/SessionService');
 const { generateRequestId } = require('../middleware/audit');
-const FactorialOperatorMappingService = require('../services/FactorialOperatorMappingService');
 const AiAssistService = require('../services/AiAssistService');
 
 // IMPORTANT: toutes les routes /api/admin doivent être protégées
@@ -223,68 +222,6 @@ const ADMIN_DASHBOARD_OPERATIONS_CAP = Math.min(
     Math.max(Number.parseInt(process.env.ADMIN_DASHBOARD_OPERATIONS_LIMIT || '10000', 10) || 10000, 500),
     20000
 );
-
-// ===== Mapping opérateurs Tablette <-> Factorial =====
-router.get('/factorial/mappings', async (req, res) => {
-    try {
-        const activeOnly = String(req.query.activeOnly || '').toLowerCase() === 'true';
-        const mappings = await FactorialOperatorMappingService.getAllMappings({ activeOnly });
-        return res.json({
-            success: true,
-            count: mappings.length,
-            mappings
-        });
-    } catch (error) {
-        console.error('❌ Erreur récupération mappings Factorial:', error);
-        return res.status(500).json({ success: false, error: 'FACTORIAL_MAPPING_LIST_FAILED', message: error.message });
-    }
-});
-
-router.put('/factorial/mappings/:operatorCode', async (req, res) => {
-    try {
-        const operatorCode = String(req.params.operatorCode || '').trim();
-        const { factorialEmployeeId, isActive = true } = req.body || {};
-
-        if (!operatorCode) {
-            return res.status(400).json({ success: false, error: 'OPERATOR_CODE_REQUIRED' });
-        }
-
-        const mapping = await FactorialOperatorMappingService.upsertMapping({
-            operatorCode,
-            factorialEmployeeId,
-            isActive
-        });
-
-        return res.json({
-            success: true,
-            message: 'Mapping Factorial enregistré',
-            mapping
-        });
-    } catch (error) {
-        const status = ['OPERATOR_CODE_REQUIRED', 'FACTORIAL_EMPLOYEE_ID_REQUIRED'].includes(error.message) ? 400 : 500;
-        console.error('❌ Erreur upsert mapping Factorial:', error);
-        return res.status(status).json({ success: false, error: error.message || 'FACTORIAL_MAPPING_UPSERT_FAILED' });
-    }
-});
-
-router.delete('/factorial/mappings/:operatorCode', async (req, res) => {
-    try {
-        const operatorCode = String(req.params.operatorCode || '').trim();
-        if (!operatorCode) {
-            return res.status(400).json({ success: false, error: 'OPERATOR_CODE_REQUIRED' });
-        }
-
-        await FactorialOperatorMappingService.deleteMapping(operatorCode);
-        return res.json({
-            success: true,
-            message: 'Mapping Factorial supprimé'
-        });
-    } catch (error) {
-        const status = error.message === 'OPERATOR_CODE_REQUIRED' ? 400 : 500;
-        console.error('❌ Erreur suppression mapping Factorial:', error);
-        return res.status(status).json({ success: false, error: error.message || 'FACTORIAL_MAPPING_DELETE_FAILED' });
-    }
-});
 
 // Fonction pour valider et récupérer les informations d'un lancement depuis LCTE
 async function validateLancement(codeLancement) {

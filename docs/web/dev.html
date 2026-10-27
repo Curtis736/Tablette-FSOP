@@ -105,7 +105,7 @@ Express (sedi-tablette-backend)  :3001 (interne Docker)
         <p>
           Variables sensibles dans <code>docker/.env</code> (non versionné) :
           mots de passe SQL, <code>JWT_SECRET</code>, <code>ADMIN_PASSWORD</code>,
-          <code>DB_SERVER_IP</code>, montages CIFS, Factorial, webhooks alertes.
+          <code>DB_SERVER_IP</code>, montages CIFS, webhooks alertes.
         </p>
       </article>
 
@@ -266,7 +266,6 @@ RestantH  = TheoH - ConsommeH</code></pre>
           <tr><td>Clôture opérations ouvertes</td><td><code>ENABLE_AUTO_CLOSE_OPS</code></td><td>19h</td></tr>
           <tr><td>Validation auto temps (NULL → O)</td><td><code>ENABLE_AUTO_VALIDATE_TEMPS</code></td><td>20h</td></tr>
           <tr><td>Clôture dashboard (jours passés)</td><td><code>ENABLE_MIDNIGHT_TRANSMIT_DASHBOARD</code></td><td>00:05</td></tr>
-          <tr><td>Sync Factorial + auto-close</td><td><code>ENABLE_FACTORIAL_AUTOCLOSE</code></td><td>≥17h, /30 min</td></tr>
           <tr><td>Fermeture sessions minuit</td><td>(interne)</td><td>00:00</td></tr>
           <tr><td>Nettoyage au boot</td><td><code>DISABLE_STARTUP_CLEANUP</code></td><td>désactivé en prod compose</td></tr>
         </table>
