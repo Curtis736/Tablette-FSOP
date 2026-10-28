@@ -401,30 +401,42 @@ class ConsolidationService {
                 return null;
             };
 
+            const workDateParts = (event) => {
+                const raw = event?.DateCreation || event?.dateCreation;
+                if (typeof raw === 'string') {
+                    const match = raw.trim().match(/^(\d{4})-(\d{2})-(\d{2})/);
+                    if (match) {
+                        return {
+                            year: Number.parseInt(match[1], 10),
+                            month: Number.parseInt(match[2], 10),
+                            day: Number.parseInt(match[3], 10)
+                        };
+                    }
+                }
+                const key = ConsolidationService._localDateKey(raw || event?.CreatedAt || event?.createdAt);
+                if (!key) return null;
+                const [year, month, day] = key.split('-').map((part) => Number.parseInt(part, 10));
+                return { year, month, day };
+            };
+
             const buildDateTime = (event, kind /* 'start' | 'end' */) => {
-                // 1) Prefer CreatedAt if present (full datetime)
+                // HeureDebut / HeureFin sont la vérité métier : une correction admin
+                // les met à jour sans toucher CreatedAt. CreatedAt ne sert qu'en secours.
+                const timeField = kind === 'start'
+                    ? (event.HeureDebut || event.HeureFin)
+                    : (event.HeureFin || event.HeureDebut);
+                const clock = extractTime(timeField);
+                const parts = workDateParts(event);
+                if (clock && parts) {
+                    return new Date(parts.year, parts.month - 1, parts.day, clock.hour, clock.minute, 0, 0);
+                }
+
                 const createdAt = event.CreatedAt || event.createdAt;
                 if (createdAt) {
                     const d = new Date(createdAt);
                     if (!Number.isNaN(d.getTime())) return d;
                 }
 
-                // 2) Use DateCreation as date + HeureDebut/HeureFin as time
-                const base = new Date(event.DateCreation || event.dateCreation);
-                if (!Number.isNaN(base.getTime())) {
-                    const timeField = kind === 'start'
-                        ? (event.HeureDebut || event.HeureFin)
-                        : (event.HeureFin || event.HeureDebut);
-                    const t = extractTime(timeField);
-                    if (t) {
-                        base.setHours(t.hour, t.minute, 0, 0);
-                        return base;
-                    }
-                    // If DateCreation already contains time, keep it
-                    return base;
-                }
-
-                // 3) Last resort: now
                 return new Date();
             };
 

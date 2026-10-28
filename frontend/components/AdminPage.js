@@ -1105,7 +1105,6 @@ class AdminPage {
             if (enableAutoConsolidate && !this._isConsolidating) {
                 const terminatedWithoutTempsId = this.operations.filter(op =>
                     !op._isPauseRow &&
-                    !op._isWorkSegment &&
                     this.isOperationTerminated(op) && !op.TempsId && (op._isUnconsolidated === true || op.OperatorCode)
                 );
                 // Une ligne qui ne se consolide pas n'est retentée qu'après 10 min

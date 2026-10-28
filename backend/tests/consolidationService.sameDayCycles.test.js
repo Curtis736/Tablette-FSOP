@@ -273,4 +273,62 @@ describe('ConsolidationService - same-day cycles', () => {
     );
     expect(inserts).toHaveLength(1);
   });
+
+  it('uses corrected HeureDebut/HeureFin instead of the original CreatedAt', async () => {
+    const corrected = [
+      {
+        Ident: 'DEBUT',
+        Phase: '010',
+        CodeRubrique: 'ConnectS',
+        DateCreation: '2026-10-27',
+        CreatedAt: '2026-10-27T08:00:00',
+        HeureDebut: '09:30:00',
+        NoEnreg: 1
+      },
+      {
+        Ident: 'FIN',
+        Phase: '010',
+        CodeRubrique: 'ConnectS',
+        DateCreation: '2026-10-27',
+        CreatedAt: '2026-10-27T10:00:00',
+        HeureFin: '11:15:00',
+        NoEnreg: 2
+      }
+    ];
+
+    const db = makeDb(async (query) => {
+      if (query.includes('ABHISTORIQUE_OPERATEURS')) return corrected;
+      if (query.includes('ABTEMPS_OPERATEURS') && query.includes('StartTime = @startTime') && query.includes('SELECT')) {
+        return [];
+      }
+      if (query.includes('INSERT') && query.includes('ABTEMPS_OPERATEURS')) {
+        return [{ TempsId: 912 }];
+      }
+      return [];
+    });
+
+    const res = await ConsolidationService.consolidateOperation('912', 'LT2610001', {
+      autoFix: true,
+      skipSilogValidate: true,
+      phase: '010',
+      codeRubrique: 'ConnectS',
+      db
+    });
+
+    expect(res.success).toBe(true);
+    expect(res.tempsId).toBe(912);
+    const inserts = db.executeQuery.mock.calls.filter(([q]) =>
+      String(q).includes('INSERT') && String(q).includes('ABTEMPS')
+    );
+    expect(inserts).toHaveLength(1);
+    const params = inserts[0][1];
+    expect(params.startTime.getFullYear()).toBe(2026);
+    expect(params.startTime.getMonth()).toBe(9);
+    expect(params.startTime.getDate()).toBe(27);
+    expect(params.startTime.getHours()).toBe(9);
+    expect(params.startTime.getMinutes()).toBe(30);
+    expect(params.endTime.getHours()).toBe(11);
+    expect(params.endTime.getMinutes()).toBe(15);
+    expect(params.productiveDuration).toBe(105);
+  });
 });
