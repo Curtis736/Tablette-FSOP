@@ -2381,6 +2381,25 @@ tr:hover {
     flex-wrap: wrap;
     gap: 8px;
 }
+.add-op-field {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    margin: 0 0 12px;
+    font-size: 0.9rem;
+    color: #334155;
+}
+.add-op-field input {
+    font: inherit;
+    padding: 8px 10px;
+    border: 1px solid #cbd5e1;
+    border-radius: 8px;
+}
+.add-op-error {
+    margin: 0 0 12px;
+    color: #b91c1c;
+    font-size: 0.9rem;
+}
 
 .actions-cell .btn-hold-disabled {
     display: inline-flex;

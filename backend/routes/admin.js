@@ -279,6 +279,25 @@ async function validateLancement(codeLancement) {
 }
 
 // Fonction pour valider et formater une heure au format TIME SQL
+/** Date admin AAAA-MM-JJ, aujourd'hui ou dans le passé. null si absente, false si invalide. */
+function normalizeAdminWorkDate(value) {
+    if (value == null || String(value).trim() === '') return null;
+    const s = String(value).trim().slice(0, 10);
+    const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(s);
+    if (!match) return false;
+    const year = Number.parseInt(match[1], 10);
+    const month = Number.parseInt(match[2], 10);
+    const day = Number.parseInt(match[3], 10);
+    const picked = new Date(year, month - 1, day);
+    if (picked.getFullYear() !== year || picked.getMonth() !== month - 1 || picked.getDate() !== day) {
+        return false;
+    }
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    if (picked > today) return false;
+    return s;
+}
+
 function formatTimeForSQL(timeInput) {
     if (!timeInput) return null;
     
@@ -2081,6 +2100,27 @@ router.put('/operations/:id', async (req, res) => {
 router.post('/operations', async (req, res) => {
     try {
         const { operatorId, lancementCode, status = 'DEBUT', phase = '', codeOperation } = req.body;
+        const workDate = normalizeAdminWorkDate(req.body.date);
+        if (workDate === false) {
+            return res.status(400).json({
+                success: false,
+                error: 'Date invalide (AAAA-MM-JJ, aujourd\'hui ou dans le passé)'
+            });
+        }
+        const startHms = formatTimeForSQL(req.body.startTime);
+        const endHms = formatTimeForSQL(req.body.endTime);
+        if (req.body.startTime && !startHms) {
+            return res.status(400).json({ success: false, error: 'Heure de début invalide (HH:mm)' });
+        }
+        if (req.body.endTime && !endHms) {
+            return res.status(400).json({ success: false, error: 'Heure de fin invalide (HH:mm)' });
+        }
+        if (endHms && !startHms) {
+            return res.status(400).json({ success: false, error: 'Heure de début requise quand une heure de fin est saisie' });
+        }
+        if (startHms && endHms && timeToMinutes(endHms) <= timeToMinutes(startHms)) {
+            return res.status(400).json({ success: false, error: 'L\'heure de fin doit être après l\'heure de début' });
+        }
         
         console.log('=== AJOUT NOUVELLE OPERATION ===');
         console.log('Données reçues:', req.body);
@@ -2168,6 +2208,18 @@ router.post('/operations', async (req, res) => {
         const requestId = req.audit?.requestId || generateRequestId();
         const activeSession = operatorId ? await SessionService.getActiveSession(operatorId) : null;
         
+        const dateSql = workDate ? 'CAST(@workDate AS DATE)' : 'CAST(GETDATE() AS DATE)';
+        const debutHeureSql = startHms ? 'CAST(@startHms AS TIME)' : 'CAST(GETDATE() AS TIME)';
+        const createdAtSql = (workDate && startHms)
+            ? "DATEADD(SECOND, DATEDIFF(SECOND, '00:00:00', CAST(@startHms AS TIME)), CAST(@workDate AS DATETIME2))"
+            : 'GETDATE()';
+        const insertIdent = endHms ? 'DEBUT' : status;
+        const insertStatut = endHms ? 'EN_COURS' : finalStatus;
+        const insertHeureDebut = (insertIdent === 'DEBUT' || startHms) ? debutHeureSql : 'NULL';
+        const insertHeureFin = (!endHms && insertIdent === 'FIN')
+            ? (startHms ? 'CAST(@startHms AS TIME)' : 'CAST(GETDATE() AS TIME)')
+            : 'NULL';
+
         const insertQuery = `
             INSERT INTO [SEDI_APP_INDEPENDANTE].[dbo].[ABHISTORIQUE_OPERATEURS]
             (OperatorCode, CodeLanctImprod, CodeRubrique, Ident, Phase, Statut, HeureDebut, HeureFin, DateCreation, SessionId, RequestId, CreatedAt)
@@ -2179,12 +2231,12 @@ router.post('/operations', async (req, res) => {
                 @status,
                 @phase,
                 @finalStatus,
-                ${status === 'DEBUT' ? 'CAST(GETDATE() AS TIME)' : 'NULL'},
-                ${status === 'FIN' ? 'CAST(GETDATE() AS TIME)' : 'NULL'},
-                CAST(GETDATE() AS DATE),
+                ${insertHeureDebut},
+                ${insertHeureFin},
+                ${dateSql},
                 @sessionId,
                 @requestId,
-                GETDATE()
+                ${createdAtSql}
             )
         `;
         
@@ -2192,11 +2244,13 @@ router.post('/operations', async (req, res) => {
             operatorId,
             lancementCode,
             codeRubrique,
-            status,
+            status: insertIdent,
             phase: finalPhase,
-            finalStatus,
+            finalStatus: insertStatut,
             sessionId: activeSession ? activeSession.SessionId : null,
-            requestId
+            requestId,
+            workDate,
+            startHms
         };
         
         console.log('Requête SQL à exécuter:', insertQuery);
@@ -2206,10 +2260,41 @@ router.post('/operations', async (req, res) => {
         const insertedId = insertResult?.[0]?.NoEnreg ?? null;
         
         console.log('✅ Opération ajoutée avec succès dans ABHISTORIQUE_OPERATEURS, ID:', insertedId);
+
+        if (endHms) {
+            const finCreatedAtSql = workDate
+                ? "DATEADD(SECOND, DATEDIFF(SECOND, '00:00:00', CAST(@endHms AS TIME)), CAST(@workDate AS DATETIME2))"
+                : 'GETDATE()';
+            await executeQuery(`
+                INSERT INTO [SEDI_APP_INDEPENDANTE].[dbo].[ABHISTORIQUE_OPERATEURS]
+                (OperatorCode, CodeLanctImprod, CodeRubrique, Ident, Phase, Statut, HeureDebut, HeureFin, DateCreation, SessionId, RequestId, CreatedAt)
+                VALUES (
+                    @operatorId,
+                    @lancementCode,
+                    @codeRubrique,
+                    'FIN',
+                    @phase,
+                    'TERMINE',
+                    NULL,
+                    CAST(@endHms AS TIME),
+                    ${dateSql},
+                    @sessionId,
+                    @requestId,
+                    ${finCreatedAtSql}
+                )
+            `, { ...params, endHms });
+            console.log(`✅ FIN ajoutée le ${workDate || 'jour courant'} à ${endHms}`);
+        }
         
-        // Si c'est une fin de lancement, consolider les temps
-        if (status === 'FIN' || status === 'TERMINE') {
-            await consolidateLancementTimes(operatorId, lancementCode);
+        // Si c'est une fin de lancement, consolider les temps sur le jour choisi
+        if (endHms || status === 'FIN' || status === 'TERMINE') {
+            const ConsolidationService = require('../services/ConsolidationService');
+            await ConsolidationService.consolidateOperation(operatorId, lancementCode, {
+                autoFix: true,
+                phase: finalPhase,
+                codeRubrique,
+                dateCreation: workDate || undefined
+            });
         }
         
         res.json({
@@ -5369,3 +5454,4 @@ router.get('/diagnostic-lctc', authenticateAdmin, async (req, res) => {
 module.exports = router;
 module.exports.processLancementEventsWithPauses = processLancementEventsWithPauses;
 module.exports.getAdminOperations = getAdminOperations;
+module.exports.normalizeAdminWorkDate = normalizeAdminWorkDate;

@@ -757,6 +757,96 @@ class AdminPage {
     }
 
     /**
+     * Calendrier + heures pour poser une ligne sur un jour choisi (y compris hier).
+     * @returns {Promise<{workDate: string, startHm: string, endHm: string}|null>}
+     */
+    _pickAddSchedule(defaultDate) {
+        const today = toLocalDateOnlyString(new Date());
+        return new Promise((resolve) => {
+            const modal = createElement('div', {
+                className: 'ai-assist-modal',
+                role: 'dialog',
+                'aria-modal': 'true'
+            });
+            modal.innerHTML = `
+                <div class="ai-assist-modal-card">
+                    <div class="ai-assist-modal-header">
+                        <strong>Jour et heures</strong>
+                        <button type="button" class="ai-assist-close" aria-label="Fermer">&times;</button>
+                    </div>
+                    <label class="add-op-field">Date
+                        <input type="date" class="add-op-date" value="${defaultDate || today}" max="${today}" required>
+                    </label>
+                    <label class="add-op-field">Heure de début
+                        <input type="time" class="add-op-start" required>
+                    </label>
+                    <label class="add-op-field">Heure de fin
+                        <input type="time" class="add-op-end">
+                    </label>
+                    <p class="ai-assist-motif">Laisser la fin vide si la ligne est encore en cours.</p>
+                    <p class="add-op-error" hidden></p>
+                    <div class="ai-assist-actions">
+                        <button type="button" class="btn-secondary add-op-cancel">Annuler</button>
+                        <button type="button" class="btn-primary add-op-ok">Ajouter</button>
+                    </div>
+                </div>`;
+            const close = (value) => {
+                modal.remove();
+                resolve(value);
+            };
+            const showError = (message) => {
+                const el = modal.querySelector('.add-op-error');
+                if (!el) return;
+                el.hidden = !message;
+                el.textContent = message || '';
+            };
+            modal.querySelector('.ai-assist-close')?.addEventListener('click', () => close(null));
+            modal.querySelector('.add-op-cancel')?.addEventListener('click', () => close(null));
+            modal.addEventListener('click', (event) => {
+                if (event.target === modal) close(null);
+            });
+            modal.querySelector('.add-op-ok')?.addEventListener('click', () => {
+                const workDate = String(modal.querySelector('.add-op-date')?.value || '').trim();
+                const startHm = String(modal.querySelector('.add-op-start')?.value || '').trim();
+                const endHm = String(modal.querySelector('.add-op-end')?.value || '').trim();
+                if (!/^\d{4}-\d{2}-\d{2}$/.test(workDate) || workDate > today) {
+                    showError('Choisis une date, aujourd’hui ou dans le passé.');
+                    return;
+                }
+                if (!/^\d{2}:\d{2}$/.test(startHm)) {
+                    showError('Choisis une heure de début.');
+                    return;
+                }
+                if (endHm && (!/^\d{2}:\d{2}$/.test(endHm) || endHm <= startHm)) {
+                    showError('L’heure de fin doit être après l’heure de début.');
+                    return;
+                }
+                close({ workDate, startHm, endHm });
+            });
+            document.body.appendChild(modal);
+            modal.querySelector('.add-op-date')?.focus();
+        });
+    }
+
+    /** Jour proposé à l'ajout : le jour affiché, ou aujourd'hui en vue semaine / mois. */
+    _defaultAdminAddDate() {
+        const periodFilter = this.domCache.get('periodFilter') || document.getElementById('periodFilter');
+        const period = periodFilter?.value || 'month';
+        const today = toLocalDateOnlyString(new Date());
+        if (period === 'today') return today;
+        if (period === 'yesterday') {
+            const y = new Date();
+            y.setDate(y.getDate() - 1);
+            return toLocalDateOnlyString(y);
+        }
+        if (period === 'custom') {
+            const pick = (this.domCache.get('adminDatePicker') || document.getElementById('adminDatePicker'))?.value?.trim();
+            if (pick) return pick;
+        }
+        return today;
+    }
+
+    /**
      * Si le filtre affiche un seul jour (aujourd'hui, hier, calendrier) qui n'est pas
      * celui de la ligne, basculer sur le jour de la ligne. Mois / semaine inchangés.
      */
@@ -1887,6 +1977,10 @@ class AdminPage {
             }
 
             const phase = prompt('Phase (optionnel - laisser vide pour ERP/auto) :') || '';
+
+            const schedule = await this._pickAddSchedule(this._defaultAdminAddDate());
+            if (!schedule) return;
+            const { workDate, startHm, endHm } = schedule;
             
             // Créer une nouvelle opération
             const newOperation = {
@@ -1894,12 +1988,17 @@ class AdminPage {
                 lancementCode: lancementCode,
                 phase: phase,
                 codeOperation,
-                startTime: new Date().toISOString(),
-                status: 'DEBUT'
+                date: workDate,
+                startTime: startHm,
+                endTime: endHm || undefined,
+                status: endHm ? 'FIN' : 'DEBUT'
             };
             
             // Valider l'opération complète
-            const validation = this.validator.validateOperation(newOperation);
+            const validation = this.validator.validateOperation({
+                operatorId: operatorCode,
+                lancementCode
+            });
             if (!validation.valid) {
                 this.notificationManager.error(`Erreurs de validation:\n${validation.errors.join('\n')}`);
                 return;
@@ -1926,7 +2025,8 @@ class AdminPage {
                     
                     // Attendre un peu pour que le backend ait fini de traiter
                     await new Promise(resolve => setTimeout(resolve, 500));
-                    
+
+                    this._keepAdminPeriodOnRecordDay(workDate);
                     // Recharger les données pour afficher la nouvelle ligne
                     await this.loadData();
                 } else {
