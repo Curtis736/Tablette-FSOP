@@ -795,6 +795,40 @@ describe('AdminPage', () => {
       expect(row.querySelector('.transmitted-lock')).toBeTruthy();
     });
 
+    it('keeps a corrected unconsolidated line when another cycle the same day is transmitted', () => {
+      adminPage.operations = [
+        {
+          TempsId: 10,
+          OperatorCode: '592',
+          OperatorName: 'Madjuki',
+          LancementCode: 'LT2600001',
+          StartTime: '08:00',
+          EndTime: '16:00',
+          StatutTraitement: 'T',
+          StatusCode: 'TERMINE',
+          DateCreation: '2026-10-27'
+        },
+        {
+          EventId: 77,
+          OperatorCode: '592',
+          OperatorName: 'Madjuki',
+          LancementCode: 'LT2600001',
+          StartTime: '08:00',
+          EndTime: '15:00',
+          StatutTraitement: null,
+          StatusCode: 'TERMINE',
+          Status: 'Terminé',
+          _isUnconsolidated: true,
+          _isWorkSegment: true,
+          DateCreation: '2026-10-27'
+        }
+      ];
+      adminPage.updateOperationsTable();
+      const text = adminPage.operationsTableBody.textContent;
+      expect(text).toContain('15:00');
+      expect(text).toContain('16:00');
+    });
+
     it('should filter by operator number', () => {
       adminPage.operations = [
         { TempsId: 1, OperatorCode: '754', LancementCode: 'LT2600960', StatutTraitement: null, DateCreation: '2026-10-09' },

@@ -2026,28 +2026,21 @@ class AdminPage {
             });
         }
 
-        // Transmis (T) : visibles et grisés. On masque seulement les overlays
-        // historiques (segments / non consolidés) du même opérateur+LT+jour —
-        // jamais les autres TempsId (autres cycles encore NULL/O).
-        const transmittedKeys = new Set();
+        // Transmis (T) : visibles et grisés. On masque seulement l'overlay historique
+        // qui répète exactement le même créneau (début + fin). Une ligne corrigée
+        // (autre heure, sans TempsId) reste affichée, même si un cycle du même jour est déjà T.
+        const transmittedExactSlots = new Set();
         for (const op of this.operations || []) {
             if (String(op?.StatutTraitement ?? '').toUpperCase().trim() !== 'T') continue;
-            const oc = String(op?.OperatorCode || op?.operatorCode || op?.operatorId || '').trim();
-            const lc = String(op?.LancementCode || op?.lancementCode || '').trim().toUpperCase();
-            const ymd = this._parseOpDateCreationLocalYmd(op?.DateCreation) || '';
-            transmittedKeys.add(`${oc}|${lc}|${ymd}`);
+            transmittedExactSlots.add(this._getAdminMergeDedupSlotKey(op));
         }
         filteredOperations = filteredOperations.filter(op => {
             if (!this.shouldShowAdminDashboardRow(op)) return false;
             const isT = String(op?.StatutTraitement ?? '').toUpperCase().trim() === 'T';
             if (isT) return true;
-            // Autre cycle ABTEMPS (NULL/O/A) : toujours visible même si un frère est T
             if (op?.TempsId != null && String(op.TempsId).trim() !== '') return true;
-            if (transmittedKeys.size === 0) return true;
-            const oc = String(op?.OperatorCode || op?.operatorCode || op?.operatorId || '').trim();
-            const lc = String(op?.LancementCode || op?.lancementCode || '').trim().toUpperCase();
-            const ymd = this._parseOpDateCreationLocalYmd(op?.DateCreation) || '';
-            return !transmittedKeys.has(`${oc}|${lc}|${ymd}`);
+            if (transmittedExactSlots.size === 0) return true;
+            return !transmittedExactSlots.has(this._getAdminMergeDedupSlotKey(op));
         });
 
         // Mémoriser pour stats cohérentes avec le tableau

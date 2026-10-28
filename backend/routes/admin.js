@@ -1610,48 +1610,9 @@ async function getAdminOperations(date, page = 1, limit = 25, dateStart = null, 
             filteredEvents = allEvents.filter(event => String(event.DateCreation || '') === targetDate);
         }
 
-        // Exclure l'historique seulement quand TOUS les ABTEMPS du même
-        // opérateur+LT+phase+rubrique sont déjà transmis (T).
-        // Si un cycle reste NULL/O, garder l'historique (multi-cycles même jour).
-        try {
-            let abtempsRows = [];
-            if (isRange) {
-                const abtempsRangeQuery = `
-                    SELECT OperatorCode, LancementCode, Phase, CodeRubrique, StatutTraitement
-                    FROM [SEDI_APP_INDEPENDANTE].[dbo].[ABTEMPS_OPERATEURS] WITH (NOLOCK)
-                    WHERE DateCreation >= @dStart
-                      AND DateCreation <= @dEnd
-                `;
-                abtempsRows = await executeQuery(abtempsRangeQuery, { dStart, dEnd });
-            } else {
-                const abtempsQuery = `
-                    SELECT OperatorCode, LancementCode, Phase, CodeRubrique, StatutTraitement
-                    FROM [SEDI_APP_INDEPENDANTE].[dbo].[ABTEMPS_OPERATEURS] WITH (NOLOCK)
-                    WHERE DateCreation = @date
-                `;
-                abtempsRows = await executeQuery(abtempsQuery, { date: targetDate });
-            }
-            const fullyTransmittedKeys = new Set();
-            const keyStats = new Map();
-            for (const t of abtempsRows) {
-                const k = `${t.OperatorCode}_${t.LancementCode}_${String(t.Phase || '').trim()}_${String(t.CodeRubrique || '').trim()}`;
-                if (!keyStats.has(k)) keyStats.set(k, { hasT: false, hasPending: false });
-                const st = keyStats.get(k);
-                if (String(t.StatutTraitement || '').toUpperCase().trim() === 'T') st.hasT = true;
-                else st.hasPending = true;
-            }
-            for (const [k, st] of keyStats) {
-                if (st.hasT && !st.hasPending) fullyTransmittedKeys.add(k);
-            }
-            const beforeFilter = filteredEvents.length;
-            filteredEvents = filteredEvents.filter(e => {
-                const k = `${e.OperatorCode}_${e.CodeLanctImprod}_${String(e.Phase || '').trim()}_${String(e.CodeRubrique || '').trim()}`;
-                return !fullyTransmittedKeys.has(k);
-            });
-            console.log(`🔒 Filtre transmitted (T complet): ${beforeFilter - filteredEvents.length} événements masqués (${filteredEvents.length} restants)`);
-        } catch (e) {
-            console.warn('⚠️ Impossible de filtrer les opérations transmises:', e.message);
-        }
+        // Ne pas retirer l'historique quand un ABTEMPS du même jour est déjà T.
+        // Une correction (heures modifiées, pas encore reconsolidées) doit rester visible.
+        // Le front masque seulement le doublon exact (même début et même fin qu'une ligne T).
 
         // Regrouper les événements par lancement mais garder les pauses séparées
         console.log('🔍 Événements avant regroupement:', filteredEvents.length);
