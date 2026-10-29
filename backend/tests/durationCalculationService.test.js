@@ -263,9 +263,25 @@ describe('processLancementEventsWithPauses work segments (SILOG)', () => {
     const openEvents = baseEvents.filter((e) => e.Ident !== 'FIN');
     const items = processLancementEventsWithPauses(openEvents, { includeWorkSegments: true });
     expect(items).toHaveLength(2);
+    expect(items[0].startTime).toBe('07:28');
+    expect(items[0].endTime).toBe('12:00');
+    expect(items[0].statusCode).toBe('EN_COURS');
     expect(items[1].startTime).toBe('12:05');
     expect(items[1].endTime).toBeNull();
     expect(items[1].statusCode).toBe('EN_COURS');
+  });
+
+  it('drops a reprise finished in the same minute', () => {
+    const events = [
+      { ...baseEvents[0], HeureDebut: '09:39', NoEnreg: 1 },
+      { ...baseEvents[1], HeureDebut: '09:52', NoEnreg: 2 },
+      { ...baseEvents[2], HeureDebut: '10:17', NoEnreg: 3 },
+      { ...baseEvents[3], HeureFin: '10:17', NoEnreg: 4 }
+    ];
+    const items = processLancementEventsWithPauses(events, { includeWorkSegments: true });
+    const segments = items.filter((i) => i._isWorkSegment);
+    expect(segments.map((s) => `${s.startTime}-${s.endTime}`)).toEqual(['09:39-09:52']);
+    expect(segments[0].statusCode).toBe('TERMINE');
   });
 
   it('marks the last segment as "En pause" when operator is currently paused', () => {

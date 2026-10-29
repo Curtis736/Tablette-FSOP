@@ -209,8 +209,8 @@ class OperateurInterface {
             const resp = await this.apiService.getCurrentOperation(operatorCode);
             const current = resp?.data ?? resp;
             const dbLancementCode = current?.data?.lancementCode || current?.lancementCode || null;
-            const dbLastEvent = String(current?.data?.lastEvent || current?.lastEvent || '').toUpperCase();
-            const dbStatus = String(current?.data?.status || current?.status || '').toUpperCase();
+            const dbLastEvent = String(current?.data?.lastEvent || current?.lastEvent || '').trim().toUpperCase();
+            const dbStatus = String(current?.data?.status || current?.status || '').trim().toUpperCase();
 
             const dbActive = !!dbLancementCode && dbLastEvent !== 'FIN' &&
                 (dbStatus === 'EN_COURS' || dbStatus === 'EN_PAUSE' ||
@@ -1980,15 +1980,15 @@ class OperateurInterface {
                 !!(this.currentLancement || this.isRunning || this.isPaused);
             
             const lancementCode = current?.lancementCode || current?.CodeLancement || current?.CodeLanctImprod || null;
-            const lastEvent = String(current?.lastEvent || current?.Ident || current?.Statut || '').toUpperCase();
-            const status = String(current?.status || current?.Statut || '').toUpperCase();
-            const isBackendActive = !!lancementCode && (
-                status === 'EN_COURS' ||
-                status === 'EN_PAUSE' ||
+            const lastEvent = String(current?.lastEvent || current?.Ident || '').trim().toUpperCase();
+            const status = String(current?.status || current?.Statut || '').trim().toUpperCase();
+            const isPausedState = lastEvent === 'PAUSE' || status === 'EN_PAUSE';
+            const isRunningState = !isPausedState && (
                 lastEvent === 'DEBUT' ||
-                lastEvent === 'PAUSE' ||
-                lastEvent === 'REPRISE'
+                lastEvent === 'REPRISE' ||
+                status === 'EN_COURS'
             );
+            const isBackendActive = !!lancementCode && (isPausedState || isRunningState);
 
             if (isBackendActive) {
                 // Il y a une opération réellement active côté backend
@@ -2009,11 +2009,10 @@ class OperateurInterface {
                     // Non bloquant
                 }
                 
-                if (lastEvent === 'DEBUT' || status === 'EN_COURS') {
-                    // Opération en cours
+                if (isRunningState) {
+                    // DEBUT ou REPRISE : en cours, Terminer doit être actif
                     this.resumeRunningOperation(current);
-                } else if (lastEvent === 'PAUSE' || status === 'EN_PAUSE') {
-                    // Opération en pause
+                } else if (isPausedState) {
                     this.resumePausedOperation(current);
                 }
             }
@@ -2055,6 +2054,8 @@ class OperateurInterface {
         this.isPaused = false;
         this.totalPausedTime = 0;
         this.pauseStartTime = null;
+        // Une reprise ne doit pas laisser le minuteur ni le bouton « Reprendre » grisés.
+        this.stopPauseWatch();
         const parseLocalDateOnly = (dc) => {
             // dc: "YYYY-MM-DD" (ne pas utiliser new Date(dc) => UTC => 01:00 en hiver)
             const s = String(dc || '').trim();
@@ -2094,6 +2095,7 @@ class OperateurInterface {
         }
         
         this.startBtn.disabled = true;
+        this.startBtn.innerHTML = '<i class="fas fa-play"></i> Démarrer';
         if (this.pauseBtn) this.pauseBtn.disabled = false;
         this.stopBtn.disabled = false;
         this.statusDisplay.textContent = 'En cours';
@@ -2255,6 +2257,7 @@ class OperateurInterface {
             // startTimer peut être mocké en tests: forcer l'état ici pour cohérence UI/tests
             this.isRunning = true;
             this.startBtn.disabled = true;
+            this.startBtn.innerHTML = '<i class="fas fa-play"></i> Démarrer';
             this.pauseBtn.disabled = false;
             this.stopBtn.disabled = false;
             this.statusDisplay.textContent = 'En cours';

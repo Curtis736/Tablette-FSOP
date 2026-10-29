@@ -2376,8 +2376,12 @@ class AdminPage {
             row.appendChild(cell2);
             
             // Cellule 3: Nom lancement
-            const cell3 = createTableCell(operation.LancementName || '-', { className: 'designation-cell' });
-            cell3.title = operation.LancementName || '';
+            const designation = operation.LancementName || '-';
+            const cell3 = createTableCell(
+                createElement('span', { className: 'designation-text' }, designation),
+                { className: 'designation-cell' }
+            );
+            cell3.title = designation === '-' ? '' : designation;
             row.appendChild(cell3);
             
             const { stepCode, stepLabel } = getAdminStepColumnDisplay(operation);
@@ -2490,8 +2494,9 @@ class AdminPage {
                         cell9.appendChild(transmitOneBtn);
                     }
                 }
-            } else if (!isPauseRow && this.isOperationTerminated(operation)) {
-                // Pas de TempsId = pas encore consolidé en ABTEMPS → blocage/transfert impossibles
+            } else if (!isPauseRow && this.isOperationTerminated(operation) && !this._hasOpenSiblingCycle(operation)) {
+                // Pas de TempsId = pas encore consolidé en ABTEMPS → blocage/transfert impossibles.
+                // Tant que le même lancement est encore en cours (reprise après pause), on ne grise pas.
                 const holdHint = createButton({
                     icon: 'fas fa-lock',
                     className: 'btn-hold-disabled',
@@ -2529,6 +2534,25 @@ class AdminPage {
     // ===== Helper: déterminer si une opération est Terminé (même logique que dans updateOperationsTable) =====
     isOperationTerminated(operation) {
         return this.normalizeOperationStatus(operation) === 'TERMINE';
+    }
+
+    /**
+     * Le créneau d'avant la pause ne doit pas être grisé tant que la reprise
+     * du même lancement, le même jour, n'est pas terminée.
+     */
+    _hasOpenSiblingCycle(operation) {
+        const oc = String(operation?.OperatorCode || operation?.operatorId || '').trim();
+        const lc = String(operation?.LancementCode || operation?.lancementCode || '').trim().toUpperCase();
+        const ymd = this._parseOpDateCreationLocalYmd(operation?.DateCreation) || '';
+        if (!oc || !lc) return false;
+        return (this.operations || []).some((other) => {
+            if (!other || other === operation || other._isPauseRow) return false;
+            const ooc = String(other.OperatorCode || other.operatorId || '').trim();
+            const olc = String(other.LancementCode || other.lancementCode || '').trim().toUpperCase();
+            const oymd = this._parseOpDateCreationLocalYmd(other.DateCreation) || '';
+            if (ooc !== oc || olc !== lc || oymd !== ymd) return false;
+            return this.normalizeOperationStatus(other) === 'EN_COURS';
+        });
     }
 
     _getAdminMonitoringFilters() {

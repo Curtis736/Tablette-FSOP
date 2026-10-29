@@ -717,18 +717,27 @@ function createWorkSegmentItem(startEvent, endTime, statusCode, statusLabel, ref
     };
 }
 
+function sameDisplayedClock(start, end) {
+    if (!start || !end) return false;
+    return String(start).slice(0, 5) === String(end).slice(0, 5);
+}
+
 function buildWorkSegmentItems(debutEvent, cycleEvents, pauseEvents, repriseEvents, finEvent) {
     const segments = [];
     const pairs = pairPauseRepriseEvents(pauseEvents, repriseEvents);
     let workStartEvent = debutEvent;
     let segIdx = 0;
 
+    const pushSegment = (startEvent, endTime, statusCode, statusLabel) => {
+        if (sameDisplayedClock(extractEventTime(startEvent), endTime)) return;
+        segments.push(createWorkSegmentItem(startEvent, endTime, statusCode, statusLabel, debutEvent, segIdx++));
+    };
+
     if (pauseEvents.length === 0) {
         if (finEvent) {
-            const finEnd = extractEventEndTime(finEvent);
-            segments.push(createWorkSegmentItem(workStartEvent, finEnd, 'TERMINE', 'Terminé', debutEvent, segIdx++));
+            pushSegment(workStartEvent, extractEventEndTime(finEvent), 'TERMINE', 'Terminé');
         } else {
-            segments.push(createWorkSegmentItem(workStartEvent, null, 'EN_COURS', 'En cours', debutEvent, segIdx++));
+            pushSegment(workStartEvent, null, 'EN_COURS', 'En cours');
         }
         return segments;
     }
@@ -736,13 +745,15 @@ function buildWorkSegmentItems(debutEvent, cycleEvents, pauseEvents, repriseEven
     pairs.forEach(({ pauseEvent, repriseEvent }, index) => {
         const pauseStart = extractEventTime(pauseEvent);
         const isLastPair = index === pairs.length - 1;
-        // Créneau intermédiaire (pause déjà reprise) => "Terminé".
-        // Dernier créneau alors que l'opérateur est TOUJOURS en pause (pas de reprise ni FIN)
-        // => on reflète l'état réel courant "En pause".
+        // Dernier créneau alors que l'opérateur est TOUJOURS en pause (pas de reprise ni FIN).
         if (isLastPair && !repriseEvent && !finEvent) {
-            segments.push(createWorkSegmentItem(workStartEvent, pauseStart, 'EN_PAUSE', 'En pause', debutEvent, segIdx++));
+            pushSegment(workStartEvent, pauseStart, 'EN_PAUSE', 'En pause');
+        } else if (!finEvent) {
+            // Pause déjà reprise, lancement pas fini : ne pas afficher « Terminé »
+            // (cadenas gris, l'opératrice ne peut plus clôturer).
+            pushSegment(workStartEvent, pauseStart, 'EN_COURS', 'En cours');
         } else {
-            segments.push(createWorkSegmentItem(workStartEvent, pauseStart, 'TERMINE', 'Terminé', debutEvent, segIdx++));
+            pushSegment(workStartEvent, pauseStart, 'TERMINE', 'Terminé');
         }
         if (repriseEvent) {
             workStartEvent = repriseEvent;
@@ -751,10 +762,9 @@ function buildWorkSegmentItems(debutEvent, cycleEvents, pauseEvents, repriseEven
 
     const lastIdent = cycleEvents[cycleEvents.length - 1]?.Ident;
     if (finEvent) {
-        const finEnd = extractEventEndTime(finEvent);
-        segments.push(createWorkSegmentItem(workStartEvent, finEnd, 'TERMINE', 'Terminé', debutEvent, segIdx++));
+        pushSegment(workStartEvent, extractEventEndTime(finEvent), 'TERMINE', 'Terminé');
     } else if (lastIdent === 'REPRISE' || (lastIdent === 'DEBUT' && pauseEvents.length === 0)) {
-        segments.push(createWorkSegmentItem(workStartEvent, null, 'EN_COURS', 'En cours', debutEvent, segIdx++));
+        pushSegment(workStartEvent, null, 'EN_COURS', 'En cours');
     }
 
     return segments;
