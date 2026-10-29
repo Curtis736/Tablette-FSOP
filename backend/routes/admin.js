@@ -748,11 +748,9 @@ function buildWorkSegmentItems(debutEvent, cycleEvents, pauseEvents, repriseEven
         // Dernier créneau alors que l'opérateur est TOUJOURS en pause (pas de reprise ni FIN).
         if (isLastPair && !repriseEvent && !finEvent) {
             pushSegment(workStartEvent, pauseStart, 'EN_PAUSE', 'En pause');
-        } else if (!finEvent) {
-            // Pause déjà reprise, lancement pas fini : ne pas afficher « Terminé »
-            // (cadenas gris, l'opératrice ne peut plus clôturer).
-            pushSegment(workStartEvent, pauseStart, 'EN_COURS', 'En cours');
         } else {
+            // Même logique tablette : fin de ligne = heure de pause → Terminé.
+            // Cadenas gris évité côté admin via _hasOpenSiblingCycle si reprise encore ouverte.
             pushSegment(workStartEvent, pauseStart, 'TERMINE', 'Terminé');
         }
         if (repriseEvent) {

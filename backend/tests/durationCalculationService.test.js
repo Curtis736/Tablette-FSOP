@@ -279,7 +279,7 @@ describe('processLancementEventsWithPauses work segments (SILOG)', () => {
     expect(items).toHaveLength(2);
     expect(items[0].startTime).toBe('07:28');
     expect(items[0].endTime).toBe('12:00');
-    expect(items[0].statusCode).toBe('EN_COURS');
+    expect(items[0].statusCode).toBe('TERMINE');
     expect(items[1].startTime).toBe('12:05');
     expect(items[1].endTime).toBeNull();
     expect(items[1].statusCode).toBe('EN_COURS');
