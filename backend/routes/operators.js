@@ -1869,10 +1869,11 @@ router.get('/:operatorCode/operations',
         const events = await executeQuery(eventsQuery, { operatorCode, historyDays }, 1);
         console.log(`📊 ${events.length} événements trouvés pour l'opérateur ${operatorCode}`);
         
-        // Inclure les lignes de pause séparées (sinon l'opérateur ne voit que le cycle DEBUT→FIN
-        // et se croit « perdu » sur le temps de pause).
+        // Même découpage que l'admin / SILOG : pause = fin de ligne productif,
+        // reprise = début de la ligne suivante. Pas de ligne « Pause » séparée
+        // (sinon une seule ligne Fabrication traverse le midi et reste En cours).
         const { processLancementEventsWithPauses } = require('./admin');
-        const processed = processLancementEventsWithPauses(events, { includePauseRows: true });
+        const processed = processLancementEventsWithPauses(events, { includeWorkSegments: true });
         const fabricationMap = await getFabricationMapForOperations(processed);
         const allFormattedOperations = processed.map(operation => {
             const isPauseRow = operation.type === 'pause' || operation._isPauseRow === true;
@@ -1910,9 +1911,22 @@ router.get('/:operatorCode/operations',
                     statusCode = 'EN_COURS';
                 }
             }
+            // Créneau productif déjà fermé (fin = heure de pause) alors que le cycle
+            // continue après reprise : sur la tablette on affiche Terminé, pas En cours.
+            let remappedClosedSegment = false;
+            if (
+                !isPauseRow
+                && operation._isWorkSegment === true
+                && endTime
+                && endTime !== '-'
+                && String(statusCode || '').toUpperCase() === 'EN_COURS'
+            ) {
+                statusCode = 'TERMINE';
+                remappedClosedSegment = true;
+            }
             
             // Normaliser le statut texte
-            let status = operation.status || operation.statusLabel;
+            let status = remappedClosedSegment ? 'Terminé' : (operation.status || operation.statusLabel);
             if (!status && statusCode) {
                 const statusMap = {
                     'TERMINE': 'Terminé',

@@ -259,6 +259,20 @@ describe('processLancementEventsWithPauses work segments (SILOG)', () => {
     expect(items[1].statusCode).toBe('TERMINE');
   });
 
+  it('operator history style: no Pause row spanning through lunch (Madjuki screenshot)', () => {
+    // Ancien mode includePauseRows: 1 ligne 11:17→15:04 + Pause 13:14→14:02.
+    // Nouveau mode: 11:17→13:14 et 14:02→15:04, sans ligne Pause.
+    const events = [
+      { ...baseEvents[0], HeureDebut: '11:17', NoEnreg: 1 },
+      { ...baseEvents[1], HeureDebut: '13:14', NoEnreg: 2 },
+      { ...baseEvents[2], HeureDebut: '14:02', NoEnreg: 3 },
+      { ...baseEvents[3], HeureFin: '15:04', NoEnreg: 4 }
+    ];
+    const items = processLancementEventsWithPauses(events, { includeWorkSegments: true });
+    expect(items.filter((i) => i._isPauseRow || i.type === 'pause')).toHaveLength(0);
+    expect(items.map((i) => `${i.startTime}-${i.endTime}`)).toEqual(['11:17-13:14', '14:02-15:04']);
+  });
+
   it('emits open segment when cycle ends on REPRISE without FIN', () => {
     const openEvents = baseEvents.filter((e) => e.Ident !== 'FIN');
     const items = processLancementEventsWithPauses(openEvents, { includeWorkSegments: true });
