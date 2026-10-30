@@ -5368,7 +5368,7 @@ router.get('/silog-pipeline-status', async (req, res) => {
             health = 'WARNING';
             warnings.push(
                 `Tous les enregistrements (${nbNull}) sont en StatutTraitement=NULL. ` +
-                `La validation automatique (20h) n'a pas encore tourné ou est désactivée. ` +
+                `La validation automatique de 20h est désactivée. ` +
                 `Utilisez POST /api/admin/validate-temps pour forcer.`
             );
         }

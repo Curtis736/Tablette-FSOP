@@ -619,7 +619,7 @@ class MonitoringService {
             }
             
             // Réinitialiser le statut de traitement si nécessaire (pour permettre une nouvelle validation).
-            // Une ligne bloquée (A) reste bloquée : sinon la validation auto de 20h l'enverrait à SILOG.
+            // Une ligne bloquée (A) reste bloquée : le transfert manuel ne doit pas l'envoyer à SILOG.
             if (existing[0].StatutTraitement === 'O') {
                 updateFields.push('StatutTraitement = NULL');
             }
@@ -1504,34 +1504,6 @@ class MonitoringService {
             invalidIds: invalidIds.length > 0 ? invalidIds : undefined,
             message: `${result?.rowsAffected || 0} enregistrement(s) validé(s).`
         };
-    }
-
-    /**
-     * Valide les temps terminés (NULL → 'O') pour exposition dans V_REMONTE_TEMPS.
-     * @param {Object} options
-     * @param {boolean} options.includeToday - inclure le jour courant (requis avant job SILOG ~17h15)
-     */
-    static async autoValidateEligibleTemps({ includeToday = false } = {}) {
-        const { executeNonQuery } = require('../config/database');
-        const OperationValidationService = require('./OperationValidationService');
-        const dateCond = includeToday
-            ? '1=1'
-            : 'CAST(DateCreation AS DATE) < CAST(GETDATE() AS DATE)';
-        const lctcClause = OperationValidationService.getLctcExistsClause('ABTEMPS_OPERATEURS');
-        const result = await executeNonQuery(
-            `
-            UPDATE [SEDI_APP_INDEPENDANTE].[dbo].[ABTEMPS_OPERATEURS]
-            SET StatutTraitement = 'O'
-            WHERE StatutTraitement IS NULL
-              AND ProductiveDuration > 0
-              AND EndTime IS NOT NULL
-              AND Phase IS NOT NULL
-              AND CodeRubrique IS NOT NULL
-              AND ${dateCond}
-              AND ${lctcClause}
-            `
-        );
-        return { count: result?.rowsAffected || 0 };
     }
 
     /**

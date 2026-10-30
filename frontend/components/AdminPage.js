@@ -2465,7 +2465,7 @@ class AdminPage {
                     const releaseBtn = createButton({
                         icon: 'fas fa-lock-open',
                         className: 'btn-release-hold',
-                        title: 'Ligne bloquée : cliquer pour la débloquer (elle repartira avec le transfert auto de 20h)',
+                        title: 'Ligne bloquée : cliquer pour la débloquer',
                         dataset: { tempsId: String(tempsId) }
                     });
                     cell9.appendChild(releaseBtn);
@@ -2480,7 +2480,7 @@ class AdminPage {
                     const holdBtn = createButton({
                         icon: 'fas fa-lock',
                         className: 'btn-hold',
-                        title: 'Bloquer (hors auto 20h / transfert, le temps de corriger)',
+                        title: 'Bloquer (hors transfert, le temps de corriger)',
                         dataset: { tempsId: String(tempsId) }
                     });
                     cell9.appendChild(holdBtn);
@@ -3057,7 +3057,7 @@ class AdminPage {
         }
         const ok = confirm(
             `Bloquer la ligne TempsId ${id} ?\n` +
-            `Elle restera hors auto 20h et hors transfert global.\n` +
+            `Elle restera hors transfert global.\n` +
             `Tu pourras la corriger le lendemain puis la transférer seule.`
         );
         if (!ok) return;
@@ -3078,7 +3078,7 @@ class AdminPage {
         }
         const ok = confirm(
             `Débloquer la ligne TempsId ${id} ?\n` +
-            'Elle ne sera plus protégée : le transfert automatique de 20h l\'enverra vers SILOG.'
+            'Elle ne sera plus protégée : le prochain transfert manuel pourra l\'envoyer vers SILOG.'
         );
         if (!ok) return;
         try {

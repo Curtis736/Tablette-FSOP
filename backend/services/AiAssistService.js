@@ -115,7 +115,7 @@ class AiAssistService {
             'Tu expliques en français simple, phrases courtes.',
             'Tu ne inventes pas de données absentes du JSON.',
             'Règles métier:',
-            '- StatutTraitement A = bloquée (hors auto 20h / transfert batch).',
+            '- StatutTraitement A = bloquée (hors transfert batch).',
             '- StatutTraitement T = déjà transmise SILOG (ne pas modifier).',
             '- StatutTraitement O = validée, prête à transmettre.',
             '- NULL = pas encore validée.',
